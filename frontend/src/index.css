@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.input {
+  @apply border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500;
+}
+.cluster-wrapper {
+  background: transparent;
+  border: none;
+}
+
+.custom-cluster {
+  background: linear-gradient(135deg, #2563eb, #1e40af);
+  color: white;
+  width: 50px;
+  height: 50px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  border: 3px solid white;
+}
