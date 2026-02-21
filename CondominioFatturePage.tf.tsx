@@ -4,7 +4,6 @@ import api from "../../api/client";
 import { Trash2 } from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
-import { set } from "date-fns";
 
 type Provider = { id: string; nome: string; codice?: string };
 type Periodo = { id: string; period_year: number; period_month: number };
@@ -34,8 +33,6 @@ export default function CondominioFatturePage() {
   const [valAtt, setValAtt] = useState<number | string>("");
   const [savingGenerale, setSavingGenerale] = useState(false);
   const [genCalc, setGenCalc] = useState<any>(null);
-  const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
-  const [tfCode, setTfCode] = useState<string>("TF1");
 
 
   const canCreate = useMemo(() => {
@@ -57,8 +54,6 @@ export default function CondominioFatturePage() {
     const [giorniConsumi, setGiorniConsumi] = useState<number | string>(0);
     const [giorniAcconto, setGiorniAcconto] = useState<number | string>(0);
     const [varie, setVarie] = useState<number | string>(0);
-
-    const [giorniCasaInterni, setGiorniCasaInterni] = useState<number | string>(0);
 
     const [dataQfFrom, setDataQfFrom] = useState("");
     const [dataQfTo, setDataQfTo] = useState("");
@@ -128,12 +123,12 @@ export default function CondominioFatturePage() {
   }
 
   async function refreshSessionsList() {
-    const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId}`);  
-    const list = res.data?.sessions ?? res.data; // supports both shapes
-    setSessions(Array.isArray(list) ? list : []);
-    setDetail(list);
-    console.log("Calcolo sessione result:", list);
+    if (!condominioId) return;
 
+    // Sessions list endpoint (must return an array)
+    const sRes = await api.get(`/fatture/condominio/${condominioId}`);
+    const list = (sRes.data?.sessions ?? sRes.data?.list ?? sRes.data) ?? [];
+    setSessions(Array.isArray(list) ? list : []);
   }
 
 
@@ -176,7 +171,16 @@ export default function CondominioFatturePage() {
   return Math.round(diff / (1000 * 60 * 60 * 24));
 }
 
- 
+  async function testGenerale() {
+    if (!fatturaId) return;
+    try {
+      const res = await api.get(`/fatture/sessioni/${fatturaId}/calcola-generale`);
+     
+      setGenCalc(res.data);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || "Errore calcolo generale");
+    }
+  }
 
     async function calcola() {
       if (!fatturaId) return;
@@ -186,16 +190,14 @@ export default function CondominioFatturePage() {
 
       try {
         await saveParams();
-        const res = await api.post(`/fatture/sessioni/${fatturaId}/calcola`, {
-          tfCode,
-        });
+        const res = await api.post(
+          `/fatture/sessioni/${fatturaId}/calcola`
+        ); 
 
         setCurrentSession(res.data.session);
-        setRigheCalcoli(res.data.righe || []);
-        
+        //setRighe(res.data.righe || []);
 
-        //await loadDetail();
-        await refreshSessionsList();
+          await refreshSessionsList();
       } catch (err: any) {
         setError(err?.response?.data?.error || "Errore calcolo: " + (err?.message || "Errore sconosciuto"));
       } finally {
@@ -228,17 +230,13 @@ export default function CondominioFatturePage() {
     try {
       setSavingParams(true);
 
-      console.log("Saving params:", { giorniQf, giorniConsumi, giorniAcconto, varie, giorniCasaInterni });
       await api.put(`/fatture/sessioni/${fatturaId}/parametri`, {
         giorniQF: Number(giorniQf),
         giorniConsumi: Number(giorniConsumi),
         giorniAcconto: Number(giorniAcconto),
         varie: Number(varie),
-        giorniCasa: Number(giorniCasaInterni),
       });
 
-
-      //await loadDetail();
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore salvataggio");
     } finally {
@@ -246,13 +244,6 @@ export default function CondominioFatturePage() {
     }
   } 
 
-  // useEffect(() => {
-  //   setGiorniCasaInterni(daysBetween(
-  //   periodoPrecedente?.data_lettura_casa_idrica,
-  //   periodoAttuale?.data_lettura_casa_idrica
-  // ));
-
-  // }, [condominioId, periodoPrecedente, periodoAttuale]);
   useEffect(() => {
     bootstrap();
   }, [condominioId]);
@@ -273,7 +264,6 @@ export default function CondominioFatturePage() {
     setGiorniQf(session.giorni_qf ?? 0);
     setGiorniConsumi(session.giorni_consumi ?? 0);
     setGiorniAcconto(session.giorni_acconto ?? 0);
-    setGiorniCasaInterni(session.giorni_interni ?? 0);
     setVarie(session.varie ?? 0);
   }, [session]);
  
@@ -283,73 +273,11 @@ const giorniOperatore = daysBetween(
   periodoAttuale?.data_lettura_operatore
 );
 
-const giorniCasaIdrica = daysBetween( 
+const giorniCasa = daysBetween(
   periodoPrecedente?.data_lettura_casa_idrica,
   periodoAttuale?.data_lettura_casa_idrica
 );
-
-function setMcAcconto(value: string): void {
-  throw new Error("Function not implemented.");
-}
-
-
-const totals = useMemo(() => {
-  const base = righe.reduce(
-    (acc: any, r: any) => {
-      const row = r.riga || {};
-
-      acc.consumo += Number(row.consumo_totale || 0);
-      acc.acq += Number(row.imp_acquedotto || 0);
-      acc.fog += Number(row.imp_fognatura || 0);
-      acc.dep += Number(row.imp_depurazione || 0);
-      acc.qf += Number(row.imp_qf || 0);
-      acc.cong += Number(row.conguaglio || 0);
-      acc.oneri += Number(row.imp_oneri || 0);
-      acc.iva += Number(row.imp_iva || 0);
-      acc.arr += Number(row.imp_arr || 0);
-      acc.totale += Number(row.totale || 0);
-
-      return acc;
-    },
-    {
-      consumo: 0,
-      acq: 0,
-      fog: 0,
-      dep: 0,
-      qf: 0,
-      cong: 0,
-      oneri: 0,
-      iva: 0,
-      arr: 0,
-      totale: 0,
-    }
-  );
-
-  const totaleInterni = Number(base.totale.toFixed(2));
-
-  const generalWithoutOneri =
-    Number(session?.tot_acquedotto || 0) +
-    Number(session?.tot_fognatura || 0) +
-    Number(session?.tot_depurazione || 0) +
-    Number(session?.tot_qf || 0) +
-    Number(session?.tot_iva || 0);
-
-  const oneriGenerale = Number(session?.tot_oneri || 0);
-
-  const generalePlusOneri = Number(
-    (generalWithoutOneri + oneriGenerale).toFixed(2)
-  );
-
-  const isGreen = generalePlusOneri <= totaleInterni;
-
-  return {
-    ...base,
-    totaleInterni,
-    generalePlusOneri,
-    isGreen,
-  };
-}, [righe, session]);
-
+ 
   return (
 <div className="w-full px-6 py-6 space-y-6">
 
@@ -376,7 +304,39 @@ const totals = useMemo(() => {
       {error}
     </div>
   )}
- 
+
+  <button
+  onClick={testGenerale}
+  className="border px-3 py-2 rounded-lg bg-white hover:bg-slate-50"
+>
+  Test Calcolo Generale
+</button>
+
+  {genCalc && (
+  <div className="bg-white border rounded-xl p-4 text-sm">
+    <div className="font-semibold mb-2">Debug Generale (Legacy)</div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div><div className="text-slate-500 text-xs">Consumo</div><div className="font-medium">{genCalc.meta.consumo}</div></div>
+      <div><div className="text-slate-500 text-xs">totNuc</div><div className="font-medium">{genCalc.meta.totNuc}</div></div>
+      <div><div className="text-slate-500 text-xs">numNuae</div><div className="font-medium">{genCalc.meta.numNuae}</div></div>
+      <div><div className="text-slate-500 text-xs">YearDays</div><div className="font-medium">{genCalc.meta.yearDays}</div></div>
+
+      <div><div className="text-slate-500 text-xs">Cap Agev</div><div className="font-medium">{genCalc.generale.caps.con_agev}</div></div>
+      <div><div className="text-slate-500 text-xs">Cap Base</div><div className="font-medium">{genCalc.generale.caps.co_fbase}</div></div>
+      <div><div className="text-slate-500 text-xs">Cap Fascia</div><div className="font-medium">{genCalc.generale.caps.fascia}</div></div>
+
+      <div><div className="text-slate-500 text-xs">Imp. Cons</div><div className="font-medium">€ {genCalc.generale.impCons.toFixed(2)}</div></div>
+      <div><div className="text-slate-500 text-xs">Dep+Fog</div><div className="font-medium">€ {genCalc.generale.depFog.toFixed(2)}</div></div>
+      <div><div className="text-slate-500 text-xs">QF Tot</div><div className="font-medium">€ {genCalc.generale.qfTot.toFixed(2)}</div></div>
+      <div><div className="text-slate-500 text-xs">IVA</div><div className="font-medium">€ {genCalc.generale.iva.toFixed(2)}</div></div>
+
+      <div className="col-span-2 md:col-span-4 border-t pt-2">
+        <div className="text-slate-500 text-xs">Totale</div>
+        <div className="text-lg font-bold">€ {genCalc.generale.totale.toFixed(2)}</div>
+      </div>
+    </div>
+  </div>
+)}
 
   {/* SESSION CONTROL BAR */}
   <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
@@ -530,140 +490,213 @@ const totals = useMemo(() => {
     <>
 
  
-{/* SUMMARY */}
-<div className="sticky top-0 z-40 bg-white border-b shadow-sm">
-  <div className="max-w-full px-6 py-4 flex justify-between items-center">
+      {/* SUMMARY */}
+      <div className="bg-gradient-to-r from-slate-50 to-white border rounded-2xl p-6 space-y-6">
 
-    <div>
-      <div className="text-lg font-semibold">Fattura</div>
-      <div className="text-sm text-slate-500">
-        Stato:
-        <span className="ml-2 px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-700">
-          {session.stato}
-        </span>
-      </div>
+        {/* HEADER */}
+
+        <div className="flex justify-between items-center">
+          <div>
+            <div className="text-lg font-semibold">Fattura</div>
+            <div className="text-sm text-slate-500">
+              Stato:
+              <span className="ml-2 px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-700">
+                {session.stato}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            {/* <button
+              onClick={saveParams}
+              className="bg-slate-700 text-white px-4 py-2 rounded-xl"
+            >
+              {savingParams ? "Salvataggio..." : "Salva Parametri"}
+            </button> */}
+
+            {/* <button
+              onClick={calcola}
+              className="bg-blue-600 text-white px-5 py-2 rounded-xl"
+            >
+              Calcola
+            </button> */}
+          </div>
+        </div>
+
+        {/* QF SECTION */}
+        <div className="bg-white border rounded-xl p-4 space-y-4">
+          <div className="text-sm font-semibold text-slate-600">
+            Periodo QF
+          </div>
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  
+  {/* Operatore */}
+  <div className="bg-white border rounded-lg p-4 space-y-2">
+    <div className="text-sm font-medium text-blue-600">
+      Operatore
     </div>
 
-  <div className="flex items-center gap-3">
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-slate-500">TF</span>
-      <select
-        value={tfCode}
-        onChange={(e) => setTfCode(e.target.value)}
-        className="border rounded-lg px-3 py-2 text-sm bg-white"
-        disabled={loadingCalc}
-      >
-        <option value="TF1">TF1</option>
-        <option value="TF2">TF2</option>
-        <option value="TF3">TF3</option>
-        {/* add more when needed */}
-      </select>
+    <div className="text-sm">
+      {periodoPrecedente?.data_lettura_operatore ?? "-"} →{" "}
+      {periodoAttuale?.data_lettura_operatore ?? "-"}
     </div>
 
-    <button
-      onClick={calcola}
-      disabled={loadingCalc}
-      className="bg-blue-600 text-white px-5 py-2 rounded-xl hover:bg-blue-700 transition shadow-md disabled:opacity-60"
-    >
-      {loadingCalc ? "Calcolo..." : "Calcola Contabilità"}
-    </button>
+    <div className="text-sm font-semibold">
+      Giorni: {giorniOperatore}
+    </div>
   </div>
 
+  {/* Casa Idrica */}
+  <div className="bg-white border rounded-lg p-4 space-y-2">
+    <div className="text-sm font-medium text-indigo-600">
+      Casa Idrica
+    </div>
+
+    <div className="text-sm">
+      {periodoPrecedente?.data_lettura_casa_idrica ?? "-"} →{" "}
+      {periodoAttuale?.data_lettura_casa_idrica ?? "-"}
+    </div>
+
+    <div className="text-sm font-semibold">
+      Giorni: {giorniCasa}
+    </div>
   </div>
+
 </div>
 
+          <div className="grid grid-cols-4 gap-6">
+
+            {/* <div>
+              <label className="text-xs text-slate-500">Data Da</label>
+              <div className="relative">
+                <Calendar size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="date"
+                  className="w-full pl-10 pr-3 py-2 border rounded-xl"
+                  value={dataQfFrom}
+                  onChange={(e) => {
+                    const newFrom = e.target.value;
+                    setDataQfFrom(newFrom);
+
+                    const days = calcDays(newFrom, dataQfTo);
+                    setGiorniQf(days);
+                  }}
+                />
+              </div>
+            </div> */}
+
+            {/* <div>
+              <label className="text-xs text-slate-500">Data A</label>
+              <div className="relative">
+                <Calendar size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="date"
+                  className="w-full pl-10 pr-3 py-2 border rounded-xl"
+                  value={dataQfTo}
+                  onChange={(e) => {
+                    const newTo = e.target.value;
+                    setDataQfTo(newTo);
+
+                    const days = calcDays(dataQfFrom, newTo);
+                    setGiorniQf(days);
+                  }}
+                />
+              </div>
+            </div> */}
+
+            {/* <div>
+              <label className="text-xs text-slate-500">Giorni QF</label>
+              <input
+                type="number"
+                className="w-full px-3 py-2 border rounded-xl"
+                value={giorniQf}
+                onChange={(e) => setGiorniQf(e.target.value)}
+              />
+            </div> */}
+
+            {/* <div className="flex items-end">
+              <div>
+                <div className="text-xs text-slate-500">Calcolati</div>
+                <div className="text-lg font-semibold">
+                  {calcDays(dataQfFrom, dataQfTo)}
+                </div>
+              </div>
+              
+            </div> */}
+            
+
+          </div>
+        </div>
+
+
+      </div>
 
 
 {/* CONTATORE GENERALE */}
 <div className="bg-white border rounded-2xl p-6 w-full space-y-6">
 
   <div className="flex justify-between items-center">
-    <h3 className="font-semibold text-lg">Imposta Giorni</h3>
+    <h3 className="font-semibold text-lg">Contatore Generale</h3>
 
   </div>
-  {/* ============================= */}
-  {/* 1️⃣ SEZIONE GIORNI           */}
-  {/* ============================= */}
-  <div className="bg-white border rounded-2xl p-6 space-y-6 ">
 
-    <div className="text-lg font-semibold">Parametri Giorni</div>
+            {/* OTHER PARAMETERS */}
+        <div className="bg-white border rounded-xl p-4">
+          <div className="grid grid-cols-4 gap-6">
+            <div>
+              <label className="text-xs text-slate-500">Giorni QF</label>
+              <input
+                type="number"
+                className="w-full px-3 py-2 border rounded-xl"
+                value={giorniQf}
+                onChange={(e) => setGiorniQf(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Giorni Consumi</label>
+              <input
+                type="number"
+                className="w-full px-3 py-2 border rounded-xl"
+                value={giorniConsumi}
+                onChange={(e) => setGiorniConsumi(e.target.value)}
+              />
+            </div>
 
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-      <div>
-        <label className="text-xs text-slate-500">Giorni QF</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniQf}
-          onChange={(e) => setGiorniQf(e.target.value)}
-        />
-      </div>
+            <div>
+              <label className="text-xs text-slate-500">Varie</label>
+              <input
+                type="number"
+                className="w-full px-3 py-2 border rounded-xl"
+                value={varie}
+                onChange={(e) => setVarie(e.target.value)}
+              />
+            </div>
 
-      <div>
-        <label className="text-xs text-slate-500">Giorni Consumi</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniConsumi}
-          onChange={(e) => setGiorniConsumi(e.target.value)}
-        />
-      </div>
+            <div>
+              <label className="text-xs text-slate-500">Giorni Acconto</label>
 
-      <div>
-        <label className="text-xs text-slate-500">Giorni Interni</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniCasaInterni}
-          onChange={(e) => setGiorniCasaInterni(e.target.value)}
-        />
-      </div>
 
-      <div>
-        <label className="text-xs text-slate-500">Giorni Acconto</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniAcconto}
-          onChange={(e) => setGiorniAcconto(e.target.value)}
-        />
-      </div>
-    </div>
-  </div>
-  {/* ============================= */}
-  {/* 2️⃣ SEZIONE ACCONTO           */}
-  {/* ============================= */}
-  {Number(giorniAcconto) > 0 && (
-    <div className="bg-white border rounded-2xl p-6 space-y-6">
-      <div className="text-lg font-semibold">Gestione Acconto</div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <div>
-          <label className="text-xs text-slate-500">
-            MC da aggiungere (Acconto)
-          </label>
-          <input
-            type="number"
-            className="w-full px-3 py-2 border rounded-xl"
-            value={0}
-            onChange={(e) => setMcAcconto(e.target.value)}
-          />
-        </div>
-
-        <div className="flex items-end">
-          <div className="text-sm text-slate-500">
-            Verrà ripartito proporzionalmente sugli interni.
+                            <input
+                type="number"
+                className="w-full px-3 py-2 border rounded-xl"
+                value={giorniAcconto}
+                onChange={(e) => setGiorniAcconto(e.target.value)}
+              />
+            </div>
+            
+  
           </div>
+
         </div>
-      </div>
-    </div>
-  )}
-
-
+          <button
+            onClick={calcola}
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition"
+          >
+            Calcola
+          </button>
   {/* INPUT SECTION */}
-      <div className="text-lg font-semibold">
-      Situazione Contatore Generale
-    </div>
   <div className="grid grid-cols-3 gap-6">
 
     <div>
@@ -695,10 +728,10 @@ const totals = useMemo(() => {
         className="bg-blue-600 text-white px-4 py-2 rounded-lg disabled:opacity-50 hover:bg-blue-700 transition flex items-center gap-2"
       >
         <Save size={18} />
-        {savingGenerale ? "Salvando..." : "Salva Generale"}
+      
         
       </button>
-
+    
 
       <div>
         
@@ -777,23 +810,18 @@ const totals = useMemo(() => {
         Varie
       </div>
       <div className="text-lg font-semibold mt-1">
-        €               <input
-                type="number"
-                className=" px-3 py-2 border rounded-xl"
-                value={varie}
-                onChange={(e) => setVarie(e.target.value)}
-              />
+        € {Number(session?.varie ?? 0).toFixed(2)}
       </div>
     </div>
 
-    {/* <div className="bg-white rounded-xl p-4 shadow-sm">
+    <div className="bg-white rounded-xl p-4 shadow-sm">
       <div className="text-xs text-slate-500 uppercase tracking-wide">
         Tot. Oneri
       </div>
       <div className="text-lg font-semibold mt-1">
         € {Number(session?.tot_oneri ?? 0).toFixed(2)}
       </div>
-    </div> */}
+    </div>
 
     <div className="bg-blue-600 rounded-xl p-4 text-white shadow-md">
       <div className="text-xs uppercase tracking-wide opacity-80">
@@ -812,49 +840,7 @@ const totals = useMemo(() => {
 </div>
 
 
-        {/* QF SECTION */}
-        <div className="bg-white border rounded-xl p-4 space-y-4">
-          <div className="text-sm font-semibold text-slate-600">
-            Giorni Operatore - Giorni Casa Idrica
-          </div>
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-  
-  {/* Operatore */}
-  <div className="bg-white border rounded-lg p-4 space-y-2">
-    <div className="text-sm font-medium text-blue-600">
-      Operatore
-    </div>
 
-    <div className="text-sm">
-      {periodoPrecedente?.data_lettura_operatore ?? "-"} →{" "}
-      {periodoAttuale?.data_lettura_operatore ?? "-"}
-    </div>
-
-    <div className="text-sm font-semibold">
-      Giorni: {giorniOperatore}
-    </div>
-  </div>
-
-  {/* Casa Idrica */}
-  <div className="bg-white border rounded-lg p-4 space-y-2">
-    <div className="text-sm font-medium text-indigo-600">
-      Casa Idrica
-    </div>
-
-    <div className="text-sm">
-      {periodoPrecedente?.data_lettura_casa_idrica ?? "-"} →{" "}
-      {periodoAttuale?.data_lettura_casa_idrica ?? "-"}
-    </div>
-
-    <div className="text-sm font-semibold">
-      Giorni: {giorniCasaIdrica}
-    </div>
-  </div>
-
-</div>
-
- 
- </div>
 
       {/* OPERATIONS PANEL */}
       <div className="bg-white rounded-2xl shadow p-6 space-y-6">
@@ -865,12 +851,12 @@ const totals = useMemo(() => {
 
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
 
-          {/* <button
+          <button
             onClick={calcola}
             className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition"
           >
             Calcola
-          </button> */}
+          </button>
 
           <button
             className="bg-indigo-600 text-white px-4 py-2 rounded-xl hover:bg-indigo-700 transition"
@@ -884,30 +870,29 @@ const totals = useMemo(() => {
             Stampa Bollette
           </button>
 
-          {/* <button
+          <button
             className="bg-slate-700 text-white px-4 py-2 rounded-xl hover:bg-slate-800 transition"
           >
             Conguaglio
-          </button> */}
+          </button>
 
-          {/* <button
+          <button
             className="bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 transition"
           >
             Salva Tabulato
-          </button> */}
+          </button>
 
-          {/* <button
+          <button
             className="bg-purple-600 text-white px-4 py-2 rounded-xl hover:bg-purple-700 transition"
           >
             Registra Storico
-          </button> */}
+          </button>
 
         </div>
       </div>
       {/* CONTATORI INTERNI */}
       <div className="bg-white border rounded-2xl p-6">
-        <h3 className="font-semibold mb-4">      Situazione Contatori Interni 
-</h3>
+        <h3 className="font-semibold mb-4">Contatori Interni</h3>
 
         <div className="overflow-x-auto">
           <table className="w-full text-xs border border-slate-200">
@@ -927,14 +912,12 @@ const totals = useMemo(() => {
                 <th className="p-2">Fog</th>
                 <th className="p-2">Dep</th>
                 <th className="p-2">QF</th>
-                <th className="p-2">Cong.</th>
                 <th className="p-2">Oneri</th>
                 <th className="p-2">IVA</th>
                 <th className="p-2">Arr</th>
                 <th className="p-2 font-semibold">Totale</th>
               </tr>
             </thead>
-
             <tbody>
               {righe.length === 0 && (
                 <tr>
@@ -956,12 +939,11 @@ const totals = useMemo(() => {
                   <td className="p-2 text-center">{r.riga?.lettura_precedente ?? 0}</td>
                   
                   <td className="p-2 text-center">{r.riga?.stato_attuale ?? 0}</td>
-                  <td className="p-2 text-center">{parseInt(r.riga?.consumo_totale ?? 0)}</td>
+                  <td className="p-2 text-center">{r.riga?.consumo_totale ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
@@ -969,27 +951,6 @@ const totals = useMemo(() => {
                 </tr>
               ))}
             </tbody>
-            <tfoot className="bg-slate-200 font-semibold">
-              <tr>
-                <td colSpan={8} className="p-2 text-right">TOTALE</td>
-                <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
-                <td className="p-2 text-center">{totals.acq.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.fog.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
-                <td
-                  className={`p-2 text-center font-bold ${
-                    totals.isGreen ? "text-green-600" : "text-red-600"
-                  }`}
-                >
-                  {totals.totaleInterni.toFixed(2)}
-                </td>
-              </tr>
-          </tfoot>
           </table>
         </div>
       </div>
@@ -1000,5 +961,7 @@ const totals = useMemo(() => {
 
   );
 }
- 
+function setRighe(righe: any) {
+  throw new Error("Function not implemented.");
+}
 

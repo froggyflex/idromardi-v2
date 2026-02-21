@@ -102,7 +102,7 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
  * - casa_idrica_tariff_componenti_mc
  * - casa_idrica_tariff_quote_fisse
  */
-async function loadTariffeABC(conn, { anno, categoriaCodice }) {
+async function loadTariffeABC(conn, { anno, categoriaCodice, tfCode }) {
   // find latest tariff version for ABC that matches anno
   // If you already select version elsewhere, change this to use that id.
   const [verRows] = await conn.query(
@@ -120,6 +120,7 @@ async function loadTariffeABC(conn, { anno, categoriaCodice }) {
   if (verRows.length === 0) throw new Error(`No ABC tariff version for anno ${anno}`);
   const version = verRows[0];
 
+  
   const [catRows] = await conn.query(
     `
     SELECT *
@@ -793,7 +794,7 @@ async function calculateGenerale(conn, sessionId) {
   }
 };
  
-async function calculateInterni(conn, session, generale) {
+async function calculateInterni(conn, session, generale, tfCode) {
 
   // --- Load periods ---
   const [[periodoAttuale]] = await conn.query(
@@ -887,160 +888,267 @@ async function calculateInterni(conn, session, generale) {
   const totNuae = nuae[0] && nuae[0].nuae != null ? Math.max(1, n2(nuae[0].nuae)) : 1;
   const qfPerNuae = totNuae > 0 ? generale.qfTot / totNuae : 0;
 
-  let totAcq = 0;
-  let totFog = 0;
-  let totDep = 0;
-  let totOneri = 0;
-  let totIva = 0;
-  let sumUtenti = 0;
+  // Acconto
+    const giorniCons = Math.max(0, n2(session.giorni_consumi));
+    const giorniAcc = session.giorni_acconto ? Math.max(0, n2(session.giorni_acconto)) : 0;
+  
+    const rows = [];
 
-  const processed = new Set();
-
-  for (let i = 0; i < utenze.length; i++) {
-
-    const u = utenze[i];
-    if (processed.has(u.id)) continue;
-
-    const ra = mapAtt.get(u.id);
-    const rp = mapPrec.get(u.id);
-
-    const lettAtt = ra?.valore_lettura ?? 0;
-    const lettPrec = rp?.valore_lettura ?? 0;
-
-    let totAtt = n2(lettAtt);
-    let totPrec = n2(lettPrec);
-
-    const isDouble = String(u.doppio_contatore || "NO").toUpperCase() === "SI";
-
-    let mergedCount = 1;
-
-    // ------------------------------------------------
-    // DOUBLE CONTATORE LOGIC
-    // ------------------------------------------------
-    if (isDouble) {
-
-      for (let j = i + 1; j < utenze.length; j++) {
-
-        const u2 = utenze[j];
-
-        if (
-          String(u2.doppio_contatore || "NO").toUpperCase() === "SI" &&
-          u2.nome === u.nome &&
-          u2.cognome === u.cognome
-        ) {
-
-          const ra2 = mapAtt.get(u2.id);
-          const rp2 = mapPrec.get(u2.id);
-
-          totAtt += n2(ra2?.valore_lettura ?? 0);
-          totPrec += n2(rp2?.valore_lettura ?? 0);
-
-          processed.add(u2.id);
-          mergedCount++;
+    let totaleOneri = 0;
+    for (let i = 0; i < utenze.length; i++) {
+      const u = utenze[i];
+      const isDouble = String(u.doppio_contatore || "NO").toUpperCase() === "SI";
+  
+      const group = [u];
+      if (isDouble) {
+        for (let j = i + 1; j < utenze.length; j++) {
+          const uj = utenze[j];
+          const ujDouble = String(uj.doppio_contatore || "NO").toUpperCase() === "SI";
+          if (!ujDouble) break;
+          if (String(uj.id_user) !== String(u.id_user)) break;
+          group.push(uj);
+        }
+      }
+      if (group.length > 1) i = i + group.length - 1;
+  
+      const first = group[0];
+  
+      // Sum readings across group
+      let lettAtt = null;
+      let lettPrec = null;
+      let statoAtt = null;
+      let statoPrec = null;
+  
+      let sumAtt = 0;
+      let sumPrec = 0;
+      let haveAny = false;
+  
+      for (const gx of group) {
+        const ra = mapAtt.get(gx.id);
+        const rp = mapPrec.get(gx.id);
+        const a = ra?.valore_lettura ?? null;
+        const p = rp?.valore_lettura ?? null;
+  
+        if (a !== null && p !== null) {
+          haveAny = true;
+          sumAtt += n2(a);
+          sumPrec += n2(p);
+        }
+  
+        if (gx === first) {
+          statoAtt = ra?.stato_lettura ?? null;
+          statoPrec = rp?.stato_lettura ?? null;
+        }
+      }
+  
+      if (haveAny) {
+        lettAtt = sumAtt;
+        lettPrec = sumPrec;
+      } else {
+        const ra0 = mapAtt.get(first.id);
+        const rp0 = mapPrec.get(first.id);
+        lettAtt = ra0?.valore_lettura ?? null;
+        lettPrec = rp0?.valore_lettura ?? null;
+        statoAtt = ra0?.stato_lettura ?? null;
+        statoPrec = rp0?.stato_lettura ?? null;
+      }
+  
+      let consumoNorm = null;
+      if (lettAtt !== null && lettPrec !== null) {
+        const d = n2(lettAtt) - n2(lettPrec);
+        if (d < 0) throw new Error(`Negative consumption for utenza ${first.id_user}`);
+        consumoNorm = d;
+      }
+  
+      const consumoAcc =
+        consumoNorm === null || giorniCons === 0 || giorniAcc === 0
+          ? 0
+          : (consumoNorm / giorniCons) * giorniAcc;
+  
+      const consumoTot = consumoNorm === null ? null : consumoNorm + consumoAcc;
+  
+      const categoriaCodice = String(first.categoria_tariffa || "RESIDENTE").toUpperCase();
+      const tariff = await loadTariffeABC(conn, { anno: anno, categoriaCodice, tfCode });
+  
+      const nucleo = Math.max(1, n2(first.nucleo));
+      const nuae = Math.max(1, n2(first.nuae));
+  
+      let impAcq = 0;
+      if (consumoNorm !== null) {
+        const impNorm = allocateAcquedotto({
+          consumo: consumoNorm,
+          scaglioni: tariff.scaglioni,
+          nucleo,
+          nuae,
+          giorniRef: giorniCons,
+          yearDays,
+        });
+  
+        const impAcc =
+          giorniAcc > 0
+            ? allocateAcquedotto({
+                consumo: consumoAcc,
+                scaglioni: tariff.scaglioni,
+                nucleo,
+                nuae,
+                giorniRef: giorniAcc,
+                yearDays,
+              })
+            : 0;
+  
+        impAcq = round2(impNorm + impAcc);
+      }
+  
+      const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
+      const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
+      const impQf = round2(qfPerNuae * nuae);
+  
+      const impOneri = isDouble
+        ? round2(n2(session.doppio_contatore_snapshot))
+        : round2(n2(session.oneri_snapshot));
+  
+      totaleOneri += impOneri;
+      // IVA 10%
+      const baseIva = round2(impAcq + impFog + impDep + impQf);
+      const impIva = round2(baseIva * 0.10);
+  
+      const baseTot = round2(impAcq + impFog + impDep + impQf + impOneri + impIva);
+  
+      rows.push({
+        id_utenza: first.id,
+        id_user: first.id_user,
+        lettura_precedente: lettPrec,
+        stato_precedente: statoPrec,
+        lettura_attuale: lettAtt,
+        stato_attuale: statoAtt,
+        consumo_normale: consumoNorm,
+        consumo_acconto: consumoNorm === null ? null : consumoAcc,
+        consumo_totale: consumoNorm === null ? null : consumoTot,
+        imp_acquedotto: impAcq,
+        imp_fognatura: impFog,
+        imp_depurazione: impDep,
+        imp_qf: impQf,
+        imp_oneri: impOneri,
+        imp_iva: impIva,
+        base_totale: baseTot,
+        conguaglio: 0,
+        imp_arr: 0,
+        totale: baseTot,
+        tfEligible:
+          String(first.tipo || "").toUpperCase() !== "SPECIAL" &&
+          (consumoTot !== null && n2(consumoTot) > 0),
+      });
+  
+      // Zero out subsequent meters in the doppio group
+      if (group.length > 1) {
+        for (let k = 1; k < group.length; k++) {
+          const gk = group[k];
+          const rak = mapAtt.get(gk.id);
+          const rpk = mapPrec.get(gk.id);
+  
+          rows.push({
+            id_utenza: gk.id,
+            id_user: gk.id_user,
+            lettura_precedente: rpk?.valore_lettura ?? null,
+            stato_precedente: rpk?.stato_lettura ?? null,
+            lettura_attuale: rak?.valore_lettura ?? null,
+            stato_attuale: rak?.stato_lettura ?? null,
+            consumo_normale: 0,
+            consumo_acconto: 0,
+            consumo_totale: 0,
+            imp_acquedotto: 0,
+            imp_fognatura: 0,
+            imp_depurazione: 0,
+            imp_qf: 0,
+            imp_oneri: 0,
+            imp_iva: 0,
+            base_totale: 0,
+            conguaglio: 0,
+            imp_arr: 0,
+            totale: 0,
+            tfEligible: false,
+          });
         }
       }
     }
+    generale.totaleOneri = round2(totaleOneri);
+    // Apply TF on TF1 base (not stacked)
+    const baseSum = round2(rows.reduce((s, r) => s + n2(r.base_totale), 0));
+    const diff = round2(n2(generale.totale + generale.totaleOneri) - baseSum);
 
-    const consumoNorm = Math.max(0, totAtt - totPrec);
-
-    const giorniCons = Math.max(0, n2(session.giorni_consumi));
-    const giorniAcc  = Math.max(0, n2(session.giorni_acconto || 0));
-
-    const consumoAcc =
-      consumoNorm && giorniCons && giorniAcc
-        ? (consumoNorm / giorniCons) * giorniAcc
-        : 0;
-
-    const consumoTot = consumoNorm + consumoAcc;
-
-    const tariff = await loadTariffeABC(conn, {
-      anno,
-      categoriaCodice: String(u.categoria_tariffa || "RESIDENTE").toUpperCase()
-    });
-
-    const nucleo = Math.max(1, n2(u.nucleo));
-    const nuae   = Math.max(1, n2(u.nuae));
-
-    const impAcq = round2(
-      allocateAcquedotto({
-        consumo: consumoNorm,
-        scaglioni: tariff.scaglioni,
-        nucleo,
-        nuae,
-        giorniRef: session.giorni_interni,
-        yearDays
-      })
-    );
-
-    const impFog = round2(consumoTot * n2(tariff.prezzoFognatura));
-    const impDep = round2(consumoTot * n2(tariff.prezzoDepurazione));
-    const impQf  = round2(qfPerNuae * nuae);
-
-    const impOneri =
-      isDouble
-        ? round2(n2(session.doppio_contatore_snapshot))
-        : round2(n2(session.oneri_snapshot));
-
-    const baseIva = impAcq + impFog + impDep + impQf;
-    const impIva  = round2(baseIva * 0.10);    
-
-    const totale = round2(
-      impAcq + impFog + impDep + impQf + impOneri + impIva
-    );
-
-    totAcq += impAcq;
-    totFog += impFog;
-    totDep += impDep;
-    totOneri += impOneri;
-    totIva += impIva;
-    sumUtenti += totale;
-
-    await conn.query(
-      `
-      INSERT INTO fatture_righe
-      (id, id_fattura, id_utenza,
-       lettura_precedente, lettura_attuale,
-       consumo_normale, consumo_acconto, consumo_totale,
-       imp_acquedotto, imp_fognatura, imp_depurazione,
-       imp_qf, imp_iva, imp_oneri, totale)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        uuid(),
-        session.id,
-        u.id,
-        totPrec,
-        totAtt,
-        consumoNorm,
-        consumoAcc,
-        consumoTot,
-        impAcq,
-        impFog,
-        impDep,
-        impQf,
-        impIva,
-        impOneri,
-        totale
-      ]
-    );
-
-    processed.add(u.id);
-  }
-
-  return {
-    totAcq,
-    totFog,
-    totDep,
-    totOneri,
-    totIva,
-    sumUtenti
-  };
+    console.log("GENERAL TOTAL:", generale.totale);
+    console.log("INTERNI TOTAL BEFORE TF:", baseSum);
+    console.log("DIFF:", diff);
+    console.log("TF CODE:", tfCode);
+    applyTfToRows({ tfCode, diff, rows });
+  
+    // Apply conguaglio + rounding adjustment (arr)
+    for (const r of rows) {
+      const beforeRound = round2(n2(r.base_totale) + n2(r.conguaglio));
+      const rounded = roundToNearestTenth(beforeRound);
+      const arr = round2(rounded - beforeRound);
+      r.imp_arr = arr;
+      r.totale = round2(beforeRound + arr);
+    }
+  
+    // Persist
+    for (const r of rows) {
+      
+      await conn.query(
+        `
+        INSERT INTO fatture_righe
+        (id, id_fattura, id_utenza,
+         lettura_precedente, stato_precedente,
+         lettura_attuale, stato_attuale,
+         consumo_normale, consumo_acconto, consumo_totale,
+         imp_acquedotto, imp_fognatura, imp_depurazione,
+         imp_qf, imp_oneri, imp_iva,
+         conguaglio, imp_arr,
+         totale)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          uuid(),
+          session.id,
+          r.id_utenza,
+          r.lettura_precedente,
+          r.stato_precedente,
+          r.lettura_attuale,
+          r.stato_attuale,
+          r.consumo_normale,
+          r.consumo_acconto,
+          r.consumo_totale,
+          r.imp_acquedotto,
+          r.imp_fognatura,
+          r.imp_depurazione,
+          r.imp_qf,
+          r.imp_oneri,
+          r.imp_iva,
+          r.conguaglio,
+          r.imp_arr,
+          r.totale,
+        ]
+      );
+    }
+  
+    const totAcq = round2(rows.reduce((s, r) => s + n2(r.imp_acquedotto), 0));
+    const totFog = round2(rows.reduce((s, r) => s + n2(r.imp_fognatura), 0));
+    const totDep = round2(rows.reduce((s, r) => s + n2(r.imp_depurazione), 0));
+    const totQf = round2(rows.reduce((s, r) => s + n2(r.imp_qf), 0));
+    const totOneri = round2(rows.reduce((s, r) => s + n2(r.imp_oneri), 0));
+    const totIva = round2(rows.reduce((s, r) => s + n2(r.imp_iva), 0));
+    const sumUtenti = round2(rows.reduce((s, r) => s + n2(r.totale), 0));
+    const totConguaglio = round2(rows.reduce((s, r) => s + n2(r.conguaglio), 0));
+    const totArr = round2(rows.reduce((s, r) => s + n2(r.imp_arr), 0));
+  
+    return { totAcq, totFog, totDep, totQf, totOneri, totIva, sumUtenti, totConguaglio, totArr, baseSum, diffApplied: diff, tfCode: String(tfCode || "TF1").toUpperCase() };
+  
 }
 
 
 
 
-exports.calculateSession = async function ({ sessionId }) {
+exports.calculateSession = async function ({ sessionId, tfCode }) {
 
   assertUUID(sessionId, "sessionId");
 
@@ -1077,7 +1185,7 @@ exports.calculateSession = async function ({ sessionId }) {
     
     */ 
     const g = generaleResult.generale;
-    const interniTotals = await calculateInterni(conn, session, g);
+    const interniTotals = await calculateInterni(conn, session, g, tfCode);
 
     console.log("Generale:", g);
     // console.log("Interni Totals:", interniTotals);  
@@ -1257,3 +1365,71 @@ exports.deleteSession = async function ({ sessionId }) {
     conn.release();
   }
 };
+
+function applyTfToRows({ tfCode, diff, rows }) {
+  const code = String(tfCode || "TF1").toUpperCase();
+  const delta = round2(n2(diff));
+  if (!delta) return;
+
+  const eligible = rows.filter(r =>
+    r.tfEligible && n2(r.consumo_totale) > 0
+  );
+
+  if (!eligible.length) return;
+
+  // TF1 = no redistribution
+  if (code === "TF1" || code === "NONE") return;
+
+  // ============================
+  // TF2N = EQUAL DISTRIBUTION
+  // ============================
+  if (code === "TF2" || code === "TF2N" || code === "EQUAL") {
+    const each = delta / eligible.length;
+    let applied = 0;
+
+    for (let i = 0; i < eligible.length; i++) {
+      const share =
+        i === eligible.length - 1
+          ? round2(delta - applied)
+          : round2(each);
+
+      eligible[i].conguaglio = share;
+      applied = round2(applied + share);
+    }
+
+    return;
+  }
+
+  // ============================
+  // TF3N = PROPORTIONAL
+  // ============================
+  if (code === "TF3" || code === "TF3N" || code === "PROP") {
+    const sumCons = eligible.reduce(
+      (s, r) => s + n2(r.consumo_totale),
+      0
+    );
+
+    if (sumCons <= 0) return;
+
+    let applied = 0;
+
+    for (let i = 0; i < eligible.length; i++) {
+      const raw = (delta * n2(eligible[i].consumo_totale)) / sumCons;
+
+      const share =
+        i === eligible.length - 1
+          ? round2(delta - applied)
+          : round2(raw);
+
+      eligible[i].conguaglio = share;
+      applied = round2(applied + share);
+    }
+
+    return;
+  }
+}
+
+function roundToNearestTenth(amount) {
+  // Legacy behavior: round to nearest 0.10 (keep 2 decimals, second cent digit becomes 0)
+  return Math.round(n2(amount) * 10) / 10;
+}
