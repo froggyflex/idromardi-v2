@@ -277,6 +277,15 @@ export default function CondominioFatturePage() {
     setVarie(session.varie ?? 0);
   }, [session]);
  
+  useEffect(() => {
+  if (!session) return;
+
+  setProviderId(session.id_casa_idrica || "");
+  setCurrent(session.id_periodo_attuale || "");
+  setPrevious(session.id_periodo_precedente || "");
+  
+}, [session]);
+
 
 const giorniOperatore = daysBetween(
   periodoPrecedente?.data_lettura_operatore,
