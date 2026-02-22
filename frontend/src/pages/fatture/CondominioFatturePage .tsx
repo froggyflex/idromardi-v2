@@ -283,7 +283,7 @@ export default function CondominioFatturePage() {
   setProviderId(session.id_casa_idrica || "");
   setCurrent(session.id_periodo_attuale || "");
   setPrevious(session.id_periodo_precedente || "");
-  
+
 }, [session]);
 
 
@@ -595,7 +595,7 @@ const totals = useMemo(() => {
   {/* ============================= */}
   <div className="bg-white border rounded-2xl p-6 space-y-6 ">
 
-    <div className="text-lg font-semibold">Parametri Giorni</div>
+    {/* <div className="text-lg font-semibold">Parametri Giorni</div> */}
 
     <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
       <div>
@@ -961,10 +961,10 @@ const totals = useMemo(() => {
                   <td className="p-2 text-center">{r.utenza.Isolato ?? "-"}</td>
                   <td className="p-2 text-center">{r.utenza.Scala ?? "-"}</td>
                   <td className="p-2 text-center">{r.utenza.Interno ?? "-"}</td>
-                  <td className="p-2 text-center">{r.riga?.lettura_attuale ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.lettura_precedente ?? 0}</td>
+                  <td className="p-2 text-center">{r.riga?.lettura_attuale ?? r.attuale?.valore_lettura}</td>
+                  <td className="p-2 text-center">{r.riga?.lettura_precedente ?? r.precedente?.valore_lettura}</td>
                   
-                  <td className="p-2 text-center">{r.riga?.stato_attuale ?? 0}</td>
+                  <td className="p-2 text-center">{r.riga?.stato_attuale ?? r.attuale?.stato_lettura}</td>
                   <td className="p-2 text-center">{parseInt(r.riga?.consumo_totale ?? 0)}</td>
                   <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
