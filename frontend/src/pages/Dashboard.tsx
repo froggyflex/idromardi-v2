@@ -108,29 +108,36 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold mb-4">
             Stato Condomini
           </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {stats.activeUtenze.map((y: any) => (
+              <div key={y.anno} className="bg-white p-4 rounded-xl shadow">
+                <div className="text-center font-semibold mb-2">
+                  Anno {y.anno}
+                </div>
 
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie
-                data={[
-                  { name: "Attivi", value: stats.condomini.active },
-                  {
-                    name: "Non Attivi",
-                    value:
-                      stats.condomini.total -
-                      stats.condomini.active,
-                  },
-                ]}
-                dataKey="value"
-                outerRadius={80}
-                label
-              >
-                <Cell fill="#2563eb" />
-                <Cell fill="#94a3b8" />
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie
+                      data={[
+                        { name: "Fatturati", value: y.utenti_attivi },
+                        {
+                          name: "Non Fatturati",
+                          value: Math.max(0, stats?.utenze.total - y.utenti_attivi),
+                        },
+                      ]}
+                      dataKey="value"
+                      outerRadius={80}
+                      label
+                    >
+                      <Cell fill="#2563eb" />
+                      <Cell fill="#94a3b8" />
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
