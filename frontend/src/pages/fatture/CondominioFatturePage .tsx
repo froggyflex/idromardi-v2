@@ -958,9 +958,9 @@ const totals = useMemo(() => {
                 <tr key={r.id ?? idx} className="border-t odd:bg-white even:bg-slate-50">
                   <td className="p-2 text-right">{r.utenza.id_user ?? "-"}</td>
                   <td className="p-2 text-center">{r.utenza.Nome + " " + (r.utenza.Cognome ?? "-")}</td>
-                  <td className="p-2 text-center">{r.utenza.Isolato ?? "-"}</td>
-                  <td className="p-2 text-center">{r.utenza.Scala ?? "-"}</td>
-                  <td className="p-2 text-center">{r.utenza.Interno ?? "-"}</td>
+                  <td className="p-2 text-center">{r.utenza.Isolato ?? ""}</td>
+                  <td className="p-2 text-center">{r.utenza.Scala ?? ""}</td>
+                  <td className="p-2 text-center">{r.utenza.Interno ?? ""}</td>
                   <td className="p-2 text-center">{r.riga?.lettura_attuale ?? r.attuale?.valore_lettura}</td>
                   <td className="p-2 text-center">{r.riga?.lettura_precedente ?? r.precedente?.valore_lettura}</td>
                   

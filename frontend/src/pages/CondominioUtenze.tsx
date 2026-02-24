@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import api from "../api/client";
 
+type BillingGroup = {
+  id: string;
+  nome: string;
+  condominio_id: string;
+};
+
 type Utenza = {
   id: string;
 
@@ -15,7 +21,7 @@ type Utenza = {
   Scala: string | null;
   Isolato: string | null;
   Piano: number;
-
+  billing_group_id: string | null;
   Mobile: string | null;
   Fisso: string | null;
   C_F: string | null;
@@ -70,6 +76,11 @@ export default function CondominioUtenze() {
   const [deleteResequence, setDeleteResequence] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+ 
+  const [billingGroups, setBillingGroups] = useState<BillingGroup[]>([]);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
   
   useEffect(() => {
     if (!condominioId) return;
@@ -81,6 +92,12 @@ export default function CondominioUtenze() {
         const rows = (res.data ?? []).slice().sort((a, b) => a.id_user - b.id_user);
         setOriginal(rows);
         setDraft(rows);
+
+        const bgRes = await api.get<BillingGroup[]>(
+          `/condomini/${condominioId}/billing-groups`
+        );
+        setBillingGroups(bgRes.data ?? []);
+
       } finally {
         setLoading(false);
       }
@@ -214,6 +231,8 @@ export default function CondominioUtenze() {
     const changes = draft.filter((r) => dirtyIds.has(r.id));
     if (changes.length === 0) return;
 
+    console.log(changes)
+
     setSaving(true);
     try {
       // send only fields that backend updates (add more if you want)
@@ -230,6 +249,7 @@ export default function CondominioUtenze() {
         Fisso: r.Fisso,
         C_F: r.C_F,
         Nucleo: r.Nucleo,
+        billing_group_id: r.billing_group_id,
         Matricola_Contatore: r.Matricola_Contatore,
         Doppio_Contatore: r.Doppio_Contatore,
         Contatore_Inverso: r.Contatore_Inverso,
@@ -379,9 +399,10 @@ export default function CondominioUtenze() {
                 {showAdvanced && <Th>Scala</Th>}
                 {showAdvanced && <Th>Isolato</Th>}
                 {showAdvanced && <Th>Piano</Th>}
-                <Th  >Mobile</Th>
+                {showAdvanced && <Th>Mobile</Th>}
                 <Th  >Nucleo</Th>
                 <Th  >Matricola</Th>
+                <Th  >Billing Group</Th>
                 <Th>Doppio</Th>
                 <Th>Inverso</Th>
                 <Th>Bonus</Th>
@@ -479,12 +500,14 @@ export default function CondominioUtenze() {
                         </Td>
                         )}
 
+                        {showAdvanced && (
                       <Td>
                         <Input
                           value={r.Mobile ?? ""}
                           onChange={(v) => setCell(r.id, "Mobile", normStr(v) ? v : null)}
                         />
                       </Td>
+                        )}
 
                       <Td>
                         <Input
@@ -501,7 +524,36 @@ export default function CondominioUtenze() {
                           onChange={(v) => setCell(r.id, "Matricola_Contatore", v)}
                         />
                       </Td>
+                      <Td>
+                        <div className="flex gap-2 items-center min-w-[180px]">
+                          <select
+                            className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                            value={r.billing_group_id ?? ""}
+                            onChange={(e) =>
+                              setCell(
+                                r.id,
+                                "billing_group_id",
+                                e.target.value || null
+                              )
+                            }
+                          >
+                            <option value="">— Nessun Gruppo —</option>
+                            {billingGroups.map((g) => (
+                              <option key={g.id} value={g.id}>
+                                {g.nome}
+                              </option>
+                            ))}
+                          </select>
 
+                          <button
+                            onClick={() => setCreatingGroup(true)}
+                            className="text-xs text-blue-600 hover:underline"
+                            type="button"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </Td>
                       <Td>
                         <SelectYN
                           value={r.Doppio_Contatore}
@@ -638,6 +690,53 @@ export default function CondominioUtenze() {
           </div>
         </div>
       )}
+
+      {creatingGroup && (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+        <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+          <div className="text-lg font-semibold text-slate-800">
+            Nuovo Billing Group
+          </div>
+
+          <input
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            placeholder="Nome gruppo"
+            className="mt-4 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+              onClick={() => {
+                setCreatingGroup(false);
+                setNewGroupName("");
+              }}
+            >
+              Annulla
+            </button>
+
+            <button
+              className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white"
+              onClick={async () => {
+                if (!newGroupName.trim()) return;
+
+                const res = await api.post(
+                  `/condomini/${condominioId}/billing-groups`,
+                  { nome: newGroupName }
+                );
+
+                setBillingGroups((prev) => [...prev, res.data]);
+                setCreatingGroup(false);
+                setNewGroupName("");
+              }}
+            >
+              Crea
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </div>
   );
 }

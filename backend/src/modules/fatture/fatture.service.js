@@ -917,20 +917,59 @@ async function calculateInterni(conn, session, generale, tfCode) {
 
   // ---------- Group by UNIT (isolato|scala|internoBase) ----------
   const byUnit = new Map();
+
   for (const u of utenze) {
-    const key = `${String(u.Isolato).trim()}|${String(u.Scala).trim()}|${internoBase(u.Interno)}`;
-    if (!byUnit.has(key)) byUnit.set(key, []);
-    byUnit.get(key).push(u);
+    const isDoppio = String(u.Doppio_Contatore).toUpperCase() === "SI";
+
+    // If not doppio → always standalone
+    if (!isDoppio) {
+      byUnit.set(`__single_${u.id}`, [u]);
+      continue;
+    }
+
+    const groupKey = u.billing_group_id;
+
+    // If doppio but no billing group → standalone (data inconsistency protection)
+    if (!groupKey) {
+      byUnit.set(`__single_${u.id}`, [u]);
+      continue;
+    }
+
+    if (!byUnit.has(groupKey)) {
+      byUnit.set(groupKey, []);
+    }
+
+    byUnit.get(groupKey).push(u);
   }
 
-  // Stable ordering: by numeric internoBase if possible
+  for (const [key, units] of Array.from(byUnit.entries())) {
+    if (!key.startsWith("__single_") && units.length <= 1) {
+      // Collapse invalid doppio group into standalone
+      const u = units[0];
+      byUnit.delete(key);
+      byUnit.set(`__single_${u.id}`, [u]);
+    }
+  }
+
+  // Stable ordering: by numeric group_id if possible
   const unitKeys = Array.from(byUnit.keys()).sort((a, b) => {
-    const ai = a.split("|")[2];
-    const bi = b.split("|")[2];
-    const an = Number(ai);
-    const bn = Number(bi);
-    if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn;
-    return ai.localeCompare(bi);
+    const groupA = byUnit.get(a) || [];
+    const groupB = byUnit.get(b) || [];
+
+    const firstA = groupA[0];
+    const firstB = groupB[0];
+
+    const internoA = String(firstA?.Interno ?? "");
+    const internoB = String(firstB?.Interno ?? "");
+
+    const numA = Number(internoA);
+    const numB = Number(internoB);
+
+    if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
+      return numA - numB;
+    }
+
+    return internoA.localeCompare(internoB);
   });
 
   const rows = [];

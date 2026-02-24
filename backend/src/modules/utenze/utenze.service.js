@@ -172,6 +172,7 @@ exports.batchUpdate = async (condominioId, rows) => {
           Palazzina = ?,
           Domestico = ?,
           Artigianale = ?,
+          billing_group_id = ?,
           updated_at = NOW()
         WHERE id = ?
         AND condominio_id = ?
@@ -194,6 +195,7 @@ exports.batchUpdate = async (condominioId, rows) => {
           r.Palazzina,
           r.Domestico,
           r.Artigianale,
+          r.billing_group_id,
           r.id,
           condominioId
         ]
