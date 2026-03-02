@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "build": "vite build",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
