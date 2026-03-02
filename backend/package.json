@@ -22,8 +22,8 @@
     "mysql2": "^3.16.3",
     "react-leaflet": "^5.0.0",
     "uuid": "^13.0.0",
-    "wkhtmltopdf": "^0.4.0",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "wkhtmltopdf": "^0.4.0"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.21",
