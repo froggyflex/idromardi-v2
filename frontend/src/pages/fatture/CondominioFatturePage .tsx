@@ -33,9 +33,11 @@ export default function CondominioFatturePage() {
   const [valPrec, setValPrec] = useState<number | string>("");
   const [valAtt, setValAtt] = useState<number | string>("");
   const [savingGenerale, setSavingGenerale] = useState(false);
-  const [genCalc, setGenCalc] = useState<any>(null);
+  const [generale, setGenerale] = useState<any>(null);
   const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
   const [tfCode, setTfCode] = useState<string>("TF1");
+  const [mcAcconto, setMcAcconto] = useState<number>(0);
+  const [recalculating, setRecalculating] = useState(false);
 
 
   const canCreate = useMemo(() => {
@@ -166,6 +168,13 @@ export default function CondominioFatturePage() {
     }
   }
 
+  async function onStampaProspetto(fatturaId: string) {
+    // Open in new tab
+    const url = `/fatture/${fatturaId}/prospetto.pdf`;
+    window.open(api.defaults.baseURL + url, "_blank");
+  }
+
+
   function daysBetween(d1?: string, d2?: string) {
   if (!d1 || !d2) return 0;
 
@@ -186,16 +195,18 @@ export default function CondominioFatturePage() {
 
       try {
         await saveParams();
+  
         const res = await api.post(`/fatture/sessioni/${fatturaId}/calcola`, {
           tfCode,
         });
-
-        setCurrentSession(res.data.session);
-        setRigheCalcoli(res.data.righe || []);
-        
-
+ 
         //await loadDetail();
         await refreshSessionsList();
+        setCurrentSession(res.data.session);
+        setRigheCalcoli(res.data.righe || []);
+        setGenerale(res.data.generale || null);
+
+
       } catch (err: any) {
         setError(err?.response?.data?.error || "Errore calcolo: " + (err?.message || "Errore sconosciuto"));
       } finally {
@@ -228,13 +239,18 @@ export default function CondominioFatturePage() {
     try {
       setSavingParams(true);
 
-      console.log("Saving params:", { giorniQf, giorniConsumi, giorniAcconto, varie, giorniCasaInterni });
+      console.log("Saving params:", { giorniQf, giorniConsumi, giorniAcconto, varie, giorniCasaInterni, mcAcconto });
+      if(Number(giorniAcconto) <= 0) {
+        setMcAcconto(0);
+      }
       await api.put(`/fatture/sessioni/${fatturaId}/parametri`, {
         giorniQF: Number(giorniQf),
         giorniConsumi: Number(giorniConsumi),
         giorniAcconto: Number(giorniAcconto),
         varie: Number(varie),
         giorniCasa: Number(giorniCasaInterni),
+        mcAcconto: Number(giorniAcconto) == 0 ? 0 : Number(mcAcconto),
+        totImpo:Number(session?.tot_acquedotto ?? 0)
       });
 
 
@@ -267,14 +283,19 @@ export default function CondominioFatturePage() {
       setValAtt(contatoreGenerale.attuale ?? "");
     }
   }, [contatoreGenerale]);
+
+
   useEffect(() => {
+    console.log("Session data changed, updating giorni parameters:", session);
     if (!session) return;
 
     setGiorniQf(session.giorni_qf ?? 0);
     setGiorniConsumi(session.giorni_consumi ?? 0);
-    setGiorniAcconto(session.giorni_acconto ?? 0);
+    setGiorniAcconto(Number(session.giorni_acconto) ?? 0);
+    setMcAcconto(Number(session.mcAcconto) ?? 0);
     setGiorniCasaInterni(session.giorni_interni ?? 0);
     setVarie(session.varie ?? 0);
+    
   }, [session]);
  
   useEffect(() => {
@@ -297,11 +318,6 @@ const giorniCasaIdrica = daysBetween(
   periodoAttuale?.data_lettura_casa_idrica
 );
 
-function setMcAcconto(value: string): void {
-  throw new Error("Function not implemented.");
-}
-
-
 const totals = useMemo(() => {
   const base = righe.reduce(
     (acc: any, r: any) => {
@@ -314,6 +330,9 @@ const totals = useMemo(() => {
       acc.qf += Number(row.imp_qf || 0);
       acc.cong += Number(row.conguaglio || 0);
       acc.oneri += Number(row.imp_oneri || 0);
+      acc.acconto += Number(row.acconto || 0);
+      acc.storno += Number(row.storno_acconto || 0);
+
       acc.iva += Number(row.imp_iva || 0);
       acc.arr += Number(row.imp_arr || 0);
       acc.totale += Number(row.totale || 0);
@@ -328,6 +347,8 @@ const totals = useMemo(() => {
       qf: 0,
       cong: 0,
       oneri: 0,
+      acconto: 0,
+      storno: 0,
       iva: 0,
       arr: 0,
       totale: 0,
@@ -359,6 +380,7 @@ const totals = useMemo(() => {
   };
 }, [righe, session]);
 
+console.log("Session totals:", totals);
   return (
 <div className="w-full px-6 py-6 space-y-6">
 
@@ -654,8 +676,8 @@ const totals = useMemo(() => {
           <input
             type="number"
             className="w-full px-3 py-2 border rounded-xl"
-            value={0}
-            onChange={(e) => setMcAcconto(e.target.value)}
+            value={mcAcconto}
+            onChange={(e) => setMcAcconto(Number(e.target.value))}
           />
         </div>
 
@@ -804,6 +826,21 @@ const totals = useMemo(() => {
       </div>
     </div> */}
 
+    {generale?.consumoAcconto > 0 && (
+      <div className="grid grid-cols-5 gap-2">
+        <div className="text-xs text-slate-500">Cons. Acconto</div>
+        <div className="text-xs text-slate-500">Imp. Acconto</div>
+        <div className="text-xs text-slate-500">Dep. Acconto</div>
+        <div className="text-xs text-slate-500">Iva Acconto</div>
+        <div className="text-xs text-slate-500">Tot. Acconto</div>
+        <div>{generale.consumoAcconto}</div>
+        <div>{generale.impConsAcc}</div>
+        <div>{generale.depFogAcc}</div>
+        <div>{generale.ivaAcc}</div>
+        <div>{generale.totAcc}</div>
+      </div>
+    )}
+
     <div className="bg-blue-600 rounded-xl p-4 text-white shadow-md">
       <div className="text-xs uppercase tracking-wide opacity-80">
         Gran Totale
@@ -883,6 +920,7 @@ const totals = useMemo(() => {
 
           <button
             className="bg-indigo-600 text-white px-4 py-2 rounded-xl hover:bg-indigo-700 transition"
+            onClick={() => onStampaProspetto(fatturaId)}
           >
             Stampa Prospetto
           </button>
@@ -939,6 +977,8 @@ const totals = useMemo(() => {
                 <th className="p-2">Cong.</th>
                 <th className="p-2">Oneri</th>
                 <th className="p-2">IVA</th>
+                <th className="p-2">Acconto</th>
+                <th className="p-2">Storno</th>
                 <th className="p-2">Arr</th>
                 <th className="p-2 font-semibold">Totale</th>
               </tr>
@@ -973,6 +1013,10 @@ const totals = useMemo(() => {
                   <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
+
+                  <td className="p-2 text-center">{r.riga?.imp_acconto ?? 0}</td>
+                  <td className="p-2 text-center">{r.riga?.imp_storno ?? 0}</td>
+                  
                   <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
                   <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>
                 </tr>
@@ -989,7 +1033,11 @@ const totals = useMemo(() => {
                 <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
                 <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
                 <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
+
+                <td className="p-2 text-center">{totals.acconto.toFixed(2)}</td>
+                <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
                 <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
+ 
                 <td
                   className={`p-2 text-center font-bold ${
                     totals.isGreen ? "text-green-600" : "text-red-600"

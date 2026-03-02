@@ -412,10 +412,13 @@ exports.updateSessionParams = async function ({
   giorniQF,
   giorniConsumi,
   giorniAcconto,
+  mcAcconto,
+  totImpo,
   varie,
   dataFattura,
   dataCasaIdrica,
   giorniCasa
+ 
 }) {
   assertUUID(sessionId, "sessionId");
  
@@ -432,7 +435,9 @@ exports.updateSessionParams = async function ({
         varie = COALESCE(?, varie),
         data_fattura = ?,
         data_casa_idrica = ?,
-        giorni_interni = ?
+        giorni_interni = ?,
+        tot_acquedotto = ?,
+        mcAcconto  = ?
       WHERE id = ?
       `,
       [
@@ -443,6 +448,8 @@ exports.updateSessionParams = async function ({
         dataFattura ?? null,
         dataCasaIdrica ?? null,
         giorniCasa !== undefined ? (giorniCasa === null ? null : Number(giorniCasa)) : null,
+        totImpo !== undefined ? (totImpo === null ? null : Number(totImpo)) : null,
+        mcAcconto !== undefined ? (mcAcconto === null ? null : Number(mcAcconto)) : null,
         sessionId,
       ]
     );
@@ -546,104 +553,13 @@ async function loadPeriodoData(conn, session) {
     yearDays
   };
 }
-
-function calcolaGeneraleLegacy({
-  consumo,
-  totNuc,
-  numNuae,
-  giorniInterni,
-  yearDays,
-  imposteG,
-  prezzoFognatura,
-  prezzoDepurazione,
-  qfAnnua,
-  giorniQF,
-  varie,
-  aliquotaIva = 0.10,
-}) {
-  const consumoP = Math.max(0, n2(consumo));
-  const N = Math.max(0, n2(totNuc));
-  const A = Math.max(1, n2(numNuae));
-  const daysCons = Math.max(0, n2(giorniInterni));
-  const daysQFv = Math.max(0, n2(giorniQF));
-  const yd = Math.max(365, n2(yearDays));
-
-  const p0 = n2(imposteG?.[0]);
-  const p1 = n2(imposteG?.[1]);
-  const p2 = n2(imposteG?.[2]);
-  const p3 = n2(imposteG?.[3]);
-  const p4 = n2(imposteG?.[4]);
-
-  // capacities
-  const con_agev = (20 * N * A / yd) * daysCons;
-  const co_fbase = (50 * N * A / yd) * daysCons;
-  const fascia   = (30 * N * A / yd) * daysCons;
-
-  let remaining = consumoP;
-  let impCons = 0;
-
-  // Agevolata
-  const takeAgev = Math.min(remaining, con_agev);
-  impCons += takeAgev * p0;
-  remaining -= takeAgev;
-
-  // Base
-  if (remaining > 0) {
-    const takeBase = Math.min(remaining, co_fbase);
-    impCons += takeBase * p1;
-    remaining -= takeBase;
-  }
-
-  // Fasce successive: first fascia @p2, second @p3, third and beyond @p4
-  let fasciaIndex = 0; // 0->p2, 1->p3, 2+->p4
-  while (remaining > 0) {
-    const cap = fascia > 0 ? fascia : remaining; // avoid infinite loop if fascia==0
-    const take = Math.min(remaining, cap);
-
-    const price =
-      fasciaIndex === 0 ? p2 :
-      fasciaIndex === 1 ? p3 :
-      p4;
-
-    impCons += take * price;
-
-    remaining -= take;
-    fasciaIndex += 1;
-
-    if (fascia <= 0) break;
-  }
-
-  // Dep + Fog on total consumption
-  const depFog = consumoP * (n2(prezzoDepurazione) + n2(prezzoFognatura));
-
-  // QF generale
-  const qfTot = (n2(qfAnnua) / yd) * A * daysQFv;
-  const qfPerUtenza = qfTot / A;
-
-  const varieTot = n2(varie);
-
-  const baseIva = impCons + depFog + qfTot;
-  const iva = baseIva * n2(aliquotaIva);
-
-  const totale = baseIva + iva + varieTot;
- 
-
-  return {
-    caps: {
-      con_agev: round2(con_agev),
-      co_fbase: round2(co_fbase),
-      fascia: round2(fascia),
-    },
-    impCons: round2(impCons),
-    depFog: round2(depFog),
-    qfTot: round2(qfTot),
-    qfPerUtenza: round2(qfPerUtenza),
-    varie: round2(varieTot),
-    iva: round2(iva),
-    totale: round2(totale),
-  };
+ function internoBase(x) {
+  const s = String(x ?? "").trim();
+  // "1A" -> "1", "12B" -> "12", "7" -> "7"
+  const m = s.match(/^(\d+)/);
+  return m ? m[1] : s; // fallback
 }
-async function loadFullSession(conn, sessionId, interniTotals = null) {
+async function loadFullSession(conn, sessionId, interniTotals = null, generaleResult = null) {
 
   const [sessionRows] = await conn.query(
     `SELECT * FROM fatture_sessioni WHERE id = ? LIMIT 1`,
@@ -671,103 +587,180 @@ async function loadFullSession(conn, sessionId, interniTotals = null) {
 
   return {
     session: sessionRows[0],
-    righe: righeRows
+    righe: righeRows, 
+    generale: generaleResult?.generale || null
   };
+}
+
+
+function calcolaGeneraleLegacy({
+  consumo,
+  totNuc,
+  numNuae,
+  giorniInterni,
+  yearDays,
+  imposteG,
+  prezzoFognatura,
+  prezzoDepurazione,
+  qfAnnua,
+  giorniQF,
+  varie,
+  aliquotaIva = 0.10,
+  
+}) {
+ 
+  let remaining = Math.max(0, n2(consumo));
+  let total = 0;
+ 
+  const A = Math.max(1, n2(numNuae));
+  const days = Math.max(0, n2(giorniInterni));
+ 
+  for (const s of imposteG) {
+    if (remaining <= 0) break;
+
+    const baseFrom = n2(s.mc_da_base);
+    const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
+ 
+    // annual span for this tier in base mc/year
+    const spanBase = (baseTo === null) ? Infinity : Math.max(0, baseTo - baseFrom);
+
+    // multiplier rule
+    const multN = 3; //n2(s.moltiplica_per_nucleo) ? N : 1;
+ 
+    // prorated tier capacity
+    const capacity =
+      spanBase === Infinity
+        ? Infinity
+        : (spanBase * multN * A / yearDays) * days;
+
+    const take = capacity === Infinity ? remaining : Math.min(remaining, capacity);
+
+    const price = n2(s.prezzo_acquedotto);
+    total += take * price;
+
+    remaining -= take;
+  }
+  const daysQFv = Math.max(0, n2(giorniQF));
+  const yd = Math.max(365, n2(yearDays));
+ 
+  const impAcquedotto = round2(total);
+  const impFognatura = consumo * n2(prezzoFognatura);
+  const impDepurazione = consumo * n2(prezzoDepurazione);
+  const depFog = impFognatura + impDepurazione;
+
+  const qfTot = (n2(qfAnnua) / yd) * A * daysQFv;
+
+  const baseIva = impAcquedotto + depFog + qfTot;
+  const iva = baseIva * n2(aliquotaIva);
+
+  const totale = baseIva + iva + n2(varie);
+
+  return {
+    impAcquedotto: round2(impAcquedotto),
+    impFognatura: round2(impFognatura),
+    impDepurazione: round2(impDepurazione),
+    depFog: round2(depFog),
+    qfTot: round2(qfTot),
+    iva: round2(iva),
+    totale: round2(totale),
+  };
+  
 }
 async function calculateGenerale(conn, sessionId) {
   assertUUID(sessionId, "sessionId");
 
-   
+  const n2 = v => Number.isFinite(Number(v)) ? Number(v) : 0;
+
   try {
-    const [sRows] = await conn.query(
+    const [[session]] = await conn.query(
       `SELECT * FROM fatture_sessioni WHERE id = ? LIMIT 1`,
       [sessionId]
     );
-    if (sRows.length === 0) throw new Error("Session not found");
-    const session = sRows[0];
+    if (!session) throw new Error("Session not found");
 
-    // Period current
-    const [paRows] = await conn.query(
+    const [[pa]] = await conn.query(
       `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
       [session.id_periodo_attuale]
     );
-
-    // Period previous  
-    const [ppRows] = await conn.query(
+    const [[pp]] = await conn.query(
       `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
       [session.id_periodo_precedente]
     );
 
-    if (paRows.length === 0) throw new Error("Periodo attuale not found");
-    const periodoAttuale = paRows[0];
+    if (!pa || !pp) throw new Error("Periodi non trovati");
 
-    if (ppRows.length === 0) throw new Error("Periodo precedente not found");
-    const periodoPrecedente = ppRows[0];
-
-    const anno = Number(periodoAttuale.period_year);
+    const anno = Number(pa.period_year);
     const yd = yearDaysCount(anno);
 
-    // Active utenze in current period → totNuc = SUM(nucleo)
-    const y = Number(periodoAttuale.period_year);
-    const m = Number(periodoAttuale.period_month);
-    const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
-    const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-
-    const [utenze] = await conn.query(
-      `
-      SELECT nucleo
-      FROM utenze_v2
-      WHERE  condominio_id = ?
-        AND stato = 'ATTIVA'
-        AND (data_attivazione IS NULL OR data_attivazione <= ?)
-        AND (data_chiusura IS NULL OR data_chiusura >= ?)
-      `,
-      [session.id_condominio, end, start]
+    // -----------------------------
+    // GENERAL CONSUMPTION
+    // -----------------------------
+    const consumoNorm = Math.max(
+      0,
+      n2(pa.contatore_generale_valore) -
+      n2(pp.contatore_generale_valore)
     );
 
-    const totNuc = 3; //utenze.reduce((sum, u) => sum + Math.max(1, n2(u.nucleo)), 0)/;
+    // -----------------------------
+    // TOTAL NUCLEI
+    // -----------------------------
+    const [utenze] = await conn.query(
+      `SELECT nucleo FROM utenze_v2 WHERE condominio_id = ? AND stato='ATTIVA'`,
+      [session.id_condominio]
+    );
 
- 
-    let numNuae = 1;
-    const [cRows] = await conn.query(
+    const totNuc = utenze.reduce(
+      (s, u) => s + Math.max(1, n2(u.nucleo)),
+      0
+    );
+
+    const [[condo]] = await conn.query(
       `SELECT nuae FROM condomini_v2 WHERE id = ? LIMIT 1`,
       [session.id_condominio]
     );
-    if (cRows.length > 0 && cRows[0].nuae != null) numNuae = Math.max(1, n2(cRows[0].nuae));
 
-     
-    // General consumption from "contatore generale"
-    const consumoGenerale =
-      (periodoAttuale.contatore_generale_valore != null && periodoPrecedente.contatore_generale_valore != null)
-        ? n2(periodoAttuale.contatore_generale_valore) - n2(periodoPrecedente.contatore_generale_valore)
-        : null;
- 
-    const valAtt = n2(periodoAttuale.contatore_generale_valore);
-    const valPrec = n2(periodoPrecedente.contatore_generale_valore);
+    const numNuae = condo?.nuae ? Math.max(1, n2(condo.nuae)) : 1;
 
-    const consumo = (session.contatore_generale_attuale != null && session.contatore_generale_precedente != null)
-      ? Math.max(0, valAtt - valPrec)
-      : (consumoGenerale == null ? 0 : Math.max(0, n2(consumoGenerale)));
+    // -----------------------------
+    // LOAD TARIFFE
+    // -----------------------------
+    const tariff = await loadTariffeABC(conn, {
+      anno,
+      categoriaCodice: "RESIDENTE",
+    });
+  
+    const imposteG = [...(tariff.scaglioni || [])]
+      .sort((a, b) => n2(a.ordine) - n2(b.ordine))
+       
+    // -----------------------------
+    // MC ACCONTO CALCULATION
+    // -----------------------------
+    let consumoAcconto = 0;
 
-    // Load tariffs (ABC) — map prices from scaglioni
-    // You already have loadTariffeABC(conn, { anno, categoriaCodice })
-    const tariff = await loadTariffeABC(conn, { anno, categoriaCodice: "RESIDENTE" });
+    if (n2(session.mcAcconto) > 0) {
+      consumoAcconto = n2(session.mcAcconto);
+    } else if (
+      n2(session.giorni_acconto) > 0 &&
+      consumoNorm > 0 &&
+      n2(session.giorni_consumi) > 0
+    ) {
+      consumoAcconto =
+        (consumoNorm / n2(session.giorni_consumi)) *
+        n2(session.giorni_acconto);
+    }
 
-    const ordered = [...(tariff.scaglioni || [])].sort((a, b) => n2(a.ordine) - n2(b.ordine));
-    const imposteG = [
-      n2(ordered[0]?.prezzo_acquedotto),
-      n2(ordered[1]?.prezzo_acquedotto),
-      n2(ordered[2]?.prezzo_acquedotto),
-      n2(ordered[3]?.prezzo_acquedotto),
-      n2(ordered[4]?.prezzo_acquedotto),
-    ];
+    consumoAcconto = round2(consumoAcconto);
+    const consumoTot = round2(consumoNorm + consumoAcconto);
 
-    const out = calcolaGeneraleLegacy({
-      consumo,
+    // -----------------------------
+    // BASE CALCULATION (NO ACCONTO)
+    // -----------------------------
+    
+    const base = calcolaGeneraleLegacy({
+      consumo: consumoNorm,
       totNuc,
       numNuae,
       giorniInterni: session.giorni_consumi,
-       
       yearDays: yd,
       imposteG,
       prezzoFognatura: tariff.prezzoFognatura,
@@ -775,34 +768,65 @@ async function calculateGenerale(conn, sessionId) {
       qfAnnua: tariff.qfAnnua,
       giorniQF: session.giorni_qf,
       varie: session.varie,
-      aliquotaIva: 0.10,
+        
     });
 
-     
+    // -----------------------------
+    // WITH ACCONTO
+    // -----------------------------
+    const withAcc = calcolaGeneraleLegacy({
+      consumo: consumoTot,
+      totNuc,
+      numNuae,
+      giorniInterni: n2(session.giorni_consumi) + n2(session.giorni_acconto),
+      yearDays: yd,
+      imposteG,
+      prezzoFognatura: tariff.prezzoFognatura,
+      prezzoDepurazione: tariff.prezzoDepurazione,
+      qfAnnua: tariff.qfAnnua,
+      giorniQF: session.giorni_qf,
+      varie: session.varie,
+    });
+
+    // -----------------------------
+    // ACCONTO BREAKDOWN (DELTA)
+    // -----------------------------
+    const impConsAcc = round2(withAcc.impAcquedotto - base.impAcquedotto);
+    const depFogAcc  = round2(withAcc.depFog - base.depFog);
+    const ivaAcc     = round2(withAcc.iva - base.iva);
+
+    const totAcc = round2(
+      impConsAcc +
+      depFogAcc +
+      ivaAcc
+    );
+
+    // -----------------------------
+    // RETURN SAME STRUCTURE AS BEFORE
+    // -----------------------------
     return {
       meta: {
         anno,
-        yearDays: yd,
-        totNuc,
-        numNuae,
-        consumo,
-        imposteG,
+        consumoNorm,
+        consumoAcconto,
+        consumoTot
       },
-      generale: out,
+      generale: {
+        ...withAcc,               // full totals WITH acconto
+        consumoAcconto,           // MC extra
+        impConsAcc,               // € acquedotto acconto
+        depFogAcc,                // € dep+fog acconto
+        ivaAcc,                   // € iva acconto
+        totAcc                    // TOTAL € acconto
+      }
     };
+
   } finally {
     conn.release();
   }
-};
-
-
- function internoBase(x) {
-  const s = String(x ?? "").trim();
-  // "1A" -> "1", "12B" -> "12", "7" -> "7"
-  const m = s.match(/^(\d+)/);
-  return m ? m[1] : s; // fallback
 }
-async function calculateInterni(conn, session, generale, tfCode) {
+ 
+ async function calculateInterni(conn, session, generale, tfCode) {
   // ---------- helpers ----------
   const pick = (obj, ...keys) => {
     for (const k of keys) if (obj?.[k] !== undefined && obj?.[k] !== null) return obj[k];
@@ -818,6 +842,10 @@ async function calculateInterni(conn, session, generale, tfCode) {
   };
 
   const isPureNumericInterno = (x) => /^\d+$/.test(String(x ?? "").trim());
+
+  // expects existing helper in your codebase
+  // n2, round2, yearDaysCount, allocateAcquedotto, loadTariffeABC,
+  // roundToNearestTenth, applyTfToRows, uuid
 
   // ---------- Load periods ----------
   const [[periodoAttuale]] = await conn.query(
@@ -839,15 +867,12 @@ async function calculateInterni(conn, session, generale, tfCode) {
   const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 
   // ---------- Active utenze ----------
-  // Alias casing issues once and for all
   const [utenzeRaw] = await conn.query(
     `
     SELECT
       u.*,
       u.Doppio_Contatore AS doppio_contatore,
-       
       u.Nucleo AS nucleo,
-       
       u.Tipo AS tipo,
       u.Isolato AS Isolato,
       u.Scala AS Scala,
@@ -911,17 +936,12 @@ async function calculateInterni(conn, session, generale, tfCode) {
   // ---------- Clear snapshot ----------
   await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
 
-  // ---------- Params ----------
-  const giorniCons = Math.max(0, n2(session.giorni_consumi));
-  const giorniAcc = session.giorni_acconto ? Math.max(0, n2(session.giorni_acconto)) : 0;
-
-  // ---------- Group by UNIT (isolato|scala|internoBase) ----------
+  // ---------- Group by UNIT (billing_group_id for doppio) ----------
   const byUnit = new Map();
 
   for (const u of utenze) {
     const isDoppio = String(u.Doppio_Contatore).toUpperCase() === "SI";
 
-    // If not doppio → always standalone
     if (!isDoppio) {
       byUnit.set(`__single_${u.id}`, [u]);
       continue;
@@ -929,33 +949,27 @@ async function calculateInterni(conn, session, generale, tfCode) {
 
     const groupKey = u.billing_group_id;
 
-    // If doppio but no billing group → standalone (data inconsistency protection)
     if (!groupKey) {
       byUnit.set(`__single_${u.id}`, [u]);
       continue;
     }
 
-    if (!byUnit.has(groupKey)) {
-      byUnit.set(groupKey, []);
-    }
-
+    if (!byUnit.has(groupKey)) byUnit.set(groupKey, []);
     byUnit.get(groupKey).push(u);
   }
 
   for (const [key, units] of Array.from(byUnit.entries())) {
     if (!key.startsWith("__single_") && units.length <= 1) {
-      // Collapse invalid doppio group into standalone
       const u = units[0];
       byUnit.delete(key);
       byUnit.set(`__single_${u.id}`, [u]);
     }
   }
 
-  // Stable ordering: by numeric group_id if possible
+  // Stable ordering (guard localeCompare)
   const unitKeys = Array.from(byUnit.keys()).sort((a, b) => {
     const groupA = byUnit.get(a) || [];
     const groupB = byUnit.get(b) || [];
-
     const firstA = groupA[0];
     const firstB = groupB[0];
 
@@ -965,9 +979,7 @@ async function calculateInterni(conn, session, generale, tfCode) {
     const numA = Number(internoA);
     const numB = Number(internoB);
 
-    if (!Number.isNaN(numA) && !Number.isNaN(numB)) {
-      return numA - numB;
-    }
+    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
 
     return internoA.localeCompare(internoB);
   });
@@ -975,10 +987,14 @@ async function calculateInterni(conn, session, generale, tfCode) {
   const rows = [];
   let totaleOneri = 0;
 
+  // -------------------------------------------------------------------
+  // PASS 1: build base rows (NO legacy acconto distribution here yet)
+  // We compute base amounts on NORMAL consumption only.
+  // Acconto will be allocated later (legacy add_Acconti).
+  // -------------------------------------------------------------------
   for (const key of unitKeys) {
     const group = byUnit.get(key);
 
-    // Choose primary: the "pure numeric" interno (e.g., "5") before "5A"
     group.sort((a, b) => {
       const ai = String(a.Interno ?? "");
       const bi = String(b.Interno ?? "");
@@ -996,7 +1012,6 @@ async function calculateInterni(conn, session, generale, tfCode) {
     let sumPrec = 0;
     let haveAny = false;
 
-    // keep "state" from primary meter (legacy behavior)
     const ra0 = mapAtt.get(first.id);
     const rp0 = mapPrec.get(first.id);
     const statoAtt = ra0?.stato_lettura ?? null;
@@ -1025,12 +1040,9 @@ async function calculateInterni(conn, session, generale, tfCode) {
       consumoNorm = d;
     }
 
-    const consumoAcc =
-      consumoNorm === null || giorniCons === 0 || giorniAcc === 0
-        ? 0
-        : (consumoNorm / giorniCons) * giorniAcc;
-
-    const consumoTot = consumoNorm === null ? null : consumoNorm + consumoAcc;
+    // IMPORTANT: legacy-style acconto distribution uses consumo_normale as MC base;
+    // so here consumo_totale is still NORMAL (no automatic giorniAcc add-on).
+    const consumoTot = consumoNorm;
 
     const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
     const tariff = await loadTariffeABC(conn, { anno, categoriaCodice, tfCode });
@@ -1045,38 +1057,23 @@ async function calculateInterni(conn, session, generale, tfCode) {
         scaglioni: tariff.scaglioni,
         nucleo,
         nuae: nuaeU,
-        giorniRef: giorniCons,
+        giorniRef: Math.max(1, n2(session.giorni_consumi)), // keep your base behavior
         yearDays,
       });
 
-      const impAcc =
-        giorniAcc > 0
-          ? allocateAcquedotto({
-              consumo: consumoAcc,
-              scaglioni: tariff.scaglioni,
-              nucleo,
-              nuae: nuaeU,
-              giorniRef: giorniAcc,
-              yearDays,
-            })
-          : 0;
-
-      impAcq = round2(impNorm + impAcc);
+      impAcq = round2(impNorm);
     }
 
     const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
     const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
     const impQf = round2(qfPerNuae * nuaeU);
 
-    // ONERI: if unit has multiple meters -> doppio contatore snapshot, else normal snapshot
-    console.log(session);
     const impOneri = isMulti
       ? round2(n2(session.oneri_doppio_snapshot))
       : round2(n2(session.oneri_snapshot));
 
     totaleOneri += impOneri;
 
-    // IVA 10% only on (Acq + Fog + Dep + QF) like your original
     const baseIva = round2(impAcq + impFog + impDep + impQf);
     const impIva = round2(baseIva * 0.10);
 
@@ -1085,23 +1082,35 @@ async function calculateInterni(conn, session, generale, tfCode) {
     rows.push({
       id_utenza: first.id,
       id_user: first.id_user,
+
       lettura_precedente: rp0?.valore_lettura,
       stato_precedente: statoPrec,
       lettura_attuale: ra0?.valore_lettura,
       stato_attuale: statoAtt,
+
       consumo_normale: consumoNorm,
-      consumo_acconto: consumoNorm === null ? null : consumoAcc,
-      consumo_totale: consumoNorm === null ? null : consumoTot,
+      consumo_acconto: 0,                // filled in PASS 2
+      consumo_totale: consumoNorm,       // legacy keeps MC acconto separate
+
+      // base amounts
       imp_acquedotto: impAcq,
       imp_fognatura: impFog,
       imp_depurazione: impDep,
       imp_qf: impQf,
       imp_oneri: impOneri,
       imp_iva: impIva,
+
+      // acconto buckets (PASS 2)
+      imp_acconto: 0,
+      depfog_acconto: 0,
+      acconto: 0,
+      storno_acconto: 0,
+
       base_totale: baseTot,
       conguaglio: 0,
       imp_arr: 0,
       totale: baseTot,
+
       tfEligible: !isSpecial(first) && consumoTot !== null && n2(consumoTot) > 0,
       _unitKey: key,
       _isPrimary: true,
@@ -1117,23 +1126,33 @@ async function calculateInterni(conn, session, generale, tfCode) {
         rows.push({
           id_utenza: gk.id,
           id_user: gk.id_user,
+
           lettura_precedente: rpk?.valore_lettura ?? null,
           stato_precedente: rpk?.stato_lettura ?? null,
           lettura_attuale: rak?.valore_lettura ?? null,
           stato_attuale: rak?.stato_lettura ?? null,
+
           consumo_normale: 0,
           consumo_acconto: 0,
           consumo_totale: 0,
+
           imp_acquedotto: 0,
           imp_fognatura: 0,
           imp_depurazione: 0,
           imp_qf: 0,
           imp_oneri: 0,
           imp_iva: 0,
+
+          imp_acconto: 0,
+          depfog_acconto: 0,
+          acconto: 0,
+          storno_acconto: 0,
+
           base_totale: 0,
           conguaglio: 0,
           imp_arr: 0,
           totale: 0,
+
           tfEligible: false,
           _unitKey: key,
           _isPrimary: false,
@@ -1144,7 +1163,74 @@ async function calculateInterni(conn, session, generale, tfCode) {
 
   generale.totaleOneri = round2(totaleOneri);
 
+  // -------------------------------------------------------------------
+  // PASS 2: LEGACY ACCONTO DISTRIBUTION (add_Acconti)
+  // - € based on (base_totale - oneri) share
+  // - MC based on consumo_normale share
+  // - applies only to primaries
+  // -------------------------------------------------------------------
+  const primaries = rows.filter((r) => r._isPrimary);
+
+  const totAccEuro = round2(n2(generale.totAcc ?? 0));                 // € pot
+  const totConsAccMc = round2(n2(generale.consumoAcconto ?? 0));       // MC pot
+
+  // optional buckets if you provide them from calculateGenerale
+  const totImpConsAcc = round2(n2(generale.impConsAcc ?? 0));
+  const totDepFogAcc = round2(n2(generale.depFogAcc ?? 0));
+
+  if (totAccEuro > 0 || totConsAccMc > 0) {
+    const totMoneyNoOneri = primaries.reduce((s, r) => {
+      const v = round2(n2(r.base_totale) - n2(r.imp_oneri));
+      return s + Math.max(0, v);
+    }, 0);
+
+    const totMcNorm = primaries.reduce((s, r) => s + Math.max(0, n2(r.consumo_normale)), 0);
+
+    let distributedEuro = 0;
+
+    for (const r of primaries) {
+      const moneyNoOneri = Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
+      const pctMoney = totMoneyNoOneri > 0 ? moneyNoOneri / totMoneyNoOneri : 0;
+
+      const consNorm = Math.max(0, n2(r.consumo_normale));
+      const pctMc = totMcNorm > 0 ? consNorm / totMcNorm : 0;
+
+      // € acconto
+      const accEuro = round2(pctMoney * totAccEuro);
+
+      // split into buckets if available (keeps printing possible)
+      const impConsAccU = totImpConsAcc > 0 ? round2(pctMoney * totImpConsAcc) : round2(accEuro);
+      const depFogAccU = totDepFogAcc > 0 ? round2(pctMoney * totDepFogAcc) : 0;
+
+      // MC acconto
+      const accMc = round2(pctMc * totConsAccMc);
+
+      r.acconto = accEuro;
+      r.imp_acconto = impConsAccU;
+      r.depfog_acconto = depFogAccU;
+      r.consumo_acconto = accMc;
+
+      // legacy: add € acconto into total row BEFORE TF/rounding
+      r.base_totale = round2(n2(r.base_totale) + accEuro);
+
+      distributedEuro += accEuro;
+    }
+
+    // deficit fix (legacy): spread remaining cents equally
+    const deficitEuro = round2(totAccEuro - distributedEuro);
+    if (deficitEuro !== 0 && primaries.length > 0) {
+      const addEach = round2(deficitEuro / primaries.length);
+      for (const r of primaries) {
+        r.acconto = round2(n2(r.acconto) + addEach);
+        r.imp_acconto = round2(n2(r.imp_acconto) + addEach); // simplest: keep in imp bucket
+        r.base_totale = round2(n2(r.base_totale) + addEach);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
   // TF base (TF applied on TF1 base, not stacked)
+  // -------------------------------------------------------------------
   const baseSum = round2(rows.reduce((s, r) => s + n2(r.base_totale), 0));
   const diff = round2(n2(generale.totale + totaleOneri) - baseSum);
 
@@ -1160,6 +1246,8 @@ async function calculateInterni(conn, session, generale, tfCode) {
   }
 
   // Persist
+  // NOTE: If your fatture_righe table has the acconto columns, keep them in INSERT.
+  // If not yet added, remove them from both column list and values.
   for (const r of rows) {
     await conn.query(
       `
@@ -1171,29 +1259,41 @@ async function calculateInterni(conn, session, generale, tfCode) {
        imp_acquedotto, imp_fognatura, imp_depurazione,
        imp_qf, imp_oneri, imp_iva,
        conguaglio, imp_arr,
-       totale)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       totale,
+       imp_acconto, depfog_acconto, acconto, storno_acconto)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         uuid(),
         session.id,
         r.id_utenza,
+
         r.lettura_precedente,
         r.stato_precedente,
         r.lettura_attuale,
         r.stato_attuale,
+
         r.consumo_normale,
         r.consumo_acconto,
         r.consumo_totale,
+
         r.imp_acquedotto,
         r.imp_fognatura,
         r.imp_depurazione,
+
         r.imp_qf,
         r.imp_oneri,
         r.imp_iva,
+
         r.conguaglio,
         r.imp_arr,
+
         r.totale,
+
+        r.imp_acconto,
+        r.depfog_acconto,
+        r.acconto,
+        r.storno_acconto,
       ]
     );
   }
@@ -1225,7 +1325,39 @@ async function calculateInterni(conn, session, generale, tfCode) {
   };
 }
 
+exports.recalculateSession = async function (fatturaId, giorniAcconto) {
+  let conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
 
+    const [[session]] = await conn.query(
+      `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
+      [fatturaId]
+    );
+
+    if (!session) throw new Error("Session not found");
+
+    session.giorni_acconto = Number(accontoConfig.giorniAcconto) || 0;
+    session.mc_acconto_manual = Number(accontoConfig.mcAcconto) || null;
+
+    const generale = await calculateGenerale(conn, session.id);
+
+    const result = await calculateInterni(
+      conn,
+      session,
+      generale,
+      session.tf_code,
+    );
+
+    await conn.commit();
+    return result;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
 
 exports.calculateSession = async function ({ sessionId, tfCode }) {
 
@@ -1267,7 +1399,7 @@ exports.calculateSession = async function ({ sessionId, tfCode }) {
     const interniTotals = await calculateInterni(conn, session, g, tfCode);
 
     console.log("Generale:", g);
-    // console.log("Interni Totals:", interniTotals);  
+      
     await conn.query(
       `
       UPDATE fatture_sessioni
@@ -1283,7 +1415,7 @@ exports.calculateSession = async function ({ sessionId, tfCode }) {
       WHERE id = ?
       `,
       [
-        g.impCons,
+        g.impAcquedotto,
         g.depFog,
         0,
         g.qfTot,
@@ -1296,7 +1428,10 @@ exports.calculateSession = async function ({ sessionId, tfCode }) {
 
     await conn.commit();
 
-    return await loadFullSession(conn, sessionId, interniTotals);
+    
+
+    return await loadFullSession(conn, sessionId, interniTotals, generaleResult);
+
 
   } catch (err) {
     if (conn) await conn.rollback();

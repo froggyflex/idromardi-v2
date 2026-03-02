@@ -38,7 +38,22 @@ exports.getSessionDetail = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+exports.recalculate = async (req, res) => {
+  try {
+    const { fatturaId } = req.params;
+    const { giorniAcconto, mcAcconto } = req.body;
 
+    const result = await service.recalculateSession(
+      fatturaId,
+      { giorniAcconto, mcAcconto }
+    );
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+}
 exports.updateSessionParams = async (req, res) => {
   try {
     console.log("updateSessionParams", { sessionId: req.params.id, body: req.body });
