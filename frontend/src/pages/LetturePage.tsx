@@ -6,28 +6,36 @@ import {
   closeSession,
   getCondominio,
 } from "../api/letture";
+
 import { useParams } from "react-router-dom";
 import type { Stato, GridRow, Session } from "../api/letture_interface";
+
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
+
 import { registerLocale } from "react-datepicker";
 import { it } from "date-fns/locale/it";
 
 registerLocale("it", it);
 
 export default function LetturePage() {
-  /* ---------------- PARAMS (TYPE-SAFE) ---------------- */
+
+  /* ---------------- PARAMS ---------------- */
 
   const params = useParams<{ id: string }>();
+
   if (!params.id) {
     return <div className="p-6">Condominio non valido</div>;
   }
-  const condominioId: string = params.id;
+
+  const condominioId = params.id;
 
   /* ---------------- STATE ---------------- */
 
   const [periodYear, setPeriodYear] = useState<number | null>(null);
   const [periodMonth, setPeriodMonth] = useState<number | null>(null);
+
+  const [triggerDate, setTriggerDate] = useState<Date | null>(null);
 
   const [dataOperatore, setDataOperatore] = useState<Date | null>(null);
   const [dataCasa, setDataCasa] = useState<Date | null>(null);
@@ -36,178 +44,163 @@ export default function LetturePage() {
   const [states, setStates] = useState<Stato[]>([]);
   const [grid, setGrid] = useState<GridRow[]>([]);
 
-  const [loading, setLoading] = useState<boolean>(false);
-  const [dirty, setDirty] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
-  const [condominioName, setCondominioName] = useState<string>("");
+  const [condominioName, setCondominioName] = useState("");
 
-  // Prevent duplicate auto-load calls in React StrictMode / fast re-renders
-  const lastLoadKeyRef = useRef<string>("");
+  const lastLoadKeyRef = useRef("");
 
   /* ---------------- HELPERS ---------------- */
 
   function toLocalISO(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
   }
 
-function parseDbDate(value?: string | null): Date | null {
-  if (!value) return null;
+  function parseDbDate(value?: string | null): Date | null {
+    if (!value) return null;
 
-  const year = Number(value.substring(0, 4));
-  const month = Number(value.substring(5, 7));
-  const day = Number(value.substring(8, 10));
+    const year = Number(value.substring(0, 4));
+    const month = Number(value.substring(5, 7));
+    const day = Number(value.substring(8, 10));
 
-  return new Date(year, month - 1, day, 12, 0, 0);
-}
+    return new Date(year, month - 1, day, 12, 0, 0);
+  }
 
-async function loadSession(year: number, month: number) {
-  const firstDay = new Date(year, month - 1, 1, 12);
-  const safeISO = toLocalISO(firstDay);
-
-  const sessionRes = await createOrLoadSession({
-    idCondominio: condominioId,
-    periodYear: year,
-    periodMonth: month
-  });
-
-  const newSession = sessionRes.session;
-  setSession(newSession);
-
-  // Hydrate strictly from DB values
-  const opStr = newSession.data_lettura_operatore;
-  const casaStr = newSession.data_lettura_casa_idrica;
-
-  setDataOperatore(
-    opStr ? new Date(opStr + "T12:00:00") : firstDay
-  );
-
-  setDataCasa(
-    casaStr ? new Date(casaStr + "T12:00:00") : firstDay
-  );
-
-  const gridPayload = await getSessionGrid(newSession.id);
-  setGrid(gridPayload.grid);
-}
-
-//  useEffect(() => {
-//   if (!periodYear || !periodMonth) return;
-
-//   const firstDay = new Date(periodYear, periodMonth - 1, 1, 12, 0, 0);
-
-//   setDataOperatore(null);
-//   setDataCasa(null);
-
-// }, [periodYear, periodMonth]);
+  const monthNames = [
+    "Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
+    "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"
+  ];
 
   /* ---------------- LOAD CONDOMINIO ---------------- */
 
   useEffect(() => {
+
     let alive = true;
 
     async function fetchCondominio() {
+
       try {
+
         const data = await getCondominio(condominioId);
+
         if (!alive) return;
+
         setCondominioName(data.nome);
+
       } catch {
+
         if (!alive) return;
+
         setCondominioName("");
+
       }
+
     }
 
     fetchCondominio();
+
     return () => {
       alive = false;
     };
+
   }, [condominioId]);
 
-  /* ---------------- RESET ON CONDOMINIO CHANGE ---------------- */
+  /* ---------------- RESET WHEN CONDOMINIO CHANGES ---------------- */
 
   useEffect(() => {
+
     setSession(null);
     setGrid([]);
     setStates([]);
+
     setDataOperatore(null);
     setDataCasa(null);
+
+    setPeriodYear(null);
+    setPeriodMonth(null);
+
+    setTriggerDate(null);
+
     setDirty(false);
+
     lastLoadKeyRef.current = "";
+
   }, [condominioId]);
 
-  /* ---------------- AUTO LOAD WHEN MONTH SELECTED ----------------
-     Requirement: "load condominio with respective readings when I select the month.
-     If there is no session then initialize one as per usual"
-  */
+  /* ---------------- LOAD SESSION FROM LOCATOR DATE ---------------- */
 
-useEffect(() => {
-  if (!condominioId || !periodYear || !periodMonth) return;
+  useEffect(() => {
 
-  const key = `${condominioId}::${periodYear}::${periodMonth}`;
-  if (lastLoadKeyRef.current === key) return;
-  lastLoadKeyRef.current = key;
+    if (!condominioId || !triggerDate) return;
 
-  (async () => {
-    try {
-      setLoading(true);
+    const year = triggerDate.getFullYear();
+    const month = triggerDate.getMonth() + 1;
 
-      // 1️⃣ Try loading session WITHOUT forcing dates
-      const sessionRes = await createOrLoadSession({
-        idCondominio: condominioId,
-        periodYear,
-        periodMonth,
-        dataOperatore: undefined,
-        dataCasaIdrica: undefined,
-      });
+    const key = `${condominioId}::${year}::${month}`;
 
-      let newSession: Session = sessionRes.session;
+    if (lastLoadKeyRef.current === key) return;
 
-      // 2️⃣ If DB has no dates (new session), then set first day ONCE
-      if (!newSession.data_lettura_operatore) {
-        const firstDay = new Date(periodYear, periodMonth - 1, 1, 12, 0, 0, 0);
-        const safeDate = toLocalISO(firstDay);
+    lastLoadKeyRef.current = key;
 
-        const updatedRes = await createOrLoadSession({
+    setPeriodYear(year);
+    setPeriodMonth(month);
+
+    (async () => {
+
+      try {
+
+        setLoading(true);
+
+        const sessionRes = await createOrLoadSession({
           idCondominio: condominioId,
-          periodYear,
-          periodMonth,
-          dataOperatore: safeDate,
-          dataCasaIdrica: null,
+          periodYear: year,
+          periodMonth: month
         });
 
-        newSession = updatedRes.session;
+        const newSession = sessionRes.session;
+
+        setSession(newSession);
+
+        const savedOp = parseDbDate(newSession.data_lettura_operatore);
+        const savedCasa = parseDbDate(newSession.data_lettura_casa_idrica);
+
+        if (savedOp) {
+          setDataOperatore(savedOp);
+        } else {
+          setDataOperatore(triggerDate);
+        }
+
+        setDataCasa(savedCasa ?? null);
+
+        const gridPayload = await getSessionGrid(newSession.id);
+
+        setStates(gridPayload.states);
+        setGrid(gridPayload.grid);
+
+        setDirty(false);
+
+      } catch (err:any) {
+
+        alert(err?.response?.data?.message || err?.message || "Errore caricamento");
+
+      } finally {
+
+        setLoading(false);
+
       }
 
-      setSession(newSession);
+    })();
 
-      const firstDay = new Date(periodYear, periodMonth - 1, 1, 12, 0, 0, 0);
+  }, [triggerDate, condominioId]);
 
-      const op = parseDbDate(newSession.data_lettura_operatore);
-      const casa = parseDbDate(newSession.data_lettura_casa_idrica);
+  /* ---------------- GRID UPDATE ---------------- */
 
-      setDataOperatore(op ?? firstDay);
-      setDataCasa(casa ?? firstDay);
+  function updateRow(index:number, field:"valore" | "stato", value:string) {
 
-      const gridPayload = await getSessionGrid(newSession.id);
-      setStates(gridPayload.states);
-      setGrid(gridPayload.grid);
-
-      setDirty(false);
-
-    } catch (err: any) {
-      alert(err?.response?.data?.message || err?.message || "Errore caricamento");
-    } finally {
-      setLoading(false);
-    }
-  })();
-
-}, [condominioId, periodYear, periodMonth]);
-
-
-  /* ---------------- UPDATE GRID ---------------- */
-
-  function updateRow(index: number, field: "valore" | "stato", value: string) {
     const updated = [...grid];
 
     if (field === "valore") {
@@ -218,31 +211,25 @@ useEffect(() => {
 
     setGrid(updated);
     setDirty(true);
+
   }
 
-  /* ---------------- SAVE (HEADER + ROWS) ---------------- */
+  /* ---------------- SAVE ---------------- */
 
   async function handleSave() {
+
     if (!session || !periodYear || !periodMonth) return;
 
-    if (!dataOperatore || !dataCasa) {
-      alert("Le date devono essere valorizzate");
+    if (!dataOperatore) {
+      alert("Data operatore obbligatoria");
       return;
     }
 
     const opISO = toLocalISO(dataOperatore);
-    const casaISO = toLocalISO(dataCasa);
-
-    console.log("Saving with dates:", { opISO, casaISO });
-    // Extra safety validation
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-
-    if (!dateRegex.test(opISO) || !dateRegex.test(casaISO)) {
-      alert("Formato data non valido");
-      return;
-    }
+    const casaISO = dataCasa ? toLocalISO(dataCasa) : null;
 
     try {
+
       setLoading(true);
 
       await createOrLoadSession({
@@ -250,7 +237,7 @@ useEffect(() => {
         periodYear,
         periodMonth,
         dataOperatore: opISO,
-        dataCasaIdrica: casaISO,
+        dataCasaIdrica: casaISO
       });
 
       await saveSessionRows(
@@ -258,243 +245,261 @@ useEffect(() => {
         grid.map((g) => ({
           idUtenza: g.utenza.id,
           valore: g.current.valore,
-          stato: g.current.stato,
+          stato: g.current.stato
         }))
       );
 
       setDirty(false);
+
       alert("Sessione salvata");
-    } catch (err: any) {
+
+    } catch (err:any) {
+
       alert(err?.response?.data?.message || err?.message);
+
     } finally {
+
       setLoading(false);
+
     }
+
   }
 
-
-  /* ---------------- CLOSE ---------------- */
+  /* ---------------- CLOSE SESSION ---------------- */
 
   async function handleClose() {
+
     if (!session) return;
 
     if (!window.confirm("Close this session?")) return;
 
     await closeSession(session.id);
+
     setSession({ ...session, stato: "CHIUSA" });
+
     alert("Session closed");
+
   }
 
   /* ---------------- UI ---------------- */
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="bg-white p-6 rounded-2xl shadow space-y-6">
-        <h1 className="text-xl font-semibold">Inserimento Letture</h1>
 
-        {/* Condominio */}
-        <div className="bg-slate-100 rounded-xl px-4 py-3">
-          <div className="text-xs text-slate-500 uppercase tracking-wider">
-            Condominio selezionato
+    <div className="p-6 space-y-6">
+
+    <div className="sticky top-0 z-30 bg-slate-50 pb-3 bg-white p-4 rounded-2xl shadow space-y-4">
+
+      <h1 className="text-lg font-semibold">Inserimento Letture</h1>
+
+      {/* TOP ROW */}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+        {/* CONDOMINIO */}
+
+        <div className="bg-slate-100 rounded-lg px-3 py-2">
+          <div className="text-xs text-slate-500 uppercase">
+            Condominio
           </div>
-          <div className="text-sm font-medium text-slate-800">
+          <div className="text-sm font-medium">
             {condominioName || "Caricamento..."}
           </div>
         </div>
 
-        {/* Period Section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-600">
-              Anno di riferimento
-            </label>
-            <select
-              value={periodYear ?? ""}
-              onChange={(e) =>
-                setPeriodYear(e.target.value ? Number(e.target.value) : null)
-              }
-              className="input"
-              disabled={loading}
-            >
-              <option value="">Seleziona anno</option>
-              {Array.from({ length: 10 }, (_, i) => {
-                const y = new Date().getFullYear() - 5 + i;
-                return (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
+        {/* LOCATOR */}
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-600">
-              Mese di riferimento
-            </label>
-            <select
-              className="input"
-              value={periodMonth ?? ""}
-              onChange={(e) =>{
-                const newMonth = Number(e.target.value);
-                setPeriodMonth(newMonth);
+        <div className="space-y-1">
+          <label className="text-xs text-slate-600">
+            Apri periodo
+          </label>
 
-                if (periodYear && newMonth) {
-                  loadSession(periodYear, newMonth);
-                }
-              }}
-              disabled={loading}
-            >
-              <option value="">Seleziona mese</option>
-              {[
-                "Gennaio",
-                "Febbraio",
-                "Marzo",
-                "Aprile",
-                "Maggio",
-                "Giugno",
-                "Luglio",
-                "Agosto",
-                "Settembre",
-                "Ottobre",
-                "Novembre",
-                "Dicembre",
-              ].map((m, index) => (
-                <option key={index + 1} value={index + 1}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
+          <DatePicker
+            selected={triggerDate}
+            onChange={(date: Date | null) => setTriggerDate(date)}
+            locale="it"
+            dateFormat="dd/MM/yyyy"
+            className="input w-full"
+            disabled={loading}
+          />
         </div>
 
-        {/* Dates Section */}
-        {periodMonth && periodYear && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-600">
-                Data Lettura Operatore
-              </label>
-              <DatePicker
-                selected={dataOperatore}
-                onChange={(date: Date | null) => {
-                  setDataOperatore(date);
-                  setDirty(true);
-                }}
-                locale="it"
-                dateFormat="dd/MM/yyyy"
-                className="input"
-                openToDate={new Date(periodYear, periodMonth - 1, 1)}
-                disabled={loading || session?.stato === "CHIUSA"}
-              />
-              <p className="text-xs text-slate-400">
-                Giorno in cui sono state rilevate le letture.
-              </p>
-            </div>
+        {/* PERIOD INFO */}
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-600">
-                Data Riferimento Casa Idrica
-              </label>
-              <DatePicker
-                selected={dataCasa}
-                onChange={(date: Date | null) => {
-                  setDataCasa(date);
-                  setDirty(true);
-                }}
-                locale="it"
-                dateFormat="dd/MM/yyyy"
-                className="input"
-                openToDate={new Date(periodYear, periodMonth - 1, 1)}
-                disabled={loading || session?.stato === "CHIUSA"}
-              />
-              <p className="text-xs text-slate-400">
-                Data ufficiale comunicata dall’ente idrico.
-              </p>
+        <div className="grid grid-cols-2 gap-2">
+
+          <div>
+            <div className="text-xs text-slate-600">Anno</div>
+            <div className="input bg-slate-100">
+              {periodYear ?? "-"}
             </div>
           </div>
-        )}
 
-        {/* Actions */}
-        <div className="flex items-center gap-3">
-          {/* Kept as a manual refresh (optional, now not required) */}
-          {/* <button
-            onClick={() => {
-              // force reload even if same month selected
-              lastLoadKeyRef.current = "";
-              if (periodYear && periodMonth) {
-                // trigger by re-setting same values (no-op), so directly call effect logic by setting key empty + toggling loading:
-                // simplest: just call reload by setting loading and calling createOrLoadSession again
-                // But to avoid duplicate code, we just clear key and setPeriodMonth to same value via state setter
-                setPeriodMonth((m) => (m ? m : m));
-              }
-            }}
-            disabled={loading || !periodYear || !periodMonth}
-            className="px-5 py-2 rounded-xl border bg-white hover:bg-slate-50"
-          >
-            Aggiorna
-          </button> */}
+          <div>
+            <div className="text-xs text-slate-600">Mese</div>
+            <div className="input bg-slate-100">
+              {periodMonth ? monthNames[periodMonth - 1] : "-"}
+            </div>
+          </div>
 
-          <button
-            disabled={!dirty || loading || session?.stato === "CHIUSA"}
-            onClick={handleSave}
-            className="px-4 py-2 bg-green-600 text-white rounded-xl disabled:opacity-40"
-          >
-            Salva Sessione
-          </button>
-
-          {/* {session && (
-            <button
-              onClick={handleClose}
-              disabled={loading || session.stato === "CHIUSA"}
-              className="px-4 py-2 bg-amber-600 text-white rounded-xl disabled:opacity-40"
-            >
-              Chiudi Sessione
-            </button>
-          )} */}
-
-          {loading && (
-            <div className="text-sm text-slate-500">Caricamento...</div>
-          )}
         </div>
+
       </div>
 
-      {/* Grid */}
+      {/* SECOND ROW */}
+
       {session && (
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+          {/* DATA OPERATORE */}
+
+          <div className="space-y-1">
+            <label className="text-xs text-slate-600">
+              Lettura Operatore
+            </label>
+
+            <DatePicker
+              selected={dataOperatore}
+              onChange={(date: Date | null) => {
+                setDataOperatore(date);
+                setDirty(true);
+              }}
+              locale="it"
+              dateFormat="dd/MM/yyyy"
+              className="input w-full"
+              disabled={loading || session?.stato === "CHIUSA"}
+            />
+          </div>
+
+          {/* CASA IDRICA */}
+
+          <div className="space-y-1">
+            <label className="text-xs text-slate-600">
+              Casa Idrica
+            </label>
+
+            <DatePicker
+              selected={dataCasa}
+              onChange={(date: Date | null) => {
+                setDataCasa(date);
+                setDirty(true);
+              }}
+              locale="it"
+              dateFormat="dd/MM/yyyy"
+              className="input w-full"
+              disabled={loading || session?.stato === "CHIUSA"}
+            />
+          </div>
+
+          {/* ACTIONS */}
+
+          <div className="flex items-end gap-3">
+
+            <button
+              disabled={!dirty || loading || session?.stato === "CHIUSA"}
+              onClick={handleSave}
+              className="px-4 py-2 bg-green-600 text-white rounded-xl disabled:opacity-40"
+            >
+              Salva
+            </button>
+
+            {loading && (
+              <div className="text-xs text-slate-500">
+                Caricamento...
+              </div>
+            )}
+
+          </div>
+
+        </div>
+
+      )}
+
+    </div>
+
+      {/* GRID */}
+
+      {session && (
+
         <div className="bg-white p-6 rounded-2xl shadow overflow-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="p-2 text-left">Id</th>
-                <th className="p-2 text-left">Utente</th>
-                <th className="p-2 text-left">Interno</th>
-                <th className="p-2 text-left">Valore Attuale</th>
-                <th className="p-2 text-left">Stato</th>
-                <th className="p-2 text-left">Valore Precedente</th>
+
+      <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden">
+        <div className="overflow-auto max-h-[calc(100vh-260px)]">
+          <table className="w-full min-w-[1200px] text-sm border-separate border-spacing-0">
+            <thead className="sticky top-0 z-20 bg-slate-100">
+              <tr className="text-slate-700">
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Id
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Utente
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
+                  Interno
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
+                  Scala
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
+                  Matricola Cont.
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0  ">
+                  Valore Attuale
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
+                  Stato
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0  ">
+                  Periodo Prec.
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0  ">
+                  Valore Prec.
+                </th>
+                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0  ">
+                  Stato Prec.
+                </th>
               </tr>
             </thead>
+
             <tbody>
               {grid.map((row, i) => (
-                <tr key={row.utenza.id} className="border-b hover:bg-gray-50">
-                  <td className="p-2">{row.utenza.id_user}</td>
-                  <td className="p-2">
-                    {row.utenza.Nome} {row.utenza.Cognome}
+                <tr
+                  key={row.utenza.id}
+                  className="odd:bg-white even:bg-slate-50/50 hover:bg-blue-50 transition-colors"
+                >
+                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 font-medium whitespace-nowrap">
+                    {row.utenza.id_user}
                   </td>
-                  <td className="p-2">{row.utenza.Interno}</td>
 
-                  <td className="p-2">
+                  <td className="p-3 align-top border-b border-slate-100">
+                    <div className="font-medium text-slate-800 leading-tight">
+                      {row.utenza.Nome} {row.utenza.Cognome}
+                    </div>
+                  </td>
+
+                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 whitespace-nowrap">
+                    {row.utenza.Interno || "-"}
+                  </td>
+                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 whitespace-nowrap">
+                    {row.utenza.Scala || "-"}
+                  </td>
+                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 whitespace-nowrap">
+                    {row.utenza.Matricola_Contatore || "-"}
+                  </td>
+                  <td className="p-3 align-top border-b border-slate-100">
                     <input
                       type="number"
-                      className="input"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
                       disabled={session.stato === "CHIUSA"}
                       value={row.current.valore ?? ""}
                       onChange={(e) => updateRow(i, "valore", e.target.value)}
+                      placeholder="Inserisci valore"
                     />
                   </td>
 
-                  <td className="p-2">
+                  <td className="p-3 align-top border-b border-slate-100">
                     <select
-                      className="input"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
                       disabled={session.stato === "CHIUSA"}
                       value={row.current.stato}
                       onChange={(e) => updateRow(i, "stato", e.target.value)}
@@ -507,20 +512,69 @@ useEffect(() => {
                     </select>
                   </td>
 
-                  <td className="p-2 text-xs text-gray-600">
-                    {row.history.map((h, idx) => (
-                      <div key={idx}>
-                        {h.period_month}/{h.period_year} →{" "}
-                        {h.valore_lettura ?? "-"} ({h.stato_lettura})
-                      </div>
-                    ))}
+                  <td className="p-3 align-top border-b border-slate-100 text-xs text-slate-500">
+                    <div className="space-y-1">
+                      {row.history.length > 0 ? (
+                        row.history.map((h, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-md bg-slate-100 px-2 py-1 whitespace-nowrap"
+                          >
+                            {h.period_month}/{h.period_year}
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="p-3 align-top border-b border-slate-100 text-xs text-slate-500">
+                    <div className="space-y-1">
+                      {row.history.length > 0 ? (
+                        row.history.map((h, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-md bg-slate-100 px-2 py-1 whitespace-nowrap"
+                          >
+                            {h.valore_lettura ?? "-"}
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
+                    </div>
+                  </td>
+
+                  <td className="p-3 align-top border-b border-slate-100 text-xs text-slate-500">
+                    <div className="space-y-1">
+                      {row.history.length > 0 ? (
+                        row.history.map((h, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-md bg-slate-100 px-2 py-1 whitespace-nowrap"
+                          >
+                            {h.stato_lettura || "-"}
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-slate-400">-</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      </div>
+
+        </div>
+
       )}
+
     </div>
+
   );
+
 }

@@ -275,11 +275,12 @@ exports.getSessionGrid = async function ({ sessionId }) {
         ? {
             valore: righeMap.get(u.id).valore_lettura,
             stato: righeMap.get(u.id).stato_lettura,
+           
           }
         : { valore: null, stato: "C" },
       history: historyMap.get(u.id) || [],
     }));
-
+      console.log( "Grid data:",  utenze);
     return { session, states, grid };
   } finally {
     conn.release();
