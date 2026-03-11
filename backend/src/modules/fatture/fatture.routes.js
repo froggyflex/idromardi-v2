@@ -1,6 +1,26 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("./fatture.controller");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+
+const uploadDir = path.join(process.cwd(), "uploads", "fatture-import");
+
+// Ensure upload directory exists
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: uploadDir,
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: storage });
 
 router.post("/sessioni", controller.createOrLoadSession);
 router.get( "/condomini/:condominioId/fatture/:id", controller.getSessionDetail);
@@ -14,5 +34,15 @@ router.delete("/sessioni/:id", controller.deleteSession);
 router.post("/fatture/:fatturaId/recalculate",
   controller.recalculate
 );
+
+router.post("/imported-documents/upload", upload.single("file"), controller.uploadImportedDocument);
+
+router.post("/imported-documents", controller.createImportedDocument);
+router.get("/imported-documents/condominio/:condominioId", controller.listImportedDocumentsByCondominio);
+router.get("/imported-documents/:id", controller.getImportedDocumentById);
+
+router.post("/imported-documents/:id/parse", controller.parseImportedDocument);
+router.put("/imported-documents/:id/parsed-result", controller.updateImportedDocumentParsedResult);
+router.post("/imported-documents/:id/link-session", controller.linkImportedDocumentToSession);
 
 module.exports = router;

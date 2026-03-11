@@ -129,3 +129,93 @@ exports.deleteSession = async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 };
+
+
+exports.uploadImportedDocument = async (req, res) => {
+  try {
+    console.log("uploadImportedDocument start");
+    console.log("file =", req.file ? {
+      originalname: req.file.originalname,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+    } : null);
+    console.log("body =", req.body);
+
+    const result = await service.uploadImportedDocument({
+      file: req.file,
+      body: req.body,
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("uploadImportedDocument error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.parseImportedDocument = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await service.parseImportedDocument(id);
+    res.json(result);
+  } catch (err) {
+    console.error("parseImportedDocument error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.createImportedDocument = async (req, res) => {
+  try {
+    const result = await service.createImportedDocument(req.body);
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("createImportedDocument error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.listImportedDocumentsByCondominio = async (req, res) => {
+  try {
+    const { condominioId } = req.params;
+    const result = await service.listImportedDocumentsByCondominio(condominioId);
+    res.json(result);
+  } catch (err) {
+    console.error("listImportedDocumentsByCondominio error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.getImportedDocumentById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await service.getImportedDocumentById(id);
+    res.json(result);
+  } catch (err) {
+    console.error("getImportedDocumentById error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.updateImportedDocumentParsedResult = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await service.updateImportedDocumentParsedResult(id, req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("updateImportedDocumentParsedResult error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.linkImportedDocumentToSession = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sessionId } = req.body;
+    const result = await service.linkImportedDocumentToSession(id, sessionId);
+    res.json(result);
+  } catch (err) {
+    console.error("linkImportedDocumentToSession error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};

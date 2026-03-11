@@ -11,79 +11,219 @@ type Periodo = { id: string; period_year: number; period_month: number };
 type Session = any;
 
 export default function CondominioFatturePage() {
-  const navigate = useNavigate();
-  const { condominioId, id: fatturaId } = useParams();
+    const navigate = useNavigate();
+    const { condominioId, id: fatturaId } = useParams();
 
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [periodi, setPeriodi] = useState<Periodo[]>([]);
-  const [sessions, setSessions] = useState<any[]>([]);     // list view
-  const [currentSession, setCurrentSession] = useState<any | null>(null); // detail view
-  
-
-  const [providerId, setProviderId] = useState("");
-  const [current, setCurrent] = useState("");
-  const [previous, setPrevious] = useState("");
-
-  const [detail, setDetail] = useState<any>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [loadingCreate, setLoadingCreate] = useState(false);
-  const [loadingCalc, setLoadingCalc] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [valPrec, setValPrec] = useState<number | string>("");
-  const [valAtt, setValAtt] = useState<number | string>("");
-  const [savingGenerale, setSavingGenerale] = useState(false);
-  const [generale, setGenerale] = useState<any>(null);
-  const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
-  const [tfCode, setTfCode] = useState<string>("TF1");
-  const [mcAcconto, setMcAcconto] = useState<number>(0);
-  const [recalculating, setRecalculating] = useState(false);
-
-
-  const canCreate = useMemo(() => {
-    return !!condominioId && !!providerId && !!current && !!previous && current !== previous;
-  }, [condominioId, providerId, current, previous]);
-
-  const session = detail?.session;
-  const contatoreGenerale = detail?.contatoreGenerale ?? {};
-  const righe = detail?.righe ?? detail?.grid ?? [];
-  const periodoAttuale = detail?.periodoAttuale ?? null;
-  const periodoPrecedente = detail?.periodoPrecedente ?? null;
-  
-
-  const consumoGenerale =
-    contatoreGenerale?.attuale != null && contatoreGenerale?.precedente != null
-      ? Number(contatoreGenerale.attuale) - Number(contatoreGenerale.precedente)
-      : 0;
+    const [providers, setProviders] = useState<Provider[]>([]);
+    const [periodi, setPeriodi] = useState<Periodo[]>([]);
+    const [sessions, setSessions] = useState<any[]>([]);     // list view
+    const [currentSession, setCurrentSession] = useState<any | null>(null); // detail view
+    const [providerId, setProviderId] = useState("");
+    const [current, setCurrent] = useState("");
+    const [previous, setPrevious] = useState("");
+    const [detail, setDetail] = useState<any>(null);
+    const [loadingDetail, setLoadingDetail] = useState(false);
+    const [loadingCreate, setLoadingCreate] = useState(false);
+    const [loadingCalc, setLoadingCalc] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [valPrec, setValPrec] = useState<number | string>("");
+    const [valAtt, setValAtt] = useState<number | string>("");
+    const [savingGenerale, setSavingGenerale] = useState(false);
+    const [generale, setGenerale] = useState<any>(null);
+    const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
+    const [tfCode, setTfCode] = useState<string>("TF1");
+    const [mcAcconto, setMcAcconto] = useState<number>(0);
+    const [recalculating, setRecalculating] = useState(false);
+    const canCreate = useMemo(() => {
+      return !!condominioId && !!providerId && !!current && !!previous && current !== previous;
+    }, [condominioId, providerId, current, previous]);
+    const session = detail?.session;
+    const contatoreGenerale = detail?.contatoreGenerale ?? {};
+    const righe = detail?.righe ?? detail?.grid ?? [];
+    const periodoAttuale = detail?.periodoAttuale ?? null;
+    const periodoPrecedente = detail?.periodoPrecedente ?? null;
+    const consumoGenerale =
+      contatoreGenerale?.attuale != null && contatoreGenerale?.precedente != null
+        ? Number(contatoreGenerale.attuale) - Number(contatoreGenerale.precedente)
+        : 0;
     const [giorniQf, setGiorniQf] = useState<number | string>(0);
     const [giorniConsumi, setGiorniConsumi] = useState<number | string>(0);
     const [giorniAcconto, setGiorniAcconto] = useState<number | string>(0);
     const [varie, setVarie] = useState<number | string>(0);
-
     const [giorniCasaInterni, setGiorniCasaInterni] = useState<number | string>(0);
-
     const [dataQfFrom, setDataQfFrom] = useState("");
     const [dataQfTo, setDataQfTo] = useState("");
-
     const [dataConsFrom, setDataConsFrom] = useState("");
     const [dataConsTo, setDataConsTo] = useState("");
-
     const [savingParams, setSavingParams] = useState(false);
+
+    type ImportedInvoiceDocument = {
+    id: string;
+    original_filename: string;
+    numero_bolletta?: string | null;
+    codice_fornitura?: string | null;
+    fornitore_servizi?: string | null;
+    bill_type?: string | null;
+    data_inizio_periodo?: string | null;
+    data_fine_periodo?: string | null;
+    consumo_globale_mc?: number | null;
+    importo_totale_da_pagare?: number | null;
+    parse_status: "uploaded" | "parsed" | "reviewed" | "imported" | "failed";
+    validation_status: "pending" | "valid" | "warning" | "error";
+    linked_session_id?: string | null;
+    parsed_payload_json?: string | null;
+    validation_json?: string | null;
+  };
+
+    const [importedDocs, setImportedDocs] = useState<ImportedInvoiceDocument[]>([]);
+    const [selectedImportedId, setSelectedImportedId] = useState<string | null>(null);
+    const [selectedImportedDoc, setSelectedImportedDoc] = useState<ImportedInvoiceDocument | null>(null);
+    const [loadingImportedDocs, setLoadingImportedDocs] = useState(false);
+    const [loadingImportedDetail, setLoadingImportedDetail] = useState(false);
+    const [creatingImport, setCreatingImport] = useState(false);
+
+    const [importFilename, setImportFilename] = useState("");
+    const [importProviderId, setImportProviderId] = useState("");
+    const [importFile, setImportFile] = useState<File | null>(null);
+    const [uploadingImport, setUploadingImport] = useState(false);
+    const [parsingImportId, setParsingImportId] = useState<string | null>(null);
+ 
   
+  async function parseImportedInvoice(id: string) {
+    try {
+      setParsingImportId(id);
+      setError(null);
+
+      await api.post(`/fatture/imported-documents/${id}/parse`);
+
+      await loadImportedDocuments();
+      await loadImportedDocumentDetail(id);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore parsing bolletta");
+    } finally {
+      setParsingImportId(null);
+    }
+  }
+  async function uploadImportedInvoice() {
+    if (!condominioId || !importFile) return;
+
+    try {
+      setUploadingImport(true);
+      setError(null);
+
+      const formData = new FormData();
+      formData.append("file", importFile);
+      formData.append("condominioId", String(condominioId));
+      if (importProviderId) {
+        formData.append("providerId", String(importProviderId));
+      }
+
+      const res = await api.post("/fatture/imported-documents/upload", formData);
+
+      const doc = res.data?.document;
+      await loadImportedDocuments();
+
+      if (doc?.id) {
+        await loadImportedDocumentDetail(String(doc.id));
+      }
+
+      setImportFile(null);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore upload bolletta");
+    } finally {
+      setUploadingImport(false);
+    }
+  }
+  async function loadImportedDocuments() {
+    if (!condominioId) return;
+    try {
+      setLoadingImportedDocs(true);
+      const res = await api.get(`/fatture/imported-documents/condominio/${condominioId}`);
+      setImportedDocs(res.data?.items || []);
+      console.log("Imported documents loaded:", res.data?.items || []);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore caricamento documenti importati");
+    } finally {
+      setLoadingImportedDocs(false);
+    }
+  }
+
+
+  async function loadImportedDocumentDetail(id: string) {
+    try {
+      setLoadingImportedDetail(true);
+      const res = await api.get(`/fatture/imported-documents/${id}`);
+      setSelectedImportedDoc(res.data?.document || null);
+      setSelectedImportedId(id);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore caricamento documento importato");
+    } finally {
+      setLoadingImportedDetail(false);
+    }
+  }
+
+  async function createImportedDocument() {
+    if (!condominioId || !importFilename) return;
+
+    try {
+      setCreatingImport(true);
+      setError(null);
+
+      const res = await api.post("/fatture/imported-documents", {
+        condominioId,
+        providerId: importProviderId || null,
+        originalFilename: importFilename,
+        storedFilename: null,
+        mimeType: "application/pdf",
+        fileSizeBytes: null,
+        fileHash: null,
+      });
+
+      const newId = res.data?.document?.id;
+      await loadImportedDocuments();
+
+      if (newId) {
+        await loadImportedDocumentDetail(newId);
+      }
+
+      setImportFilename("");
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore creazione documento importato");
+    } finally {
+      setCreatingImport(false);
+    }
+  }
+
+    async function linkImportedToCurrentSession(importedId: string, sessionId: string) {
+    try {
+      await api.post(`/fatture/imported-documents/${importedId}/link-session`, {
+        sessionId,
+      });
+
+      await loadImportedDocuments();
+      await loadImportedDocumentDetail(importedId);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore collegamento documento-sessione");
+    }
+  }
+
   async function bootstrap() {
     if (!condominioId) return;
     setError(null);
 
     try {
-      const [pRes, perRes, sRes] = await Promise.all([
+      const [pRes, perRes, sRes, iRes] = await Promise.all([
         api.get("/fatture/providers"),
         api.get(`/fatture/periodi/${condominioId}`),
-        api.get(`/fatture/condominio/${condominioId}`), // existing backend route
+        api.get(`/fatture/condominio/${condominioId}`),  
+        api.get(`/fatture/imported-documents/condominio/${condominioId}`),
       ]);
 
       setProviders(pRes.data || []);
       setPeriodi(perRes.data || []);
       setSessions(sRes.data || []);
+      setImportedDocs(iRes.data?.items || []);
+
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore caricamento dati");
     }
@@ -261,14 +401,7 @@ export default function CondominioFatturePage() {
       setSavingParams(false);
     }
   } 
-
-  // useEffect(() => {
-  //   setGiorniCasaInterni(daysBetween(
-  //   periodoPrecedente?.data_lettura_casa_idrica,
-  //   periodoAttuale?.data_lettura_casa_idrica
-  // ));
-
-  // }, [condominioId, periodoPrecedente, periodoAttuale]);
+ 
   useEffect(() => {
     bootstrap();
   }, [condominioId]);
@@ -380,26 +513,12 @@ const totals = useMemo(() => {
   };
 }, [righe, session]);
 
-console.log("Session totals:", totals);
+ 
+
+
   return (
 <div className="w-full px-6 py-6 space-y-6">
 
-  {/* TOP BAR */}
-  <div className="flex items-center justify-between">
-    <div>
-      <div className="text-xl font-semibold">Fatture</div>
-      <div className="text-sm text-slate-500">
-        Condominio: {condominioId}
-      </div>
-    </div>
-    <button
-      onClick={() => navigate(`/condomini/${condominioId}/fatture`)}
-      className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50"
-      disabled={!condominioId}
-    >
-      Nuova / Lista
-    </button>
-  </div>
 
   {/* ERROR */}
   {error && (
@@ -407,15 +526,227 @@ console.log("Session totals:", totals);
       {error}
     </div>
   )}
- 
+
+
+  {/* TOP BAR */}
+  <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+    <div className="xl:col-span-5 bg-white rounded-2xl shadow p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-lg font-semibold">Importa Bolletta</div>
+          <div className="text-sm text-slate-500">
+            Registra e gestisci documenti importati prima della creazione sessione.
+          </div>
+        </div>
+      </div>
+
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <input
+      type="file"
+      accept=".pdf,.png,.jpg,.jpeg"
+      className="border rounded-lg px-3 py-2"
+      onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+    />
+
+    <select
+      className="border rounded-lg px-3 py-2"
+      value={importProviderId}
+      onChange={(e) => setImportProviderId(e.target.value)}
+    >
+      <option value="">Provider opzionale</option>
+      {providers.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.nome}
+        </option>
+      ))}
+    </select>
+  </div>
+
+<div className="flex gap-3">
+  <button
+    onClick={uploadImportedInvoice}
+    disabled={!importFile || uploadingImport}
+    className="bg-slate-900 text-white px-4 py-2 rounded-lg disabled:opacity-50"
+  >
+    {uploadingImport ? "Upload..." : "Carica documento"}
+  </button>
+</div>
+
+      {/* <button
+        onClick={createImportedDocument}
+        disabled={!importFilename || creatingImport}
+        className="bg-slate-900 text-white px-4 py-2 rounded-lg disabled:opacity-50"
+      >
+        {creatingImport ? "Creazione..." : "Registra documento"}
+      </button> */}
+    </div>
+
+    <div className="xl:col-span-7 bg-white rounded-2xl shadow p-5 space-y-4">
+      <div className="font-semibold text-lg">Crea Fattura Manuale</div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <select className="border rounded px-3 py-2" value={providerId} onChange={(e) => setProviderId(e.target.value)}>
+          <option value="">Casa Idrica</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.nome}
+            </option>
+          ))}
+        </select>
+
+        <select className="border rounded px-3 py-2" value={current} onChange={(e) => setCurrent(e.target.value)}>
+          <option value="">Periodo Attuale</option>
+          {periodi.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.period_month}/{p.period_year}
+            </option>
+          ))}
+        </select>
+
+        <select className="border rounded px-3 py-2" value={previous} onChange={(e) => setPrevious(e.target.value)}>
+          <option value="">Periodo Prec.</option>
+          {periodi.filter((p) => p.id !== current).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.period_month}/{p.period_year}
+            </option>
+          ))}
+        </select>
+
+        <button
+          disabled={!canCreate || loadingCreate}
+          onClick={createSession}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg disabled:opacity-50"
+        >
+          {loadingCreate ? "Creazione..." : "Crea"}
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <div className="bg-white rounded-2xl shadow p-5 space-y-4">
+    <div className="flex items-center justify-between">
+    <div className="font-semibold text-lg">Documenti Importati</div>
+    <button
+      onClick={loadImportedDocuments}
+      className="text-sm px-3 py-1 rounded border bg-white hover:bg-slate-50"
+    >
+      Aggiorna
+    </button>
+  </div>
+
+  {loadingImportedDocs ? (
+    <div className="text-sm text-slate-500">Caricamento...</div>
+  ) : importedDocs.length === 0 ? (
+    <div className="text-sm text-slate-500">Nessun documento importato.</div>
+  ) : (
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {importedDocs.map((doc) => (
+        <div
+          key={doc.id}
+          className={`border rounded-xl p-4 transition ${
+            selectedImportedId === String(doc.id)
+              ? "border-slate-900 bg-slate-50"
+              : "bg-white hover:bg-slate-50"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => loadImportedDocumentDetail(String(doc.id))}
+            className="w-full text-left"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-medium truncate">
+                {doc.numero_bolletta || doc.original_filename}
+              </div>
+              <div className="text-xs px-2 py-1 rounded-full bg-slate-100">
+                {doc.parse_status}
+              </div>
+            </div>
+
+            <div className="mt-2 text-sm text-slate-500">
+              {doc.fornitore_servizi || "-"}
+            </div>
+            <div className="mt-1 text-sm">
+              € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {doc.data_inizio_periodo || "-"} → {doc.data_fine_periodo || "-"}
+            </div>
+          </button>
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => parseImportedInvoice(String(doc.id))}
+              disabled={
+                parsingImportId === String(doc.id) ||
+                doc.parse_status === "imported"
+              }
+              className="text-sm px-3 py-1 rounded-lg border bg-white hover:bg-slate-50 disabled:opacity-50"
+            >
+              {parsingImportId === String(doc.id) ? "Parsing..." : "Esegui parsing"}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+
+  {selectedImportedDoc && (
+  <div className="bg-white rounded-2xl shadow p-5 space-y-4">
+    <div className="flex items-center justify-between">
+      <div>
+        <div className="text-lg font-semibold">Anteprima Documento Importato</div>
+        <div className="text-sm text-slate-500">
+          Controlla il parsing prima di collegarlo a una sessione.
+        </div>
+      </div>
+      <div className="text-xs px-2 py-1 rounded-full bg-slate-100">
+        {selectedImportedDoc.validation_status}
+      </div>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="border rounded-xl p-3">
+        <div className="text-xs text-slate-500">Numero Bolletta</div>
+        <div className="font-medium">{selectedImportedDoc.numero_bolletta || "-"}</div>
+      </div>
+      <div className="border rounded-xl p-3">
+        <div className="text-xs text-slate-500">Codice Fornitura</div>
+        <div className="font-medium">{selectedImportedDoc.codice_fornitura || "-"}</div>
+      </div>
+      <div className="border rounded-xl p-3">
+        <div className="text-xs text-slate-500">Totale</div>
+        <div className="font-medium">€ {Number(selectedImportedDoc.importo_totale_da_pagare || 0).toFixed(2)}</div>
+      </div>
+      <div className="border rounded-xl p-3">
+        <div className="text-xs text-slate-500">Consumo</div>
+        <div className="font-medium">{selectedImportedDoc.consumo_globale_mc ?? "-"} mc</div>
+      </div>
+    </div>
+
+    {fatturaId && (
+      <div className="flex justify-end">
+        <button
+          onClick={() => linkImportedToCurrentSession(selectedImportedDoc.id, fatturaId)}
+          className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700"
+        >
+          Collega alla sessione aperta
+        </button>
+      </div>
+    )}
+  </div>
+)}
 
   {/* SESSION CONTROL BAR */}
-  <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
+  {/* <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6"> */}
 
-    <div className="grid grid-cols-12 gap-8">
+    {/* <div className="grid grid-cols-12 gap-8"> */}
 
       {/* CREATE */}
-      <div className="col-span-12 lg:col-span-5 space-y-4">
+      {/* <div className="col-span-12 lg:col-span-5 space-y-4">
         <div className="font-semibold">Crea Fattura</div>
 
 
@@ -470,10 +801,10 @@ console.log("Session totals:", totals);
             {loadingCreate ? "Creazione..." : "Crea"}
           </button>
         </div>
-      </div>
+      </div> */}
 
       {/* EXISTING */}
-      <div className="col-span-12 lg:col-span-7 space-y-4">
+      {/* <div className="col-span-12 lg:col-span-7 space-y-4">
         <div className="flex items-center justify-between">
           <div className="font-semibold">Fatture Esistenti</div>
           <button
@@ -536,10 +867,10 @@ console.log("Session totals:", totals);
             ))}
           </div>
         )}
-      </div>
+      </div> */}
 
-    </div>
-  </div>
+    {/* </div> */}
+  {/* </div> */}
 
   {/* DETAIL SECTION */}
   {!fatturaId ? (

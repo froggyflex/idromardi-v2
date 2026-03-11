@@ -2,6 +2,239 @@ const db = require("../../config/db");
 const { v4: uuid } = require("uuid");
 
 /* ---------------- Helpers ---------------- */
+const path = require("path");
+const fs = require("fs").promises;
+// const db = require(... your existing db helper ...)
+
+
+async function buildParsedInvoiceFromFile({ fileBuffer, filename, mimeType }) {
+  // TODO: replace with real PDF extraction/parsing
+  // For now return a safe placeholder schema.
+  return {
+    anagrafica: {
+      codice_cliente: null,
+      indirizzo_fornitura: null,
+      intestatario: null,
+      matricola_contatore: null,
+    },
+    bill_type: "unknown",
+    codice_fornitura: null,
+    componente_tariffa_acquedotto: [],
+    consumo_globale_mc: null,
+    fornitore_servizi: null,
+    importo_totale_da_pagare: null,
+    letture: [],
+    numero_bolletta: filename || null,
+    periodi_fatturazione: [],
+    punto_erogazione: null,
+  };
+}
+
+function buildParsedInvoiceValidation(parsedPayload) {
+  const warnings = [];
+  const errors = [];
+
+  if (!parsedPayload?.numero_bolletta) {
+    warnings.push("Numero bolletta non trovato");
+  }
+
+  if (!parsedPayload?.codice_fornitura) {
+    warnings.push("Codice fornitura non trovato");
+  }
+
+  if (parsedPayload?.importo_totale_da_pagare == null) {
+    warnings.push("Importo totale da pagare non trovato");
+  }
+
+  if (!parsedPayload?.periodi_fatturazione?.length) {
+    warnings.push("Nessun periodo di fatturazione trovato");
+  }
+
+  return {
+    is_valid: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function toMysqlDate(value) {
+  if (!value) return null;
+
+  const parts = String(value).split("/");
+  if (parts.length !== 3) return null;
+
+  const [dd, mm, yyyy] = parts;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+exports.parseImportedDocument = async (id) => {
+  const rows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  const doc = rows[0];
+  if (!doc) {
+    const err = new Error("Documento importato non trovato");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (!doc.stored_filename) {
+    const err = new Error("Nessun file associato al documento");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const filePath = path.join(process.cwd(), "uploads", "fatture-import", doc.stored_filename);
+
+  let fileBuffer;
+  try {
+    fileBuffer = await fs.readFile(filePath);
+  } catch (e) {
+    const err = new Error("File non trovato sul server");
+    err.statusCode = 500;
+    throw err;
+  }
+
+  // Temporary placeholder.
+  // Replace this with real PDF text extraction / OCR / parser pipeline.
+  const parsedPayload = await buildParsedInvoiceFromFile({
+    fileBuffer,
+    filename: doc.original_filename,
+    mimeType: doc.mime_type,
+  });
+
+  const validation = buildParsedInvoiceValidation(parsedPayload);
+
+  const validationStatus =
+    validation.errors?.length > 0
+      ? "error"
+      : validation.warnings?.length > 0
+      ? "warning"
+      : "valid";
+
+  await db.query(
+    `
+    UPDATE imported_invoice_documents
+    SET
+      numero_bolletta = ?,
+      codice_fornitura = ?,
+      codice_cliente = ?,
+      punto_erogazione = ?,
+      matricola_contatore = ?,
+      intestatario = ?,
+      indirizzo_fornitura = ?,
+      fornitore_servizi = ?,
+      bill_type = ?,
+      data_inizio_periodo = ?,
+      data_fine_periodo = ?,
+      consumo_globale_mc = ?,
+      importo_totale_da_pagare = ?,
+      parser_version = ?,
+      parser_confidence = ?,
+      parse_status = 'parsed',
+      validation_status = ?,
+      parsed_payload_json = ?,
+      validation_json = ?,
+      parsed_at = NOW()
+    WHERE id = ?
+    `,
+    [
+      parsedPayload?.numero_bolletta || null,
+      parsedPayload?.codice_fornitura || null,
+      parsedPayload?.anagrafica?.codice_cliente || null,
+      parsedPayload?.punto_erogazione || null,
+      parsedPayload?.anagrafica?.matricola_contatore || null,
+      parsedPayload?.anagrafica?.intestatario || null,
+      parsedPayload?.anagrafica?.indirizzo_fornitura || null,
+      parsedPayload?.fornitore_servizi || null,
+      parsedPayload?.bill_type || "unknown",
+      toMysqlDate(parsedPayload?.periodi_fatturazione?.[0]?.data_inizio) || null,
+      toMysqlDate(
+        parsedPayload?.periodi_fatturazione?.[parsedPayload.periodi_fatturazione.length - 1]?.data_fine
+      ) || null,
+      parsedPayload?.consumo_globale_mc ?? null,
+      parsedPayload?.importo_totale_da_pagare ?? null,
+      "v1.0.0",
+      0.75,
+      validationStatus,
+      JSON.stringify(parsedPayload),
+      JSON.stringify(validation),
+      id,
+    ]
+  );
+
+  const updatedRows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  return {
+    ok: true,
+    document: updatedRows[0] || null,
+  };
+}
+ 
+exports.uploadImportedDocument = async ({ file, body }) => {
+
+    console.log("service uploadImportedDocument start");
+    console.log("file =", file ? {
+      originalname: file.originalname,
+      filename: file.filename,
+      mimetype: file.mimetype,
+      size: file.size,
+    } : null);
+    console.log("body =", body);
+
+    
+  if (!file) {
+    const err = new Error("File mancante");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!body?.condominioId) {
+    const err = new Error("condominioId mancante");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const sql = `
+    INSERT INTO imported_invoice_documents (
+      condominio_id,
+      provider_id,
+      original_filename,
+      stored_filename,
+      mime_type,
+      file_size_bytes,
+      parse_status,
+      validation_status
+    ) VALUES (?, ?, ?, ?, ?, ?, 'uploaded', 'pending')
+  `;
+
+  const params = [
+    body.condominioId,
+    body.providerId || null,
+    file.originalname,
+    file.filename,
+    file.mimetype || null,
+    file.size || null,
+  ];
+
+  const result = await db.query(sql, params);
+
+  const rows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [result.insertId]
+  );
+
+  return {
+    ok: true,
+    document: rows[0] || null,
+  };
+}
+
 
 function assertUUID(value, name) {
   const uuidRegex =
@@ -1580,7 +1813,7 @@ exports.deleteSession = async function ({ sessionId }) {
   }
 };
 
-function applyTfToRows({ tfCode, diff, rows }) {
+exports.applyTfToRows = async function ({ tfCode, diff, rows }) {
   const code = String(tfCode || "TF1").toUpperCase();
   const delta = round2(n2(diff));
   if (!delta) return;
@@ -1646,4 +1879,205 @@ function applyTfToRows({ tfCode, diff, rows }) {
 function roundToNearestTenth(amount) {
   // Legacy behavior: round to nearest 0.10 (keep 2 decimals, second cent digit becomes 0)
   return Math.round(n2(amount) * 10) / 10;
+}
+
+exports.createImportedDocument = async function (payload) {
+  if (!payload?.condominioId) {
+    throw new Error("condominioId mancante");
+  }
+  if (!payload?.originalFilename) {
+    throw new Error("originalFilename mancante");
+  }
+
+  const sql = `
+    INSERT INTO imported_invoice_documents (
+      condominio_id,
+      provider_id,
+      original_filename,
+      stored_filename,
+      mime_type,
+      file_size_bytes,
+      file_hash,
+      parse_status,
+      validation_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'uploaded', 'pending')
+  `;
+
+  const params = [
+    payload.condominioId,
+    payload.providerId ?? null,
+    payload.originalFilename,
+    payload.storedFilename ?? null,
+    payload.mimeType ?? null,
+    payload.fileSizeBytes ?? null,
+    payload.fileHash ?? null,
+  ];
+
+  const result = await db.query(sql, params);
+  const rows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [result.insertId]
+  );
+
+  return { ok: true, document: rows[0] || null };
+}
+
+exports.listImportedDocumentsByCondominio = async function (condominioId) {
+  const sql = `
+    SELECT
+      id,
+      condominio_id,
+      provider_id,
+      original_filename,
+      numero_bolletta,
+      codice_fornitura,
+      fornitore_servizi,
+      bill_type,
+      data_inizio_periodo,
+      data_fine_periodo,
+      consumo_globale_mc,
+      importo_totale_da_pagare,
+      parse_status,
+      validation_status,
+      linked_session_id,
+      uploaded_at,
+      parsed_at,
+      imported_at
+    FROM imported_invoice_documents
+    WHERE condominio_id = ?
+    ORDER BY created_at DESC
+  `;
+
+  const rows = await db.query(sql, [condominioId]);
+  return { ok: true, items: rows };
+}
+
+exports.getImportedDocumentById = async function (id) {
+  const rows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  const doc = rows[0];
+  if (!doc) {
+    const err = new Error("Documento importato non trovato");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return { ok: true, document: doc };
+}
+
+exports.updateImportedDocumentParsedResult = async function (id, payload) {
+  const existingRows = await db.query(
+    `SELECT id FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  if (!existingRows[0]) {
+    const err = new Error("Documento importato non trovato");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const sql = `
+    UPDATE imported_invoice_documents
+    SET
+      provider_id = ?,
+      numero_bolletta = ?,
+      codice_fornitura = ?,
+      codice_cliente = ?,
+      punto_erogazione = ?,
+      matricola_contatore = ?,
+      intestatario = ?,
+      indirizzo_fornitura = ?,
+      fornitore_servizi = ?,
+      bill_type = ?,
+      data_inizio_periodo = ?,
+      data_fine_periodo = ?,
+      consumo_globale_mc = ?,
+      importo_totale_da_pagare = ?,
+      parser_version = ?,
+      parser_confidence = ?,
+      parse_status = ?,
+      validation_status = ?,
+      parsed_payload_json = ?,
+      validation_json = ?,
+      parser_error_text = ?,
+      parsed_at = CASE
+        WHEN parsed_at IS NULL THEN NOW()
+        ELSE parsed_at
+      END
+    WHERE id = ?
+  `;
+
+  const params = [
+    payload.providerId ?? null,
+    payload.numeroBolletta ?? null,
+    payload.codiceFornitura ?? null,
+    payload.codiceCliente ?? null,
+    payload.puntoErogazione ?? null,
+    payload.matricolaContatore ?? null,
+    payload.intestatario ?? null,
+    payload.indirizzoFornitura ?? null,
+    payload.fornitoreServizi ?? null,
+    payload.billType ?? "unknown",
+    payload.dataInizioPeriodo ?? null,
+    payload.dataFinePeriodo ?? null,
+    payload.consumoGlobaleMc ?? null,
+    payload.importoTotaleDaPagare ?? null,
+    payload.parserVersion ?? null,
+    payload.parserConfidence ?? null,
+    payload.parseStatus ?? "parsed",
+    payload.validationStatus ?? "pending",
+    payload.parsedPayload ? JSON.stringify(payload.parsedPayload) : null,
+    payload.validation ? JSON.stringify(payload.validation) : null,
+    payload.parserErrorText ?? null,
+    id,
+  ];
+
+  await db.query(sql, params);
+
+  const rows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  return { ok: true, document: rows[0] || null };
+}
+
+exports.linkImportedDocumentToSession = async function (id, sessionId) {
+  if (!sessionId) {
+    throw new Error("sessionId mancante");
+  }
+
+  const existingRows = await db.query(
+    `SELECT id FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  if (!existingRows[0]) {
+    const err = new Error("Documento importato non trovato");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  await db.query(
+    `
+    UPDATE imported_invoice_documents
+    SET
+      linked_session_id = ?,
+      parse_status = 'imported',
+      imported_at = NOW()
+    WHERE id = ?
+    `,
+    [sessionId, id]
+  );
+
+  const rows = await db.query(
+    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    [id]
+  );
+
+  return { ok: true, document: rows[0] || null };
 }
