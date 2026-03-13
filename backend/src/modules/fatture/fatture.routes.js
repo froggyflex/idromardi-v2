@@ -5,7 +5,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const uploadDir = path.join(process.cwd(), "uploads", "fatture-import");
+const uploadDir = path.join(process.cwd(), "..", "runtime_uploads", "fatture-import");
 
 // Ensure upload directory exists
 if (!fs.existsSync(uploadDir)) {

@@ -7,26 +7,30 @@ const fs = require("fs").promises;
 // const db = require(... your existing db helper ...)
 
 
-async function buildParsedInvoiceFromFile({ fileBuffer, filename, mimeType }) {
-  // TODO: replace with real PDF extraction/parsing
-  // For now return a safe placeholder schema.
-  return {
+async function buildParsedInvoiceFromFile({ fileBuffer, input, mimeType }) {
+ return {
     anagrafica: {
-      codice_cliente: null,
-      indirizzo_fornitura: null,
-      intestatario: null,
-      matricola_contatore: null,
+      codice_cliente: fileBuffer?.anagrafica?.codice_cliente ?? null,
+      indirizzo_fornitura: fileBuffer?.anagrafica?.indirizzo_fornitura ?? null,
+      intestatario: fileBuffer?.anagrafica?.intestatario ?? null,
+      matricola_contatore: fileBuffer?.anagrafica?.matricola_contatore ?? null,
     },
-    bill_type: "unknown",
-    codice_fornitura: null,
-    componente_tariffa_acquedotto: [],
-    consumo_globale_mc: null,
-    fornitore_servizi: null,
-    importo_totale_da_pagare: null,
-    letture: [],
-    numero_bolletta: filename || null,
-    periodi_fatturazione: [],
-    punto_erogazione: null,
+    bill_type: fileBuffer?.bill_type ?? "unknown",
+    codice_fornitura: fileBuffer?.codice_fornitura ?? null,
+    componente_tariffa_acquedotto: Array.isArray(fileBuffer?.componente_tariffa_acquedotto)
+      ? fileBuffer.componente_tariffa_acquedotto
+      : [],
+    consumo_globale_mc:
+      fileBuffer?.consumo_globale_mc != null ? Number(fileBuffer.consumo_globale_mc) : null,
+    fornitore_servizi: fileBuffer?.fornitore_servizi ?? null,
+    importo_totale_da_pagare:
+      fileBuffer?.importo_totale_da_pagare != null ? Number(fileBuffer.importo_totale_da_pagare) : null,
+    letture: Array.isArray(fileBuffer?.letture) ? fileBuffer.letture : [],
+    numero_bolletta: fileBuffer?.numero_bolletta ?? null,
+    periodi_fatturazione: Array.isArray(fileBuffer?.periodi_fatturazione)
+      ? fileBuffer.periodi_fatturazione
+      : [],
+    punto_erogazione: fileBuffer?.punto_erogazione ?? null,
   };
 }
 
@@ -67,6 +71,132 @@ function toMysqlDate(value) {
   return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
+function deriveLettureSummary(letture = []) {
+  const items = Array.isArray(letture) ? letture : [];
+
+  if (!items.length) {
+    return {
+      valore_precedente: null,
+      data_precedente: null,
+      valore_attuale: null,
+      data_attuale: null,
+      tipo_lettura_attuale: null,
+      ha_acconto: false,
+      valore_acconto: null,
+      data_acconto: null,
+      consumo_acconto: null,
+      tipo_lettura_acconto: null,
+    };
+  }
+
+  // sort by date ascending just in case
+  const sorted = [...items].sort((a, b) => {
+    const da = toSortableDate(a?.data_lettura);
+    const db = toSortableDate(b?.data_lettura);
+    return da.localeCompare(db);
+  });
+
+  const previous = sorted[0] || null;
+
+  // real/non-estimated readings
+  const realReadings = sorted.filter(
+    (r) => (r?.tipo_lettura || "").toLowerCase() !== "media"
+  );
+
+  // estimated/acconto readings
+  const estimatedReadings = sorted.filter(
+    (r) => (r?.tipo_lettura || "").toLowerCase() === "media"
+  );
+
+  // previous = first reading
+  // current actual = last non-media reading, if there is one after previous
+  const actualCurrent =
+    realReadings.length > 1
+      ? realReadings[realReadings.length - 1]
+      : realReadings.length === 1
+      ? realReadings[0]
+      : null;
+
+  const acconto =
+    estimatedReadings.length > 0
+      ? estimatedReadings[estimatedReadings.length - 1]
+      : null;
+
+  return {
+    valore_precedente: previous?.lettura_mc ?? null,
+    data_precedente: previous?.data_lettura ?? null,
+
+    valore_attuale: actualCurrent?.lettura_mc ?? null,
+    data_attuale: actualCurrent?.data_lettura ?? null,
+    tipo_lettura_attuale: actualCurrent?.tipo_lettura ?? null,
+
+    ha_acconto: !!acconto,
+    valore_acconto: acconto?.lettura_mc ?? null,
+    data_acconto: acconto?.data_lettura ?? null,
+    consumo_acconto: acconto?.consumo_mc ?? null,
+    tipo_lettura_acconto: acconto?.tipo_lettura ?? null,
+  };
+}
+
+function toSortableDate(value) {
+  if (!value) return "0000-00-00";
+  const parts = String(value).split("/");
+  if (parts.length !== 3) return "0000-00-00";
+  const [dd, mm, yyyy] = parts;
+  return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+}
+
+function groupLettureByTipo(letture = []) {
+  const items = Array.isArray(letture) ? letture : [];
+
+  const grouped = items.reduce((acc, item) => {
+    const tipo = String(item?.tipo_lettura || "unknown").toLowerCase();
+    if (!acc[tipo]) acc[tipo] = [];
+    acc[tipo].push(item);
+    return acc;
+  }, {});
+
+  const result = {};
+
+  for (const [tipo, rows] of Object.entries(grouped)) {
+    const sorted = [...rows].sort((a, b) =>
+      toSortableDate(a?.data_lettura).localeCompare(toSortableDate(b?.data_lettura))
+    );
+
+    result[tipo] = {
+      tipo_lettura: tipo,
+      count: sorted.length,
+      oldest: sorted[0] || null,
+      newest: sorted[sorted.length - 1] || null,
+      items: sorted,
+    };
+  }
+
+  return result;
+}
+
+function deriveValoriFromLetture(letture = []) {
+  const grouped = groupLettureByTipo(letture);
+
+  const aGiro = grouped["a_giro"] || null;
+  const media = grouped["media"] || null;
+
+  return {
+    per_tipo: grouped,
+
+    valore_precedente: aGiro?.oldest?.lettura_mc ?? null,
+    data_precedente: aGiro?.oldest?.data_lettura ?? null,
+
+    valore_attuale: aGiro?.newest?.lettura_mc ?? null,
+    data_attuale: aGiro?.newest?.data_lettura ?? null,
+
+    ha_acconto: !!media,
+    valore_acconto: media?.newest?.lettura_mc ?? null,
+    data_acconto: media?.newest?.data_lettura ?? null,
+    consumo_acconto: media?.newest?.consumo_mc ?? null,
+  };
+}
+
 exports.parseImportedDocument = async (id) => {
   const rows = await db.query(
     `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
@@ -74,46 +204,58 @@ exports.parseImportedDocument = async (id) => {
   );
 
   const doc = rows[0];
+ 
   if (!doc) {
     const err = new Error("Documento importato non trovato");
     err.statusCode = 404;
     throw err;
   }
 
-  if (!doc.stored_filename) {
+
+  if (!doc[0].stored_filename) {
     const err = new Error("Nessun file associato al documento");
     err.statusCode = 400;
     throw err;
   }
 
-  const filePath = path.join(process.cwd(), "uploads", "fatture-import", doc.stored_filename);
-
+  const filePath = path.join(process.cwd(), "..", "runtime_uploads", "fatture-import", doc[0].stored_filename);
+  const rawText = await fs.readFile(filePath, "utf8");
+  
   let fileBuffer;
   try {
-    fileBuffer = await fs.readFile(filePath);
+    fileBuffer = await fs.readFile(filePath, "utf8");
   } catch (e) {
     const err = new Error("File non trovato sul server");
     err.statusCode = 500;
     throw err;
   }
 
-  // Temporary placeholder.
-  // Replace this with real PDF text extraction / OCR / parser pipeline.
   const parsedPayload = await buildParsedInvoiceFromFile({
-    fileBuffer,
-    filename: doc.original_filename,
-    mimeType: doc.mime_type,
+    fileBuffer: JSON.parse(fileBuffer),
+    filename: doc[0].original_filename,
+    mimeType: doc[0].mime_type,
   });
+
+  const lettureSummary = deriveLettureSummary(parsedPayload.letture);
+  const groupedLetture = groupLettureByTipo(parsedPayload.letture);
+
+  parsedPayload.letture_summary = lettureSummary;
+  parsedPayload.grouped_letture = groupedLetture;
+
 
   const validation = buildParsedInvoiceValidation(parsedPayload);
 
   const validationStatus =
     validation.errors?.length > 0
-      ? "error"
+      ? "Errore"
       : validation.warnings?.length > 0
-      ? "warning"
-      : "valid";
+      ? "Attenzione"
+      : "Valido";
 
+  
+  
+  console.log("Parsed payload:", parsedPayload);
+  
   await db.query(
     `
     UPDATE imported_invoice_documents
@@ -1813,7 +1955,7 @@ exports.deleteSession = async function ({ sessionId }) {
   }
 };
 
-exports.applyTfToRows = async function ({ tfCode, diff, rows }) {
+ function applyTfToRows({ tfCode, diff, rows }) {
   const code = String(tfCode || "TF1").toUpperCase();
   const delta = round2(n2(diff));
   if (!delta) return;
