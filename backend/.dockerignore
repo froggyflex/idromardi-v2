@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Environment files (use Docker env vars instead)
+.env
+.env.local
+.env.*.local
+
+# Development
+.git
+.gitignore
+*.md
+.DS_Store
+
+# IDE
+.vscode
+.idea
+
+# Build outputs
+dist
