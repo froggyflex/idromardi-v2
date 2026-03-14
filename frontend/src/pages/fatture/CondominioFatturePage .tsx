@@ -1307,137 +1307,157 @@ const totals = useMemo(() => {
 
   <div className="flex justify-between items-center">
     <h3 className="font-semibold text-lg">Imposta Giorni</h3>
-
   </div>
-  {/* ============================= */}
-  {/* 1️⃣ SEZIONE GIORNI           */}
-  {/* ============================= */}
-  <div className="bg-white border rounded-2xl p-6 space-y-6 ">
-
-    {/* <div className="text-lg font-semibold">Parametri Giorni</div> */}
-
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-      <div>
-        <label className="text-xs text-slate-500">Giorni QF</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniQf}
-          onChange={(e) => setGiorniQf(e.target.value)}
-        />
-      </div>
-
-      <div>
-        <label className="text-xs text-slate-500">Giorni Consumi</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniConsumi}
-          onChange={(e) => setGiorniConsumi(e.target.value)}
-        />
-      </div>
-
-      <div>
-        <label className="text-xs text-slate-500">Giorni Interni</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniCasaInterni}
-          onChange={(e) => setGiorniCasaInterni(e.target.value)}
-        />
-      </div>
-
-      <div>
-        <label className="text-xs text-slate-500">Giorni Acconto</label>
-        <input
-          type="number"
-          className="w-full px-3 py-2 border rounded-xl"
-          value={giorniAcconto}
-          onChange={(e) => setGiorniAcconto(e.target.value)}
-        />
-      </div>
-    </div>
+{/* ============================= */}
+{/* CONTROLLO CALCOLO + GENERALE */}
+{/* ============================= */}
+<div className="bg-white border border-slate-200 rounded-2xl px-5 py-4 shadow-sm">
+  <div className="mb-4">
+    <h3 className="text-[15px] font-semibold text-slate-900">
+      Parametri Calcolo e Contatore Generale
+    </h3>
+    <p className="mt-1 text-sm text-slate-500">
+      Imposta i parametri di calcolo e aggiorna il contatore generale.
+    </p>
   </div>
-  {/* ============================= */}
-  {/* 2️⃣ SEZIONE ACCONTO           */}
-  {/* ============================= */}
-  {Number(giorniAcconto) > 0 && (
-    <div className="bg-white border rounded-2xl p-6 space-y-6">
-      <div className="text-lg font-semibold">Gestione Acconto</div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <div>
-          <label className="text-xs text-slate-500">
-            MC da aggiungere (Acconto)
-          </label>
-          <input
-            type="number"
-            className="w-full px-3 py-2 border rounded-xl"
-            value={mcAcconto}
-            onChange={(e) => setMcAcconto(Number(e.target.value))}
-          />
+  <div className="overflow-x-auto">
+    <div className="flex min-w-max items-end gap-5">
+
+      {/* BLOCCO PRINCIPALE - CONTATORE GENERALE */}
+      <div className="rounded-2xl border border-slate-300 bg-gradient-to-br from-slate-50 to-white px-4 py-3 shadow-sm ring-1 ring-slate-100">
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Contatore Generale
+            </div>
+            <div className="mt-0.5 text-sm text-slate-600">
+              Valori principali da aggiornare
+            </div>
+          </div>
+
+          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
+            Consumo: {Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))}
+          </div>
         </div>
 
-        <div className="flex items-end">
-          <div className="text-sm text-slate-500">
-            Verrà ripartito proporzionalmente sugli interni.
+        <div className="flex items-end gap-4">
+          <div className="flex flex-col">
+            <label className="mb-1.5 text-xs font-semibold tracking-wide text-slate-700">
+              Lettura Attuale
+            </label>
+            <input
+              type="number"
+              className="h-11 w-[132px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all duration-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              value={valAtt}
+              onChange={(e) => setValAtt(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col">
+            <label className="mb-1.5 text-xs font-semibold tracking-wide text-slate-700">
+              Lettura Precedente
+            </label>
+            <input
+              type="number"
+              className="h-11 w-[132px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all duration-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              value={valPrec}
+              onChange={(e) => setValPrec(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col">
+            <label className="mb-1.5 text-xs font-semibold text-transparent select-none">
+              Azione
+            </label>
+            <button
+              onClick={saveGenerale}
+              disabled={savingGenerale}
+              className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-md transition-all duration-200 hover:-translate-y-[1px] hover:bg-slate-800 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Save size={16} />
+              {savingGenerale ? "Salvando..." : "Salva Generale"}
+            </button>
           </div>
         </div>
       </div>
-    </div>
-  )}
 
 
-  {/* INPUT SECTION */}
-      <div className="text-lg font-semibold">
-      Situazione Contatore Generale
-    </div>
-  <div className="grid grid-cols-3 gap-6">
+      {/* DIVIDER */}
+      <div className="h-14 w-px self-center bg-slate-200" />
 
-    <div>
-      <label className="text-xs text-slate-500">Lettura Attuale</label>
-      <input
-        type="number"
-        className="w-full border rounded px-2 py-2"
-        value={valAtt}
-        onChange={(e) => setValAtt(e.target.value)}
-      />
-    </div>
+      {/* PARAMETRI SECONDARI */}
+      <div className="flex items-end gap-5">
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Giorni QF
+          </label>
+          <input
+            type="number"
+            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniQf}
+            onChange={(e) => setGiorniQf(e.target.value)}
+          />
+        </div>
 
-    <div>
-      <label className="text-xs text-slate-500">Lettura Precedente</label>
-      <input
-        type="number"
-        className="w-full border rounded px-2 py-2"
-        value={valPrec}
-        onChange={(e) => setValPrec(e.target.value)}
-      />
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Giorni Consumi
+          </label>
+          <input
+            type="number"
+            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniConsumi}
+            onChange={(e) => setGiorniConsumi(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Giorni Interni
+          </label>
+          <input
+            type="number"
+            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniCasaInterni}
+            onChange={(e) => setGiorniCasaInterni(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Giorni Acconto
+          </label>
+          <input
+            type="number"
+            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniAcconto}
+            onChange={(e) => setGiorniAcconto(e.target.value)}
+          />
+        </div>
+
+        {Number(giorniAcconto) > 0 && (
+          <>
+            <div className="h-10 w-px self-end bg-slate-200" />
+
+            <div className="flex flex-col">
+              <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                MC Acconto
+              </label>
+              <input
+                type="number"
+                className="h-10 w-[96px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                value={mcAcconto}
+                onChange={(e) => setMcAcconto(Number(e.target.value))}
+              />
+            </div>
  
-    </div>
-
-    <div className="flex items-end">
-      
-      <button
-        onClick={saveGenerale}
-        disabled={savingGenerale}
-        className="bg-blue-600 text-white px-4 py-2 rounded-lg disabled:opacity-50 hover:bg-blue-700 transition flex items-center gap-2"
-      >
-        <Save size={18} />
-        {savingGenerale ? "Salvando..." : "Salva Generale"}
-        
-      </button>
-
-
-      <div>
-        
-
-        
+          </>
+        )}
       </div>
-      
     </div>
-    
   </div>
-
+</div>
 {/* CALCULATION BREAKDOWN */}
 <div className="bg-slate-50 rounded-2xl p-6 space-y-6 border border-slate-200">
   <div className="flex items-center justify-between gap-4">
@@ -1475,7 +1495,7 @@ const totals = useMemo(() => {
               Imp. Cons.
             </div>
             <div className="text-lg font-semibold text-slate-800 mt-2">
-              € {Number(session?.tot_acquedotto ?? 0).toFixed(2)}
+              € {Number(session?.tot_acquedotto ?? 0).toFixed(2)}  
             </div>
           </div>
 
@@ -1732,6 +1752,7 @@ const totals = useMemo(() => {
                 </tr>
               )}
 
+              {console.log("Righe contatori interni:", righe)}
               {righe.map((r: any, idx: number) => (
                 
                 <tr key={r.id ?? idx} className="border-t odd:bg-white even:bg-slate-50">

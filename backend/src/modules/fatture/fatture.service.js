@@ -319,16 +319,6 @@ exports.parseImportedDocument = async (id) => {
 }
  
 exports.uploadImportedDocument = async ({ file, body }) => {
-
-    console.log("service uploadImportedDocument start");
-    console.log("file =", file ? {
-      originalname: file.originalname,
-      filename: file.filename,
-      mimetype: file.mimetype,
-      size: file.size,
-    } : null);
-    console.log("body =", body);
-
     
   if (!file) {
     const err = new Error("File mancante");
@@ -434,22 +424,18 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
 
     const baseFrom = n2(s.mc_da_base);
     const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
-
-    
-
+  
     // annual span for this tier in base mc/year
     const spanBase = (baseTo === null) ? Infinity : Math.max(0, baseTo - baseFrom);
-
+     
     // multiplier rule
-    const multN = 3; //n2(s.moltiplica_per_nucleo) ? N : 1;
-
-  //  console.log(`Scaglione ${s.ordine}: base [${baseFrom}, ${baseTo ?? "∞"}], moltiplica_per_nucleo=${s.moltiplica_per_nucleo}, prezzo_acquedotto=${s.prezzo_acquedotto}`);
-
+    const multN = 3; 
+ 
     // prorated tier capacity
     const capacity =
       spanBase === Infinity
         ? Infinity
-        : (spanBase * multN * A / yearDays) * days;
+        : (spanBase * multN  / yearDays) * days;
 
     const take = capacity === Infinity ? remaining : Math.min(remaining, capacity);
 
@@ -457,6 +443,7 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
     total += take * price;
 
     remaining -= take;
+  //  console.log(`Scaglione ${s.ordine}: base [${baseFrom}, ${baseTo ?? "inf"}], spanBase ${spanBase}, capacity ${capacity}, take ${take}, price ${price}, total so far ${total}, remaining ${remaining}`);
   }
 
   return round2(total);
@@ -991,11 +978,13 @@ function calcolaGeneraleLegacy({
   const days = Math.max(0, n2(giorniInterni));
  
   for (const s of imposteG) {
+    //console.log(`Processing scaglione ${s.ordine} with remaining consumo ${remaining}`);
+    
     if (remaining <= 0) break;
 
     const baseFrom = n2(s.mc_da_base);
     const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
- 
+   
     // annual span for this tier in base mc/year
     const spanBase = (baseTo === null) ? Infinity : Math.max(0, baseTo - baseFrom);
 
@@ -1012,8 +1001,10 @@ function calcolaGeneraleLegacy({
 
     const price = n2(s.prezzo_acquedotto);
     total += take * price;
-
+  
     remaining -= take;
+
+   // console.log(`Scaglione ${s.ordine}: base [${baseFrom}, ${baseTo ?? "∞"}], moltiplica_per_nucleo=${s.moltiplica_per_nucleo}, prezzo_acquedotto=${s.prezzo_acquedotto}, take=${take}, total so far=${total.toFixed(2)}`); 
   }
   const daysQFv = Math.max(0, n2(giorniQF));
   const yd = Math.max(365, n2(yearDays));
@@ -1162,6 +1153,7 @@ async function calculateGenerale(conn, sessionId) {
       giorniQF: session.giorni_qf,
       varie: session.varie,
     });
+
 
     // -----------------------------
     // ACCONTO BREAKDOWN (DELTA)
@@ -1424,7 +1416,7 @@ async function calculateGenerale(conn, sessionId) {
 
     const nucleo = Math.max(1, n2(first.nucleo));
     const nuaeU = Math.max(1, n2(first.nuae));
-
+     
     let impAcq = 0;
     if (consumoNorm !== null) {
       const impNorm = allocateAcquedotto({
@@ -1432,7 +1424,7 @@ async function calculateGenerale(conn, sessionId) {
         scaglioni: tariff.scaglioni,
         nucleo,
         nuae: nuaeU,
-        giorniRef: Math.max(1, n2(session.giorni_consumi)), // keep your base behavior
+        giorniRef: Math.max(1, n2(session.giorni_interni)), // keep your base behavior
         yearDays,
       });
 
@@ -1453,7 +1445,6 @@ async function calculateGenerale(conn, sessionId) {
     const impIva = round2(baseIva * 0.10);
 
     const baseTot = round2(impAcq + impFog + impDep + impQf + impOneri + impIva);
-
     rows.push({
       id_utenza: first.id,
       id_user: first.id_user,
@@ -1585,12 +1576,14 @@ async function calculateGenerale(conn, sessionId) {
       r.depfog_acconto = depFogAccU;
       r.consumo_acconto = accMc;
 
+     
       // legacy: add € acconto into total row BEFORE TF/rounding
-      r.base_totale = round2(n2(r.base_totale) + accEuro);
+      r.base_totale = round2(n2(r.base_totale) + impConsAccU);
 
       distributedEuro += accEuro;
+      
     }
-
+    
     // deficit fix (legacy): spread remaining cents equally
     const deficitEuro = round2(totAccEuro - distributedEuro);
     if (deficitEuro !== 0 && primaries.length > 0) {
@@ -1618,8 +1611,10 @@ async function calculateGenerale(conn, sessionId) {
     const arr = round2(rounded - beforeRound);
     r.imp_arr = arr;
     r.totale = round2(beforeRound + arr);
-  }
+ }
 
+
+   
   // Persist
   // NOTE: If your fatture_righe table has the acconto columns, keep them in INSERT.
   // If not yet added, remove them from both column list and values.
