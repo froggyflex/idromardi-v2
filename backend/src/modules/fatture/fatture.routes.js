@@ -31,9 +31,7 @@ router.get("/periodi/:condominioId", controller.getAvailablePeriods);
 router.get("/providers", controller.getProviders);
 router.put("/sessioni/:id/contatore-generale",controller.updateContatoreGenerale);
 router.delete("/sessioni/:id", controller.deleteSession);
-router.post("/fatture/:fatturaId/recalculate",
-  controller.recalculate
-);
+ 
 
 router.post("/imported-documents/upload", upload.single("file"), controller.uploadImportedDocument);
 

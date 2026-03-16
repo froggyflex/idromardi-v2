@@ -71,6 +71,28 @@ function toMysqlDate(value) {
   return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
+function summarizeTariffeAcquedotto(rows) {
+  const summary = {
+    importoPos: 0,
+    importoNeg: 0,
+    quantitaPos: 0,
+    quantitaNeg: 0
+  };
+
+  for (const r of rows) {
+    if (r.importo >= 0) {
+      summary.importoPos += r.importo;
+      summary.quantitaPos += r.quantita;
+    } else {
+      summary.importoNeg += r.importo;
+      summary.quantitaNeg += r.quantita;
+    }
+  }
+
+  return summary;
+}
+
+
 function deriveLettureSummary(letture = []) {
   const items = Array.isArray(letture) ? letture : [];
 
@@ -236,11 +258,18 @@ exports.parseImportedDocument = async (id) => {
     mimeType: doc[0].mime_type,
   });
 
+
+
   const lettureSummary = deriveLettureSummary(parsedPayload.letture);
   const groupedLetture = groupLettureByTipo(parsedPayload.letture);
+  const tariffeSummary = summarizeTariffeAcquedotto(parsedPayload.componente_tariffa_acquedotto);
 
-  parsedPayload.letture_summary = lettureSummary;
-  parsedPayload.grouped_letture = groupedLetture;
+ 
+  parsedPayload.letture_summary = lettureSummary|| null;
+  parsedPayload.grouped_letture = groupedLetture  || null;
+  parsedPayload.summaryTariffeAcquedotto = tariffeSummary || null;
+
+  console.log("Parsed payload:", parsedPayload);
 
 
   const validation = buildParsedInvoiceValidation(parsedPayload);
@@ -254,7 +283,7 @@ exports.parseImportedDocument = async (id) => {
 
   
   
-  console.log("Parsed payload:", parsedPayload);
+ 
   
   await db.query(
     `
@@ -378,6 +407,19 @@ function assertUUID(value, name) {
 }
 
 
+const round3 = (v) => Math.round((Number(v) || 0) * 1000) / 1000;
+
+function getStornoCapienza(r) {
+  return {
+    euro: round2(
+      n2(r.imp_acquedotto) +
+      n2(r.imp_fognatura) +
+      n2(r.imp_depurazione)+
+      n2(r.imp_oneri)
+    ),
+    mc: round3(n2(r.consumo_normale)),
+  };
+}
 
 function n2(x) {
   const v = Number(x);
@@ -394,20 +436,103 @@ function yearDaysCount(year) {
   const leap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
   return leap ? 366 : 365;
 }
+async function loadOpenAccontoCredits(conn, idUtenza) {
+  const [rows] = await conn.query(
+    `
+    SELECT
+      m.id,
+      m.id_utenza,
+      m.id_fattura,
+      m.id_riga_fattura,
+      m.created_at,
+      m.importo_euro AS euro_orig,
+      m.importo_mc AS mc_orig,
+      COALESCE(SUM(s.importo_euro), 0) AS euro_usato,
+      COALESCE(SUM(s.importo_mc), 0) AS mc_usato
+    FROM fatture_acconti_movimenti m
+    LEFT JOIN fatture_acconti_movimenti s
+      ON s.source_movimento_id = m.id
+     AND s.tipo_movimento = 'STORNO_APPLICATO'
+    WHERE m.id_utenza = ?
+      AND m.tipo_movimento IN ('ACCONTO_CARICATO', 'RETTIFICA_POS')
+    GROUP BY
+      m.id, m.id_utenza, m.id_fattura, m.id_riga_fattura,
+      m.created_at, m.importo_euro, m.importo_mc
+    HAVING
+      ROUND(m.importo_euro - COALESCE(SUM(s.importo_euro), 0), 2) > 0
+      OR ROUND(m.importo_mc - COALESCE(SUM(s.importo_mc), 0), 3) > 0
+    ORDER BY m.created_at ASC, m.id ASC
+    `,
+    [idUtenza]
+  );
 
-/**
- * Allocate acquedotto amount using scaglioni for a given consumo and giorniRef.
- *
- * Scaglione structure assumed:
- * - mc_da_base
- * - mc_a_base (nullable => Infinity)
- * - moltiplica_per_nucleo (0/1)
- * - prezzo_acquedotto
- *
- * Effective tier capacity for the billing window:
- * annual_limit_base * (nucleo if flag) * nuae
- * then prorated by giorniRef/yearDaysCount
- */
+  return rows.map((r) => ({
+    id: r.id,
+    id_utenza: r.id_utenza,
+    id_fattura: r.id_fattura,
+    id_riga_fattura: r.id_riga_fattura,
+    created_at: r.created_at,
+    open_euro: round2(n2(r.euro_orig) - n2(r.euro_usato)),
+    open_mc: round3(n2(r.mc_orig) - n2(r.mc_usato)),
+  }));
+}
+
+async function applyOpenAccontoToRow(conn, row) {
+  const credits = await loadOpenAccontoCredits(conn, row.id_utenza);
+  const cap = getStornoCapienza(row);
+
+  let remainingEuroCap = round2(cap.euro);
+  let remainingMcCap = round3(cap.mc);
+
+  let usedEuro = 0;
+  let usedMc = 0;
+  const movements = [];
+
+  for (const c of credits) {
+    if (remainingEuroCap <= 0 && remainingMcCap <= 0) break;
+
+    const euroFactor =
+      c.open_euro > 0 ? remainingEuroCap / c.open_euro : Number.POSITIVE_INFINITY;
+
+    const mcFactor =
+      c.open_mc > 0 ? remainingMcCap / c.open_mc : Number.POSITIVE_INFINITY;
+
+    const factor = Math.max(0, Math.min(1, euroFactor, mcFactor));
+
+    if (factor <= 0) continue;
+
+    let takeEuro = c.open_euro > 0 ? round2(c.open_euro * factor) : 0;
+    let takeMc = c.open_mc > 0 ? round3(c.open_mc * factor) : 0;
+
+    // rounding guard
+    if (takeEuro > remainingEuroCap) takeEuro = round2(remainingEuroCap);
+    if (takeMc > remainingMcCap) takeMc = round3(remainingMcCap);
+
+    if (takeEuro <= 0 && takeMc <= 0) continue;
+
+    usedEuro = round2(usedEuro + takeEuro);
+    usedMc = round3(usedMc + takeMc);
+
+    remainingEuroCap = round2(remainingEuroCap - takeEuro);
+    remainingMcCap = round3(remainingMcCap - takeMc);
+
+    movements.push({
+      source_movimento_id: c.id,
+      importo_euro: takeEuro,
+      importo_mc: takeMc,
+    });
+  }
+
+  row.storno_acconto = round2(usedEuro);
+  row._storno_mc = round3(usedMc);
+  row._storno_movements = movements;
+
+  // storno reduces current payable total
+  row.base_totale = round2(n2(row.base_totale) - n2(row.storno_acconto));
+
+  return row;
+}
+ 
 function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearDays }) {
   let remaining = Math.max(0, n2(consumo));
   let total = 0;
@@ -585,9 +710,10 @@ exports.createOrLoadSession = async function ({
       FROM fatture_sessioni
       WHERE id_condominio = ?
         AND id_periodo_attuale = ?
+        AND id_periodo_precedente = ?
       LIMIT 1
       `,
-      [idCondominio, idPeriodoAttuale]
+      [idCondominio, idPeriodoAttuale, idPeriodoPrecedente]
     );
 
     if (existing.length > 0) {
@@ -1209,11 +1335,7 @@ async function calculateGenerale(conn, sessionId) {
   };
 
   const isPureNumericInterno = (x) => /^\d+$/.test(String(x ?? "").trim());
-
-  // expects existing helper in your codebase
-  // n2, round2, yearDaysCount, allocateAcquedotto, loadTariffeABC,
-  // roundToNearestTenth, applyTfToRows, uuid
-
+ 
   // ---------- Load periods ----------
   const [[periodoAttuale]] = await conn.query(
     `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
@@ -1301,6 +1423,8 @@ async function calculateGenerale(conn, sessionId) {
   const qfPerNuae = totNuae > 0 ? n2(generale.qfTot) / totNuae : 0;
 
   // ---------- Clear snapshot ----------
+  await conn.query(`DELETE FROM fatture_acconti_movimenti WHERE id_fattura = ?`, [session.id]);
+  await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
   await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
 
   // ---------- Group by UNIT (billing_group_id for doppio) ----------
@@ -1359,9 +1483,11 @@ async function calculateGenerale(conn, sessionId) {
   // We compute base amounts on NORMAL consumption only.
   // Acconto will be allocated later (legacy add_Acconti).
   // -------------------------------------------------------------------
-  for (const key of unitKeys) {
-    const group = byUnit.get(key);
 
+   
+  for (const key of unitKeys) {
+ 
+    const group = byUnit.get(key);
     group.sort((a, b) => {
       const ai = String(a.Interno ?? "");
       const bi = String(b.Interno ?? "");
@@ -1378,7 +1504,7 @@ async function calculateGenerale(conn, sessionId) {
     let sumAtt = 0;
     let sumPrec = 0;
     let haveAny = false;
-
+     
     const ra0 = mapAtt.get(first.id);
     const rp0 = mapPrec.get(first.id);
     const statoAtt = ra0?.stato_lettura ?? null;
@@ -1407,6 +1533,13 @@ async function calculateGenerale(conn, sessionId) {
       consumoNorm = d;
     }
 
+    let flatTipo = "NORMAL"; // upper(pick(first, "tipo", "Tipo"), "NORMAL");
+    if(group[0].Tipo == "SPECIAL") {
+      consumoNorm = 0;
+      flatTipo = "SPECIAL";
+    }
+
+
     // IMPORTANT: legacy-style acconto distribution uses consumo_normale as MC base;
     // so here consumo_totale is still NORMAL (no automatic giorniAcc add-on).
     const consumoTot = consumoNorm;
@@ -1433,8 +1566,8 @@ async function calculateGenerale(conn, sessionId) {
 
     const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
     const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
-    const impQf = round2(qfPerNuae * nuaeU);
-
+    const impQf = flatTipo == "SPECIAL" ? 0 : round2(qfPerNuae * nuaeU);
+    
     const impOneri = isMulti
       ? round2(n2(session.oneri_doppio_snapshot))
       : round2(n2(session.oneri_snapshot));
@@ -1539,8 +1672,8 @@ async function calculateGenerale(conn, sessionId) {
 
   const totAccEuro = round2(n2(generale.totAcc ?? 0));                 // € pot
   const totConsAccMc = round2(n2(generale.consumoAcconto ?? 0));       // MC pot
-
-  // optional buckets if you provide them from calculateGenerale
+  
+ 
   const totImpConsAcc = round2(n2(generale.impConsAcc ?? 0));
   const totDepFogAcc = round2(n2(generale.depFogAcc ?? 0));
 
@@ -1552,17 +1685,22 @@ async function calculateGenerale(conn, sessionId) {
 
     const totMcNorm = primaries.reduce((s, r) => s + Math.max(0, n2(r.consumo_normale)), 0);
 
-    let distributedEuro = 0;
+    console.log(`Total for accconto distribution: totMoneyNoOneri=${totMoneyNoOneri.toFixed(2)}, totMcNorm=${totMcNorm.toFixed(2)}`);
 
+    let distributedEuro = 0;
+ 
     for (const r of primaries) {
       const moneyNoOneri = Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
       const pctMoney = totMoneyNoOneri > 0 ? moneyNoOneri / totMoneyNoOneri : 0;
 
       const consNorm = Math.max(0, n2(r.consumo_normale));
       const pctMc = totMcNorm > 0 ? consNorm / totMcNorm : 0;
+      
+      console.log(`Unit ${r._unitKey}: moneyNoOneri=${moneyNoOneri.toFixed(2)}, pctMoney=${pctMoney.toFixed(4)}, consNorm=${consNorm.toFixed(2)}, pctMc=${pctMc.toFixed(4)}`);
 
       // € acconto
       const accEuro = round2(pctMoney * totAccEuro);
+ 
 
       // split into buckets if available (keeps printing possible)
       const impConsAccU = totImpConsAcc > 0 ? round2(pctMoney * totImpConsAcc) : round2(accEuro);
@@ -1576,14 +1714,27 @@ async function calculateGenerale(conn, sessionId) {
       r.depfog_acconto = depFogAccU;
       r.consumo_acconto = accMc;
 
+      console.log(`Allocating accconto for unit ${r._unitKey}: pctMoney=${pctMoney.toFixed(4)}, pctMc=${pctMc.toFixed(4)}, accEuro=${accEuro.toFixed(2)}, accMc=${accMc.toFixed(2)}`);
      
       // legacy: add € acconto into total row BEFORE TF/rounding
       r.base_totale = round2(n2(r.base_totale) + impConsAccU);
 
       distributedEuro += accEuro;
+     
       
     }
-    
+
+    // -------------------------------------------------------------------
+    // PASS 2B: APPLY OPEN STORNO FROM LEDGER
+    // - consumes old acconto credit FIFO
+    // - capped by current water-related charges only
+    // - reduces current base_totale
+    // -------------------------------------------------------------------
+
+    for (const r of primaries) {
+      await applyOpenAccontoToRow(conn, r);
+    }
+
     // deficit fix (legacy): spread remaining cents equally
     const deficitEuro = round2(totAccEuro - distributedEuro);
     if (deficitEuro !== 0 && primaries.length > 0) {
@@ -1666,10 +1817,62 @@ async function calculateGenerale(conn, sessionId) {
         r.storno_acconto,
       ]
     );
+
+
   }
+for (const r of rows) {
+  // A) current invoice generates new acconto credit
+  if (n2(r.acconto) > 0 || n2(r.consumo_acconto) > 0) {
+    await conn.query(
+      `
+      INSERT INTO fatture_acconti_movimenti
+      (id, id_utenza, id_fattura, id_riga_fattura,
+       tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
+      VALUES (?, ?, ?, ?, 'ACCONTO_CARICATO', ?, ?, NULL, ?)
+      `,
+      [
+        uuid(),
+        r.id_utenza,
+        session.id,
+        r.id_riga_fattura,
+        round2(n2(r.acconto)),
+        round3(n2(r.consumo_acconto)),
+        'Acconto generato dalla fattura corrente',
+      ]
+    );
+  }
+
+    // B) current invoice consumes old open acconto credit
+    if (Array.isArray(r._storno_movements)) {
+      for (const sm of r._storno_movements) {
+        if (n2(sm.importo_euro) <= 0 && n2(sm.importo_mc) <= 0) continue;
+
+        await conn.query(
+          `
+          INSERT INTO fatture_acconti_movimenti
+          (id, id_utenza, id_fattura, id_riga_fattura,
+          tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
+          VALUES (?, ?, ?, ?, 'STORNO_APPLICATO', ?, ?, ?, ?)
+          `,
+          [
+            uuid(),
+            r.id_utenza,
+            session.id,
+            r.id_riga_fattura,
+            round2(n2(sm.importo_euro)),
+            round3(n2(sm.importo_mc)),
+            sm.source_movimento_id,
+            'Storno applicato dalla fattura corrente',
+          ]
+        );
+      }
+    }
+  }
+
 
   // Totals
   const totAcq = round2(rows.reduce((s, r) => s + n2(r.imp_acquedotto), 0));
+  const totConsAcc = round2(rows.reduce((s, r) => s + n2(r.consumo_acconto), 0));
   const totFog = round2(rows.reduce((s, r) => s + n2(r.imp_fognatura), 0));
   const totDep = round2(rows.reduce((s, r) => s + n2(r.imp_depurazione), 0));
   const totQf = round2(rows.reduce((s, r) => s + n2(r.imp_qf), 0));
@@ -1679,8 +1882,10 @@ async function calculateGenerale(conn, sessionId) {
   const totConguaglio = round2(rows.reduce((s, r) => s + n2(r.conguaglio), 0));
   const totArr = round2(rows.reduce((s, r) => s + n2(r.imp_arr), 0));
 
+  
   return {
     totAcq,
+    totConsAcc,
     totFog,
     totDep,
     totQf,
@@ -1695,39 +1900,7 @@ async function calculateGenerale(conn, sessionId) {
   };
 }
 
-exports.recalculateSession = async function (fatturaId, giorniAcconto) {
-  let conn = await db.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [[session]] = await conn.query(
-      `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
-      [fatturaId]
-    );
-
-    if (!session) throw new Error("Session not found");
-
-    session.giorni_acconto = Number(accontoConfig.giorniAcconto) || 0;
-    session.mc_acconto_manual = Number(accontoConfig.mcAcconto) || null;
-
-    const generale = await calculateGenerale(conn, session.id);
-
-    const result = await calculateInterni(
-      conn,
-      session,
-      generale,
-      session.tf_code,
-    );
-
-    await conn.commit();
-    return result;
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
-}
+ 
 
 exports.calculateSession = async function ({ sessionId, tfCode }) {
 
@@ -1766,9 +1939,10 @@ exports.calculateSession = async function ({ sessionId, tfCode }) {
     
     */ 
     const g = generaleResult.generale;
+    session.consumoNorm = generaleResult.meta.consumoNorm;
     const interniTotals = await calculateInterni(conn, session, g, tfCode);
 
-    console.log("Generale:", g);
+    
       
     await conn.query(
       `

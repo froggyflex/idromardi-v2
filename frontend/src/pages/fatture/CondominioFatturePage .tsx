@@ -5,6 +5,8 @@ import { Trash2 } from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
 import { set, weeksToDays } from "date-fns";
+import { useRef } from "react";
+
 
 type Provider = { id: string; nome: string; codice?: string };
 type Periodo = { id: string; period_year: number; period_month: number };
@@ -49,6 +51,9 @@ type LettureResolution =
       grouped: Record<string, { oldest: LetturaItem; newest: LetturaItem; items: LetturaItem[] }>;
     };
 export default function CondominioFatturePage() {
+
+    const importedDocsScrollRef = useRef<HTMLDivElement | null>(null);
+
     const navigate = useNavigate();
     const { condominioId, id: fatturaId } = useParams();
 
@@ -71,6 +76,7 @@ export default function CondominioFatturePage() {
     const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
     const [tfCode, setTfCode] = useState<string>("TF1");
     const [mcAcconto, setMcAcconto] = useState<number>(0);
+    const [mcStorno, setMcStorno] = useState<number>(0);
     const [selectedDoc, setSelectedDoc] = useState<number | null>(null);
 
     const canCreate = useMemo(() => {
@@ -119,7 +125,24 @@ export default function CondominioFatturePage() {
     const [uploadingImport, setUploadingImport] = useState(false);
     const [parsingImportId, setParsingImportId] = useState<string | null>(null);
  
-  
+
+
+
+  const handleImportedDocsWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const el = importedDocsScrollRef.current;
+    if (!el) return;
+
+    const canScrollHorizontally = el.scrollWidth > el.clientWidth;
+    if (!canScrollHorizontally) return;
+
+    // Trap the wheel inside this container
+    e.preventDefault();
+    e.stopPropagation();
+
+    const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    el.scrollLeft += delta;
+  };
+ 
   async function parseImportedInvoice(id: string) {
     try {
       setParsingImportId(id);
@@ -383,7 +406,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
 
     try {
       await api.delete(`/fatture/sessioni/${id}`);
-      await refreshSessionsList();
+      await bootstrap();
 
       if (fatturaId === id) {
         navigate(`/condomini/${condominioId}/fatture`);
@@ -415,7 +438,10 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
   }
 
   async function refreshSessionsList() {
-    const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId}`);  
+
+    console.log("Refreshing sessions list for condominioId:", condominioId, "and fatturaId:", fatturaId);
+
+    const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId? fatturaId : ""}`);  
     const list = res.data?.sessions ?? res.data; // supports both shapes
     setSessions(Array.isArray(list) ? list : []);
     setDetail(list);
@@ -443,9 +469,11 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       });
 
       const newId = res?.data?.session?.id;
+    
       if (!newId) throw new Error("Creazione fattura riuscita ma manca session.id");
 
-      await refreshSessionsList();
+      //await refreshSessionsList();
+      await bootstrap();
       navigate(`/condomini/${condominioId}/fatture/${newId}`);
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || "Errore creazione");
@@ -611,7 +639,7 @@ const totals = useMemo(() => {
       acc.oneri += Number(row.imp_oneri || 0);
       acc.acconto += Number(row.acconto || 0);
       acc.storno += Number(row.storno_acconto || 0);
-
+      acc.totConsAcc += Number(row.consumo_acconto || 0);
       acc.iva += Number(row.imp_iva || 0);
       acc.arr += Number(row.imp_arr || 0);
       acc.totale += Number(row.totale || 0);
@@ -628,6 +656,7 @@ const totals = useMemo(() => {
       oneri: 0,
       acconto: 0,
       storno: 0,
+      totConsAcc: 0,
       iva: 0,
       arr: 0,
       totale: 0,
@@ -641,6 +670,7 @@ const totals = useMemo(() => {
     Number(session?.tot_fognatura || 0) +
     Number(session?.tot_depurazione || 0) +
     Number(session?.tot_qf || 0) +
+    Number(session?.varie || 0) +
     Number(session?.tot_iva || 0);
 
   const oneriGenerale = Number(session?.tot_oneri || 0);
@@ -650,6 +680,8 @@ const totals = useMemo(() => {
   );
 
   const isGreen = generalePlusOneri <= totaleInterni;
+  // console.log( isGreen ? "Generale + Oneri è inferiore o uguale al totale interni, evidenziamo in verde" : 
+  //   "Generale + Oneri supera il totale interni, evidenziamo in rosso", { generalePlusOneri, totaleInterni });
 
   return {
     ...base,
@@ -904,21 +936,26 @@ const totals = useMemo(() => {
             {importedDocs.length} {importedDocs.length === 1 ? "documento" : "documenti"}
           </div>
         </div>
-
-        {loadingImportedDocs ? (
-          <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-            Caricamento documenti...
-          </div>
-        ) : importedDocs.length === 0 ? (
-          <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-            Nessun documento importato.
-          </div>
-        ) : (
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[420px] overflow-y-auto pr-1">
+                 
+  {loadingImportedDocs ? (
+        <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
+          Caricamento documenti...
+        </div>
+      ) : importedDocs.length === 0 ? (
+        <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
+          Nessun documento importato.
+        </div>
+      ) : (
+        <div className="mt-5">
+          <div
+            ref={importedDocsScrollRef}
+            onWheel={handleImportedDocsWheel}
+            className="flex gap-4 overflow-x-auto overflow-y-hidden overscroll-contain pb-3 pr-1 snap-x snap-mandatory scroll-smooth cursor-grab active:cursor-grabbing"
+          >
             {importedDocs.map((doc: any) => (
               <div
                 key={doc.id}
-                className={`rounded-2xl border p-4 transition cursor-pointer ${
+                className={`min-w-[320px] max-w-[320px] shrink-0 rounded-2xl border p-4 transition cursor-pointer snap-start shadow-sm ${
                   selectedImportedDoc?.id === doc.id
                     ? "border-blue-500 bg-blue-50"
                     : "border-slate-200 bg-white hover:bg-slate-50"
@@ -977,12 +1014,11 @@ const totals = useMemo(() => {
               </div>
             ))}
           </div>
-        )}
-      </div>
-    </div>
-  </div>
-
-  <div className="bg-white rounded-2xl shadow p-5">
+        </div>
+      )}
+    
+        
+          <div className="bg-white rounded-2xl shadow p-5">
     <div className="flex items-start justify-between gap-4">
       <div>
         <div className="text-lg font-semibold text-slate-900">
@@ -1090,15 +1126,20 @@ const totals = useMemo(() => {
 
   
   </div>
+      </div>
+    </div>
+  </div>
+
+
 </div>
 
   {/* SESSION CONTROL BAR */}
-  {/* <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6"> */}
+  <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
 
-    {/* <div className="grid grid-cols-12 gap-8"> */}
+    <div className="grid grid-cols-12 gap-8">
 
       {/* CREATE */}
-      {/* <div className="col-span-12 lg:col-span-5 space-y-4">
+       {/* <div className="col-span-12 lg:col-span-5 space-y-4">
         <div className="font-semibold">Crea Fattura</div>
 
 
@@ -1154,7 +1195,9 @@ const totals = useMemo(() => {
           </button>
         </div>
       </div> */}
-
+    </div>
+      
+  </div>
       {/* EXISTING */}
       {/* <div className="col-span-12 lg:col-span-7 space-y-4">
         <div className="flex items-center justify-between">
@@ -1451,6 +1494,17 @@ const totals = useMemo(() => {
                 onChange={(e) => setMcAcconto(Number(e.target.value))}
               />
             </div>
+            <div className="flex flex-col">
+              <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                MC Storno
+              </label>
+              <input
+                type="number"
+                className="h-10 w-[96px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                value={mcStorno}
+                onChange={(e) => setMcStorno(Number(e.target.value))}
+              />
+            </div>
  
           </>
         )}
@@ -1736,7 +1790,7 @@ const totals = useMemo(() => {
                 <th className="p-2">Cong.</th>
                 <th className="p-2">Oneri</th>
                 <th className="p-2">IVA</th>
-                <th className="p-2">Acconto</th>
+                <th className="p-2">Acconto<br></br>MC/EUR</th>
                 <th className="p-2">Storno</th>
                 <th className="p-2">Arr</th>
                 <th className="p-2 font-semibold">Totale</th>
@@ -1774,7 +1828,7 @@ const totals = useMemo(() => {
                   <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
                   <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
 
-                  <td className="p-2 text-center">{r.riga?.imp_acconto ?? 0}</td>
+                  <td className="p-2 text-center">{Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc<br></br>{Number(r.riga?.imp_acconto ?? 0).toFixed(2)} </td>
                   <td className="p-2 text-center">{r.riga?.imp_storno ?? 0}</td>
                   
                   <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
@@ -1794,7 +1848,7 @@ const totals = useMemo(() => {
                 <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
                 <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
 
-                <td className="p-2 text-center">{totals.acconto.toFixed(2)}</td>
+                <td className="p-2 text-center">{totals.acconto.toFixed(2)}<br></br> {totals.totConsAcc.toFixed(2)}mc </td>
                 <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
                 <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
  
@@ -1816,6 +1870,7 @@ const totals = useMemo(() => {
 </div>
 
   );
+  
 }
  
 
