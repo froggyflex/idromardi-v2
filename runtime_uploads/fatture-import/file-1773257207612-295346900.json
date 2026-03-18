@@ -1,114 +1,90 @@
 {
-      "anagrafica": {
-        "codice_cliente": "10641599000",
-        "indirizzo_fornitura": "VIA CAMILLO DE NARDIS 20 80127 NAPOLI (NA)",
-        "intestatario": "CONDOMINIO",
-        "matricola_contatore": "F050320"
-      },
-      "bill_type": "estimated",
-      "codice_fornitura": "10641599000",
-      "componente_tariffa_acquedotto": [
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "04/06/2024",
-          "importo": 436.76,
-          "quantita": 968.0,
-          "tariffa": 0.4512,
-          "to_date": "10/12/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "04/06/2024",
-          "importo": 731.72,
-          "quantita": 893.0,
-          "tariffa": 0.8194,
-          "to_date": "10/12/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "04/06/2024",
-          "importo": -59.56,
-          "quantita": -132.0,
-          "tariffa": 0.4512,
-          "to_date": "29/06/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "04/06/2024",
-          "importo": -99.15,
-          "quantita": -121.0,
-          "tariffa": 0.8194,
-          "to_date": "29/06/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "30/06/2024",
-          "importo": -209.36,
-          "quantita": -464.0,
-          "tariffa": 0.4512,
-          "to_date": "28/09/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "30/06/2024",
-          "importo": -346.61,
-          "quantita": -423.0,
-          "tariffa": 0.8194,
-          "to_date": "28/09/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "11/12/2024",
-          "importo": 41.51,
-          "quantita": 92.0,
-          "tariffa": 0.4512,
-          "to_date": "28/12/2024"
-        },
-        {
-          "descrizione": "COMPONENTE TARIFFA ACQUEDOTTO",
-          "from_date": "11/12/2024",
-          "importo": 68.01,
-          "quantita": 83.0,
-          "tariffa": 0.8194,
-          "to_date": "28/12/2024"
-        }
-      ],
-      "consumo_globale_mc": 1861.0,
-      "fornitore_servizi": "ABC Acqua Bene Comune Napoli",
-      "importo_totale_da_pagare": 2276.23,
-      "letture": [
-        {
-          "data_lettura": "03/06/2024",
-          "lettura_mc": 60436.0,
-          "tipo_lettura": "a_giro"
-        },
-        {
-          "consumo_mc": 1861.0,
-          "data_lettura": "10/12/2024",
-          "lettura_mc": 62297.0,
-          "tipo_lettura": "a_giro"
-        },
-        {
-          "consumo_mc": 175.0,
-          "data_lettura": "28/12/2024",
-          "lettura_mc": 62472.0,
-          "tipo_lettura": "media"
-        }
-      ],
-      "numero_bolletta": "2025 / 132285",
-      "periodi_fatturazione": [
-        {
-          "consumo_mc": 1861.0,
-          "data_fine": "10/12/2024",
-          "data_inizio": "04/06/2024",
-          "tipo_lettura": "a_giro"
-        },
-        {
-          "consumo_mc": 175.0,
-          "data_fine": "28/12/2024",
-          "data_inizio": "11/12/2024",
-          "tipo_lettura": "media"
-        }
-      ],
-      "punto_erogazione": "150630493130 3396"
+  "status": "success",
+  "provider": "ABC Company",
+  "extraction": {
+    "method": "llm",
+    "confidence": 0.95
+  },
+  "invoice": {
+    "number": "123456789",
+    "total_amount": 85.5,
+    "supply_code": "IT001234567890",
+    "delivery_point": "PE00001"
+  },
+  "consumption": {
+    "total_mc": 150.0,
+    "by_tiers": null
+  },
+  "billing_periods": [
+    {
+      "start_date": "2023-01-01",
+      "end_date": "2023-04-01",
+      "consumption_mc": 150.0,
+      "reading_type": "a_giro"
     }
+  ],
+  "readings": [
+    {
+      "date": "2023-01-01",
+      "reading_mc": 1000.0,
+      "consumption_mc": null,
+      "type": "a_giro"
+    },
+    {
+      "date": "2023-02-15",
+      "reading_mc": 1050.0,
+      "consumption_mc": 50.0,
+      "type": "spezzatura"
+    },
+    {
+      "date": "2023-04-01",
+      "reading_mc": 1150.0,
+      "consumption_mc": 100.0,
+      "type": "a_giro"
+    }
+  ],
+  "customer": {
+    "client_code": "CL987654",
+    "contract_number": "CN54321",
+    "role": "Proprietario",
+    "name": "Condominio Aurora",
+    "address": "Via Roma, 10",
+    "tax_id": "01234567890",
+    "meter_id": "MTR998877",
+    "property": {
+      "staircase": "A",
+      "floor": "2",
+      "unit": "4"
+    }
+  },
+  "charges": {
+    "acquedotto": [
+      {
+        "from": "2023-01-01",
+        "to": "2023-04-01",
+        "quantity_mc": 150.0,
+        "unit_price": 0.3,
+        "amount": 45.0,
+        "description": "COMPONENTE TARIFFA ACQUEDOTTO"
+      }
+    ],
+    "quota_acqua": [
+      {
+        "from": "2023-01-01",
+        "to": "2023-04-01",
+        "quantity_mc": 150.0,
+        "unit_price": 0.1667,
+        "amount": 25.0,
+        "description": "COMPONENTE QUOTA TARIFFA ACQUA"
+      }
+    ]
+  },
+  "raw_confidence": {
+    "hydric_provider": 0.95,
+    "letture": 0.95,
+    "periodi_fatturazione": 0.95,
+    "consumo_globale_mc": 0.95,
+    "overall": 0.95
+  },
+  "errors": []
+}
