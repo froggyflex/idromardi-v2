@@ -1,0 +1,59 @@
+services:
+  # MySQL Database
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: miteamx1_fatturazione
+      MYSQL_USER: idromardi
+      MYSQL_PASSWORD: idromardi123
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./miteamx1_fatturazione.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_USER: idromardi
+      DB_PASSWORD: idromardi123
+      DB_NAME: miteamx1_fatturazione
+      DB_PORT: 3306
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000/api}
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:4000/api}
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
