@@ -4,14 +4,15 @@ import api from "../../api/client";
 import { Trash2 } from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
-import { set, weeksToDays } from "date-fns";
+import { parse, set, weeksToDays } from "date-fns";
 import { useRef } from "react";
+import { ca, se } from "date-fns/locale";
+ 
 
 
 type Provider = { id: string; nome: string; codice?: string };
 type Periodo = { id: string; period_year: number; period_month: number };
-type Session = any;
-    type ImportedInvoiceDocument = {
+type ImportedInvoiceDocument = {
     id: string;
     original_filename: string;
     numero_bolletta?: string | null;
@@ -34,22 +35,7 @@ type LetturaItem = {
   consumo_mc?: number | null;
   tipo_lettura?: string | null;
 };
-
-type LettureResolution =
-  | {
-      ok: true;
-      valPrec: string;
-      valAtt: string;
-      warning?: string;
-      grouped: Record<string, { oldest: LetturaItem; newest: LetturaItem; items: LetturaItem[] }>;
-    }
-  | {
-      ok: false;
-      reason: "missing_a_giro" | "invalid_a_giro_values" | "no_letture";
-      message: string;
-      availableTypes: string[];
-      grouped: Record<string, { oldest: LetturaItem; newest: LetturaItem; items: LetturaItem[] }>;
-    };
+ 
 export default function CondominioFatturePage() {
 
     const importedDocsScrollRef = useRef<HTMLDivElement | null>(null);
@@ -75,9 +61,23 @@ export default function CondominioFatturePage() {
     const [generale, setGenerale] = useState<any>(null);
     const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
     const [tfCode, setTfCode] = useState<string>("TF1");
-    const [mcAcconto, setMcAcconto] = useState<number>(0);
+  
+    //storno values
     const [mcStorno, setMcStorno] = useState<number>(0);
+    const [eurStorno, setEurStorno] = useState<number>(0);
+    //-------------------------------------------------------
+
+
     const [selectedDoc, setSelectedDoc] = useState<number | null>(null);
+    const [parsedQF, setParsedQF] = useState<number | null>(null);
+
+    // Acconto values
+    const [eurAcconto, setEurAcconto] = useState<number>(0);
+    const [depfogAcconto, setDepfogAcconto] = useState<number>(0);
+    const [ivaAcconto, setIvaAcconto] = useState<number>(0);
+    const [totaleAcconto, setTotaleAcconto] = useState<number>(0);
+    const [mcAcconto, setMcAcconto] = useState<number>(0);
+   //-------------------------------------------------------
 
     const canCreate = useMemo(() => {
       return !!condominioId && !!providerId && !!current && !!previous && current !== previous;
@@ -98,12 +98,12 @@ export default function CondominioFatturePage() {
     const [giorniAcconto, setGiorniAcconto] = useState<number | string>(0);
     const [varie, setVarie] = useState<number | string>(0);
     const [giorniCasaInterni, setGiorniCasaInterni] = useState<number | string>(0);
-    const [dataQfFrom, setDataQfFrom] = useState("");
-    const [dataQfTo, setDataQfTo] = useState("");
-    const [dataConsFrom, setDataConsFrom] = useState("");
-    const [dataConsTo, setDataConsTo] = useState("");
+    // const [dataQfFrom, setDataQfFrom] = useState("");
+    // const [dataQfTo, setDataQfTo] = useState("");
+    // const [dataConsFrom, setDataConsFrom] = useState("");
+    // const [dataConsTo, setDataConsTo] = useState("");
     const [savingParams, setSavingParams] = useState(false);
-
+    const [annoTariffa, setAnnoTariffa] = useState<number | string>(0);
 
     const [parsingAlert, setParsingAlert] = useState<null | {
       type: "warning";
@@ -125,10 +125,17 @@ export default function CondominioFatturePage() {
     const [uploadingImport, setUploadingImport] = useState(false);
     const [parsingImportId, setParsingImportId] = useState<string | null>(null);
  
+    const [importedDocYear, setImportedDocYear] = useState<number | null>(null);
 
 
-
-  const handleImportedDocsWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+   const years: any[] = [];
+   years.length = 0; // clear array while keeping reference
+   years.push(selectedImportedDoc?.data_fine_periodo ? new Date(selectedImportedDoc.data_fine_periodo).getFullYear() : new Date().getFullYear()); // current year
+   years.push(selectedImportedDoc?.data_inizio_periodo ? new Date(selectedImportedDoc.data_inizio_periodo).getFullYear()-1 : new Date().getFullYear() - 1  ); // previous year
+   years.push(selectedImportedDoc?.data_fine_periodo ? new Date(selectedImportedDoc.data_fine_periodo).getFullYear() + 1 : new Date().getFullYear() + 1); // next year
+   years.sort((a, b) => a - b);
+  
+   const handleImportedDocsWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     const el = importedDocsScrollRef.current;
     if (!el) return;
 
@@ -142,7 +149,67 @@ export default function CondominioFatturePage() {
     const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
     el.scrollLeft += delta;
   };
- 
+  function parseITDate(str: { split: (arg0: string) => [any, any, any]; }) {
+    if (!str) return null;
+    const [dd, mm, yyyy] = str.split("/");
+    return new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+  }
+
+  function round2(n: any) {
+    return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  }
+
+  function summarizePeriodiAndTariffe( data: { periodi_fatturazione: any; componente_tariffa_acquedotto: any; }) {
+    const periodi = Array.isArray(data?.periodi_fatturazione) ? data.periodi_fatturazione : [];
+    const tariffe = Array.isArray(data?.componente_tariffa_acquedotto)
+      ? data.componente_tariffa_acquedotto
+      : [];
+
+    return periodi.map((periodo: { data_inizio: any; data_fine: any; tipo_lettura: any; consumo_mc: any; }) => {
+      const pStart = parseITDate(periodo.data_inizio);
+      const pEnd = parseITDate(periodo.data_fine);
+
+      const righeTariffa = tariffe.filter((r: { from_date: any; to_date: any; }) => {
+        const rStart = parseITDate(r.from_date);
+        const rEnd = parseITDate(r.to_date);
+        return rStart && rEnd && pStart && pEnd && rStart >= pStart && rEnd <= pEnd;
+      });
+
+      const quantita = righeTariffa.reduce((s: number, r: { quantita: any; }) => s + Number(r.quantita || 0), 0);
+      const importo = righeTariffa.reduce((s: number, r: { importo: any; }) => s + Number(r.importo || 0), 0);
+
+      const positiveRows = righeTariffa.filter((r: { quantita: any; }) => Number(r.quantita || 0) > 0);
+      const negativeRows = righeTariffa.filter((r: { quantita: any; }) => Number(r.quantita || 0) < 0);
+
+      const quantitaPositive = positiveRows.reduce((s: number, r: { quantita: any; }) => s + Number(r.quantita || 0), 0);
+      const importoPositive = positiveRows.reduce((s: number, r: { importo: any; }) => s + Number(r.importo || 0), 0);
+
+      const quantitaNegative = negativeRows.reduce((s: number, r: { quantita: any; }) => s + Number(r.quantita || 0), 0);
+      const importoNegative = negativeRows.reduce((s: number, r: { importo: any; }) => s + Number(r.importo || 0), 0);
+
+      return {
+        tipo_lettura: periodo.tipo_lettura,
+        data_inizio: periodo.data_inizio,
+        data_fine: periodo.data_fine,
+        consumo_periodo_mc: Number(periodo.consumo_mc || 0),
+        righe_tariffa: righeTariffa.map((r: { from_date: any; to_date: any; quantita: any; importo: any; tariffa: any; }) => ({
+          from_date: r.from_date,
+          to_date: r.to_date,
+          quantita: Number(r.quantita || 0),
+          importo: Number(r.importo || 0),
+          tariffa: Number(r.tariffa || 0)
+        })),
+        totali: {
+          quantita: round2(quantita),
+          importo: round2(importo),
+          quantita_positive: round2(quantitaPositive),
+          importo_positive: round2(importoPositive),
+          quantita_negative: round2(quantitaNegative),
+          importo_negative: round2(importoNegative)
+        }
+      };
+    });
+  }
   async function parseImportedInvoice(id: string) {
     try {
       setParsingImportId(id);
@@ -194,7 +261,8 @@ export default function CondominioFatturePage() {
       setLoadingImportedDocs(true);
       const res = await api.get(`/fatture/imported-documents/condominio/${condominioId}`);
       setImportedDocs(res.data?.items[0] || []);
-      console.log("Imported documents loaded:", res.data?.items[0] || []);
+      console.log("Imported documents loaded:", res.data?.items || []);
+
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore caricamento documenti importati");
     } finally {
@@ -236,16 +304,21 @@ function diffDaysExclusive(from?: string | null, to?: string | null): number | n
 
   return diff >= 0 ? diff : null;
 }
+
+
 function assignStateFromParsedPayload(payloadJson?: string | null) {
   if (!payloadJson) return;
 
   try {
     const payload = JSON.parse(payloadJson);
+    console.log("Assigning state from parsed payload:", payload);
 
-    setDataQfFrom(payload.data_inizio_periodo || "");
-    setDataQfTo(payload.data_fine_periodo || "");
-    setDataConsFrom(payload.data_inizio_periodo || "");
-    setDataConsTo(payload.data_fine_periodo || "");
+    const parsedSummary = summarizePeriodiAndTariffe(payload || null);
+
+    // setDataQfFrom(payload.data_inizio_periodo || "");
+    // setDataQfTo(payload.data_fine_periodo || "");
+    // setDataConsFrom(payload.data_inizio_periodo || "");
+    // setDataConsTo(payload.data_fine_periodo || "");
 
     const grouped = payload.grouped_letture || {};
     const aGiro = grouped.a_giro;
@@ -254,24 +327,13 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
 
       setValPrec(String(aGiro.oldest.lettura_mc));
       setValAtt(String(aGiro.newest.lettura_mc));
-      setGiorniQf(diffDaysInclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura) ?? 0);
       setGiorniConsumi(diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura) ?? 0);
-
       
+      parseAccontoFromParsedPayload(payloadJson, parsedSummary);
+      parseStornoFromParsedPayload(payloadJson);
+      parseQFFromParsedPayload(payloadJson);
 
-      if (payload.letture_summary?.ha_acconto) {
-        console.warn(
-          `Acconto rilevato: tipo ${payload.letture_summary?.tipo_lettura_acconto}, ` +
-          `valore ${payload.letture_summary?.valore_acconto}, ` +
-          `consumo ${payload.letture_summary?.consumo_acconto}`
-        );
-         payload.periodi_fatturazione.map((p: any) => {
-          if (p.tipo_lettura === "acconto" || p.tipo_lettura === "acconto_a_giro" || p.tipo_lettura === "media") {
-            setGiorniAcconto(diffDaysExclusive(p.data_inizio , p.data_fine ) ?? 0);
-            setMcAcconto(p.consumo_mc ?? 0);
-          }
-         });
-      }
+
 
       setParsingAlert?.(null);
       return;
@@ -283,10 +345,10 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
         ? `Nessuna lettura valida di tipo "a_giro" trovata. Tipi disponibili: ${availableTypes.join(", ")}. Seleziona manualmente quali valori usare per Valore Precedente e Valore Attuale.`
         : `Nessuna grouped_letture disponibile nel payload.`;
 
-    console.warn(message);
+    alert(message);
 
-    setValPrec("");
-    setValAtt("");
+    setValPrec(0);
+    setValAtt(0);
 
     if (typeof setParsingAlert === "function") {
       setParsingAlert({
@@ -300,7 +362,58 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     console.error("Errore durante il parsing del payload:", err);
   }
 }
+  function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummary?: any) {
+    if (!payloadJson) return; 
+    try {
+      const payload = JSON.parse(payloadJson);
+      if (payload.letture_summary?.ha_acconto) {
+         payload.periodi_fatturazione.map((p: any) => {
+          if (p.tipo_lettura === "acconto" || p.tipo_lettura === "acconto_a_giro" || p.tipo_lettura === "media") {
+            setGiorniAcconto(diffDaysExclusive(p.data_inizio , p.data_fine ) ?? 0);
+            setMcAcconto(p.consumo_mc ?? 0);
+          }
+         });
+        parsedSummary?.tariffe_acquedotto?.map((t: any) => {
+          
+        })
+      }
+
+    }catch (err) {
+      console.error("Errore durante il parsing del payload per l'acconto:", err);
+    }
+  }
+  function parseStornoFromParsedPayload(payloadJson?: string | null) {
+    if (!payloadJson) return; 
+    try {
+      const payload = JSON.parse(payloadJson);
+      if (payload.summaryTariffeAcquedotto?.quantitaNeg !== 0) {
+          setMcStorno(payload.summaryTariffeAcquedotto.quantitaNeg);
+          setEurStorno(payload.summaryTariffeAcquedotto.importoNeg);
+         
+      }
+      
+    }catch (err) {
+      console.error("Errore durante il parsing del payload per l'acconto:", err);
+    }
+  }    
+
+  function parseQFFromParsedPayload(payloadJson?: string | null) {
+    if (!payloadJson) return;
+    try {
+      const payload = JSON.parse(payloadJson);
+      payload.componente_quota_tariffa_acqua.map((c: any) => { 
+      if(c.importo > 0) { 
+              setGiorniQf(diffDaysExclusive(c.from_date, c.to_date) ?? 0);
+              setParsedQF(c.importo);
+              
+          }
+      });
+    }catch (err) {
+      console.error("Errore durante il parsing del payload per il QF:", err);
+    }
+  }
   async function loadImportedDocumentDetail(id: string) {
+
     try {
       setLoadingImportedDetail(true);
       const res = await api.get(`/fatture/imported-documents/${id}`);
@@ -315,6 +428,8 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setSelectedDoc(res.data?.document[0].importo_totale_da_pagare);
       
       assignStateFromParsedPayload(res.data?.document[0]?.parsed_payload_json);
+      setImportedDocYear(selectedImportedDoc?.data_fine_periodo ? new Date(selectedImportedDoc.data_fine_periodo).getFullYear() : new Date().getFullYear()  );
+
       console.log("Imported document detail loaded:", selectedImportedDoc || null);
 
       
@@ -324,44 +439,9 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setLoadingImportedDetail(false);
     }
   }
-
-  async function createImportedDocument() {
-    if (!condominioId || !importFilename) return;
-
-    try {
-      setCreatingImport(true);
-      setError(null);
-
-      const res = await api.post("/fatture/imported-documents", {
-        condominioId,
-        providerId: importProviderId || null,
-        originalFilename: importFilename,
-        storedFilename: null,
-        mimeType: "application/pdf",
-        fileSizeBytes: null,
-        fileHash: null,
-      });
-
-      const newId = res.data?.document?.id;
-      await loadImportedDocuments();
-
-      if (newId) {
-        await loadImportedDocumentDetail(newId);
-      }
-
-      setImportFilename("");
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Errore creazione documento importato");
-    } finally {
-      setCreatingImport(false);
-    }
-  }
-
+  
     async function linkImportedToCurrentSession(importedId: string, sessionId: string) {
-
-      console.log("Linking imported document to session:", { importedId, sessionId });
-
-      
+  
     try {
       await api.post(`/fatture/imported-documents/${importedId}/link-session`, {
         sessionId,
@@ -391,6 +471,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setSessions(sRes.data || []);
       setImportedDocs(iRes.data?.items || []);
       loadImportedDocuments();
+ 
 
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore caricamento dati");
@@ -428,7 +509,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId}`);
 
       setDetail(res.data);
-      console.log("Fattura detail loaded:", res.data);
+       
     } catch (err: any) {
       setDetail(null);
       setError(err?.response?.data?.error || "Errore caricamento fattura");
@@ -438,15 +519,12 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
   }
 
   async function refreshSessionsList() {
-
-    console.log("Refreshing sessions list for condominioId:", condominioId, "and fatturaId:", fatturaId);
-
+ 
     const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId? fatturaId : ""}`);  
     const list = res.data?.sessions ?? res.data; // supports both shapes
     setSessions(Array.isArray(list) ? list : []);
     setDetail(list);
-    console.log("Calcolo sessione result:", list);
-
+     
   }
 
 
@@ -512,8 +590,11 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
   
         const res = await api.post(`/fatture/sessioni/${fatturaId}/calcola`, {
           tfCode,
-        });
- 
+          annoTariffa: Number(annoTariffa) || null,
+          eurStorno: eurStorno? Number(eurStorno) : null,
+          parsedQF: parsedQF !== null ? Number(parsedQF) : null,
+        }); 
+        console.log("Calcolo response:", res.data);
         //await loadDetail();
         await refreshSessionsList();
         setCurrentSession(res.data.session);
@@ -553,7 +634,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     try {
       setSavingParams(true);
 
-      console.log("Saving params:", { giorniQf, giorniConsumi, giorniAcconto, varie, giorniCasaInterni, mcAcconto });
+      console.log("Saving params:", { giorniQf, giorniConsumi, giorniAcconto, varie, giorniCasaInterni, mcAcconto, mcStorno });
       if(Number(giorniAcconto) <= 0) {
         setMcAcconto(0);
       }
@@ -564,6 +645,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
         varie: Number(varie),
         giorniCasa: Number(giorniCasaInterni),
         mcAcconto: Number(giorniAcconto) == 0 ? 0 : Number(mcAcconto),
+        mcStorno: Number(mcStorno)==0 ? 0 : Number(mcStorno),
         totImpo:Number(session?.tot_acquedotto ?? 0)
       });
 
@@ -593,7 +675,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
 
 
   useEffect(() => {
-    console.log("Session data changed, updating giorni parameters:", session);
+    
     if (!session) return;
 
     setGiorniQf(session.giorni_qf ?? 0);
@@ -602,7 +684,8 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     setMcAcconto(Number(session.mcAcconto) ?? 0);
     setGiorniCasaInterni(session.giorni_interni ?? 0);
     setVarie(session.varie ?? 0);
-    
+   
+
   }, [session]);
  
   useEffect(() => {
@@ -680,9 +763,7 @@ const totals = useMemo(() => {
   );
 
   const isGreen = generalePlusOneri <= totaleInterni;
-  // console.log( isGreen ? "Generale + Oneri è inferiore o uguale al totale interni, evidenziamo in verde" : 
-  //   "Generale + Oneri supera il totale interni, evidenziamo in rosso", { generalePlusOneri, totaleInterni });
-
+  
   return {
     ...base,
     totaleInterni,
@@ -691,8 +772,7 @@ const totals = useMemo(() => {
   };
 }, [righe, session]);
 
- 
-
+  
 
   return (
 <div className="w-full px-6 py-6 space-y-6">
@@ -1428,9 +1508,23 @@ const totals = useMemo(() => {
 
       {/* DIVIDER */}
       <div className="h-14 w-px self-center bg-slate-200" />
-
+      
       {/* PARAMETRI SECONDARI */}
       <div className="flex items-end gap-5">
+        <div className="flex flex-wrap gap-3">
+          <select
+            className="border rounded px-3 py-2 w-48"
+            value={annoTariffa}
+            onChange={(e) => setAnnoTariffa(e.target.value)}
+          >
+            <option value="">Anno Tariffa</option>
+            {years.map((year) => (
+            <option key={year} value={year}>
+              {year === importedDocYear ? `Anno Corrente (${year})` : year}
+            </option>
+            ))}
+          </select>
+        </div>
         <div className="flex flex-col">
           <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
             Giorni QF
@@ -1530,9 +1624,7 @@ const totals = useMemo(() => {
     <div className="xl:col-span-9 space-y-6">
       {/* PRIMARY VALUES */}
       <div>
-        <div className="text-sm font-semibold text-slate-700 mb-3">
-          Valori principali
-        </div>
+ 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
             <div className="text-xs text-slate-500 uppercase tracking-wide">
@@ -1567,7 +1659,7 @@ const totals = useMemo(() => {
               Q.F
             </div>
             <div className="text-lg font-semibold text-slate-800 mt-2">
-              € {Number(session?.tot_qf ?? 0).toFixed(2)}
+              € {Number(parsedQF ?? session?.tot_qf ?? 0).toFixed(2)}
             </div>
           </div>
         </div>
@@ -1606,7 +1698,7 @@ const totals = useMemo(() => {
       </div>
 
       {/* ACCONTO */}
-      {generale?.consumoAcconto > 0 && (
+      {mcAcconto > 0 && (
         <div>
           <div className="text-sm font-semibold text-slate-700 mb-3">
             Dati acconto
@@ -1622,11 +1714,33 @@ const totals = useMemo(() => {
             </div>
 
             <div className="grid grid-cols-5 gap-0 text-sm text-slate-800">
-              <div className="px-4 py-3 border-t">{generale.consumoAcconto}</div>
-              <div className="px-4 py-3 border-t">{generale.impConsAcc}</div>
-              <div className="px-4 py-3 border-t">{generale.depFogAcc}</div>
-              <div className="px-4 py-3 border-t">{generale.ivaAcc}</div>
-              <div className="px-4 py-3 border-t font-semibold">{generale.totAcc}</div>
+              <div className="px-4 py-3 border-t">{mcAcconto?.toFixed(2)}</div>
+              <div className="px-4 py-3 border-t">{eurAcconto?.toFixed(2)}</div>
+              <div className="px-4 py-3 border-t">{depfogAcconto?.toFixed(2)}</div>
+              <div className="px-4 py-3 border-t">{ivaAcconto?.toFixed(2)}</div>
+              <div className="px-4 py-3 border-t font-semibold">{totaleAcconto?.toFixed(2)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* STORNO */}
+      {mcStorno !== 0 && (
+        <div>
+          <div className="text-sm font-semibold text-slate-700 mb-3">
+            Dati storno acconto
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="grid grid-cols-5 gap-0 border-b bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
+              <div className="px-4 py-3">Cons. Storno</div>
+              <div className="px-4 py-3">Imp. Storno</div>
+ 
+            </div>
+
+            <div className="grid grid-cols-5 gap-0 text-sm text-slate-800">
+              <div className="px-4 py-3 border-t">{mcStorno? (Number(mcStorno).toFixed(2)) : 0}</div>
+              <div className="px-4 py-3 border-t">{eurStorno? (Number(eurStorno).toFixed(2)) : 0}</div>
+ 
             </div>
           </div>
         </div>
@@ -1791,7 +1905,7 @@ const totals = useMemo(() => {
                 <th className="p-2">Oneri</th>
                 <th className="p-2">IVA</th>
                 <th className="p-2">Acconto<br></br>MC/EUR</th>
-                <th className="p-2">Storno</th>
+                <th className="p-2">Storno<br></br>EUR</th>
                 <th className="p-2">Arr</th>
                 <th className="p-2 font-semibold">Totale</th>
               </tr>
@@ -1806,7 +1920,9 @@ const totals = useMemo(() => {
                 </tr>
               )}
 
-              {console.log("Righe contatori interni:", righe)}
+              {
+                //console.log("Righe contatori interni:", totals)
+              }
               {righe.map((r: any, idx: number) => (
                 
                 <tr key={r.id ?? idx} className="border-t odd:bg-white even:bg-slate-50">
@@ -1829,7 +1945,7 @@ const totals = useMemo(() => {
                   <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
 
                   <td className="p-2 text-center">{Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc<br></br>{Number(r.riga?.imp_acconto ?? 0).toFixed(2)} </td>
-                  <td className="p-2 text-center">{r.riga?.imp_storno ?? 0}</td>
+                  <td className="p-2 text-center">{Number(r.riga?.storno_acconto ?? 0).toFixed(2)}</td>
                   
                   <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
                   <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>

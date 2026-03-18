@@ -3,6 +3,7 @@ const { v4: uuid } = require("uuid");
 
 /* ---------------- Helpers ---------------- */
 const path = require("path");
+const e = require("express");
 const fs = require("fs").promises;
 // const db = require(... your existing db helper ...)
 
@@ -31,6 +32,8 @@ async function buildParsedInvoiceFromFile({ fileBuffer, input, mimeType }) {
       ? fileBuffer.periodi_fatturazione
       : [],
     punto_erogazione: fileBuffer?.punto_erogazione ?? null,
+    componente_quota_tariffa_acqua: Array.isArray(fileBuffer?.componente_quota_tariffa_acqua)? 
+    fileBuffer.componente_quota_tariffa_acqua : [],
   };
 }
 
@@ -263,15 +266,11 @@ exports.parseImportedDocument = async (id) => {
   const lettureSummary = deriveLettureSummary(parsedPayload.letture);
   const groupedLetture = groupLettureByTipo(parsedPayload.letture);
   const tariffeSummary = summarizeTariffeAcquedotto(parsedPayload.componente_tariffa_acquedotto);
-
- 
+  
   parsedPayload.letture_summary = lettureSummary|| null;
   parsedPayload.grouped_letture = groupedLetture  || null;
   parsedPayload.summaryTariffeAcquedotto = tariffeSummary || null;
-
-  console.log("Parsed payload:", parsedPayload);
-
-
+  
   const validation = buildParsedInvoiceValidation(parsedPayload);
 
   const validationStatus =
@@ -479,6 +478,7 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
 
 async function applyOpenAccontoToRow(conn, row) {
   const credits = await loadOpenAccontoCredits(conn, row.id_utenza);
+  console.log(`Found ${credits.length} open acconto credits for utenza ${row.id_utenza}`);
   const cap = getStornoCapienza(row);
 
   let remainingEuroCap = round2(cap.euro);
@@ -521,14 +521,17 @@ async function applyOpenAccontoToRow(conn, row) {
       importo_euro: takeEuro,
       importo_mc: takeMc,
     });
+
+    //console.log(movements);
   }
 
-  row.storno_acconto = round2(usedEuro);
+  row.storno_pregresso = round2(usedEuro);
   row._storno_mc = round3(usedMc);
   row._storno_movements = movements;
 
-  // storno reduces current payable total
-  row.base_totale = round2(n2(row.base_totale) - n2(row.storno_acconto));
+  
+  // keep existing distributed storno_acconto intact
+  row.base_totale = round2(n2(row.base_totale) - n2(row.storno_pregresso));
 
   return row;
 }
@@ -568,7 +571,6 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
     total += take * price;
 
     remaining -= take;
-  //  console.log(`Scaglione ${s.ordine}: base [${baseFrom}, ${baseTo ?? "inf"}], spanBase ${spanBase}, capacity ${capacity}, take ${take}, price ${price}, total so far ${total}, remaining ${remaining}`);
   }
 
   return round2(total);
@@ -659,7 +661,7 @@ async function loadTariffeABC(conn, { anno, categoriaCodice, tfCode }) {
 
   // interpret QF importo as annual amount (legacy behavior)
   const qfAnnua = qfRows.length ? n2(qfRows[0].importo) : 0;
-
+  
   return {
     tariffVersion: version,
     categoria,
@@ -901,6 +903,7 @@ exports.updateSessionParams = async function ({
   giorniConsumi,
   giorniAcconto,
   mcAcconto,
+  mcStorno,
   totImpo,
   varie,
   dataFattura,
@@ -925,7 +928,8 @@ exports.updateSessionParams = async function ({
         data_casa_idrica = ?,
         giorni_interni = ?,
         tot_acquedotto = ?,
-        mcAcconto  = ?
+        mcAcconto  = ?,
+        mcStorno = ?
       WHERE id = ?
       `,
       [
@@ -938,6 +942,7 @@ exports.updateSessionParams = async function ({
         giorniCasa !== undefined ? (giorniCasa === null ? null : Number(giorniCasa)) : null,
         totImpo !== undefined ? (totImpo === null ? null : Number(totImpo)) : null,
         mcAcconto !== undefined ? (mcAcconto === null ? null : Number(mcAcconto)) : null,
+        mcStorno !== undefined ? (mcStorno === null ? null : Number(mcStorno)) : null,
         sessionId,
       ]
     );
@@ -973,80 +978,7 @@ function yearDaysCount(year) {
  * - prices: imposteG[0..4] (agev, base, fascia3, fascia4, fascia5)
  */
 
-async function loadSessionForUpdate(conn, sessionId) {
-  const [rows] = await conn.query(
-    `SELECT * FROM fatture_sessioni WHERE id = ? FOR UPDATE`,
-    [sessionId]
-  );
-
-  if (!rows.length) throw new Error("Session not found");
-
-  if (rows[0].stato === "CONFERMATA") {
-    throw new Error("Session is confirmed and cannot be recalculated");
-  }
-
-  return rows[0];
-}
-async function updateSessionTotals(conn, sessionId, generale, interni = null) {
-
-  await conn.query(
-    `
-    UPDATE fatture_sessioni
-    SET
-      stato = 'BOZZA',
-      tot_acquedotto = ?,
-      tot_fognatura = ?,
-      tot_depurazione = ?,
-      tot_qf = ?,
-      tot_iva = ?,
-      grand_total = ?
-    WHERE id = ?
-    `,
-    [
-      generale.impCons,
-      generale.fog,
-      generale.dep,
-      generale.qfTot,
-      generale.iva,
-      generale.grand,
-      sessionId
-    ]
-  );
-}
-  
-async function loadPeriodoData(conn, session) {
-
-  const [paRows] = await conn.query(
-    `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
-    [session.id_periodo_attuale]
-  );
-
-  const [ppRows] = await conn.query(
-    `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
-    [session.id_periodo_precedente]
-  );
-
-  if (!paRows.length || !ppRows.length) {
-    throw new Error("Periods not found");
-  }
-
-  const periodoAttuale = paRows[0];
-  const periodoPrecedente = ppRows[0];
-
-  const yearDays = yearDaysCount(Number(periodoAttuale.period_year));
-
-  return {
-    periodoAttuale,
-    periodoPrecedente,
-    yearDays
-  };
-}
- function internoBase(x) {
-  const s = String(x ?? "").trim();
-  // "1A" -> "1", "12B" -> "12", "7" -> "7"
-  const m = s.match(/^(\d+)/);
-  return m ? m[1] : s; // fallback
-}
+ 
 async function loadFullSession(conn, sessionId, interniTotals = null, generaleResult = null) {
 
   const [sessionRows] = await conn.query(
@@ -1072,7 +1004,7 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     `,
     [sessionId]
   );
-
+   
   return {
     session: sessionRows[0],
     righe: righeRows, 
@@ -1094,6 +1026,7 @@ function calcolaGeneraleLegacy({
   giorniQF,
   varie,
   aliquotaIva = 0.10,
+  parsedQF = null,
   
 }) {
  
@@ -1104,7 +1037,7 @@ function calcolaGeneraleLegacy({
   const days = Math.max(0, n2(giorniInterni));
  
   for (const s of imposteG) {
-    //console.log(`Processing scaglione ${s.ordine} with remaining consumo ${remaining}`);
+     
     
     if (remaining <= 0) break;
 
@@ -1129,8 +1062,7 @@ function calcolaGeneraleLegacy({
     total += take * price;
   
     remaining -= take;
-
-   // console.log(`Scaglione ${s.ordine}: base [${baseFrom}, ${baseTo ?? "∞"}], moltiplica_per_nucleo=${s.moltiplica_per_nucleo}, prezzo_acquedotto=${s.prezzo_acquedotto}, take=${take}, total so far=${total.toFixed(2)}`); 
+ 
   }
   const daysQFv = Math.max(0, n2(giorniQF));
   const yd = Math.max(365, n2(yearDays));
@@ -1140,8 +1072,11 @@ function calcolaGeneraleLegacy({
   const impDepurazione = consumo * n2(prezzoDepurazione);
   const depFog = impFognatura + impDepurazione;
 
-  const qfTot = (n2(qfAnnua) / yd) * A * daysQFv;
+  const qfTot = Number(parsedQF) || (n2(qfAnnua) / yd) * A * daysQFv;
 
+   
+   console.log(qfTot, qfAnnua, yd, A, daysQFv);
+  
   const baseIva = impAcquedotto + depFog + qfTot;
   const iva = baseIva * n2(aliquotaIva);
 
@@ -1158,10 +1093,68 @@ function calcolaGeneraleLegacy({
   };
   
 }
-async function calculateGenerale(conn, sessionId) {
+
+function calcolaStornoSoloAcquedotto({
+  consumo,
+  numNuae,
+  giorniInterni,
+  yearDays,
+  imposteG,
+}) {
+  let remaining = Math.abs(n2(consumo));
+                    
+  let total = 0;
+
+  const A =   n2(numNuae);
+  const days = n2(giorniInterni);
+
+  const righe = [];
+
+  for (const s of imposteG) {
+
+    if (remaining <= 0) break;
+
+    const baseFrom = n2(s.mc_da_base);
+    const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
+
+    const spanBase =
+      baseTo === null ? Infinity : Math.max(0, baseTo - baseFrom);
+
+    // Must match legacy exactly
+    const multN = 3;
+
+    const capacity =
+      spanBase === Infinity
+        ? Infinity
+        : (spanBase * multN * A / yearDays) * days;
+
+    const take =
+      capacity === Infinity ? remaining : Math.min(remaining, capacity);
+
+    const price = n2(s.prezzo_acquedotto);
+    const importo = round2(take * price);
+
+    total += take * price;
+    remaining -= take;
+
+    righe.push({
+      ordine: s.ordine,
+      quantita: (take),
+      tariffa: (price),
+      importo,
+    });
+  }
+
+  return {
+    impAcquedottoStorno: round2(total),
+    righe,
+  };
+}
+
+async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = null, eurStorno = 0, parsedQF = null) {
   assertUUID(sessionId, "sessionId");
 
-  const n2 = v => Number.isFinite(Number(v)) ? Number(v) : 0;
+  const n2 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
   try {
     const [[session]] = await conn.query(
@@ -1181,7 +1174,7 @@ async function calculateGenerale(conn, sessionId) {
 
     if (!pa || !pp) throw new Error("Periodi non trovati");
 
-    const anno = Number(pa.period_year);
+    const anno = Number(annoAtt) || Number(pa.period_year);
     const yd = yearDaysCount(anno);
 
     // -----------------------------
@@ -1189,8 +1182,7 @@ async function calculateGenerale(conn, sessionId) {
     // -----------------------------
     const consumoNorm = Math.max(
       0,
-      n2(pa.contatore_generale_valore) -
-      n2(pp.contatore_generale_valore)
+      n2(pa.contatore_generale_valore) - n2(pp.contatore_generale_valore)
     );
 
     // -----------------------------
@@ -1220,10 +1212,11 @@ async function calculateGenerale(conn, sessionId) {
       anno,
       categoriaCodice: "RESIDENTE",
     });
-  
-    const imposteG = [...(tariff.scaglioni || [])]
-      .sort((a, b) => n2(a.ordine) - n2(b.ordine))
-       
+
+    const imposteG = [...(tariff.scaglioni || [])].sort(
+      (a, b) => n2(a.ordine) - n2(b.ordine)
+    );
+
     // -----------------------------
     // MC ACCONTO CALCULATION
     // -----------------------------
@@ -1247,7 +1240,6 @@ async function calculateGenerale(conn, sessionId) {
     // -----------------------------
     // BASE CALCULATION (NO ACCONTO)
     // -----------------------------
-    
     const base = calcolaGeneraleLegacy({
       consumo: consumoNorm,
       totNuc,
@@ -1259,8 +1251,9 @@ async function calculateGenerale(conn, sessionId) {
       prezzoDepurazione: tariff.prezzoDepurazione,
       qfAnnua: tariff.qfAnnua,
       giorniQF: session.giorni_qf,
-      varie: session.varie,
-        
+      varie: session.varie, 
+      parsedQF: parsedQF,
+
     });
 
     // -----------------------------
@@ -1278,631 +1271,679 @@ async function calculateGenerale(conn, sessionId) {
       qfAnnua: tariff.qfAnnua,
       giorniQF: session.giorni_qf,
       varie: session.varie,
+      parsedQF: parsedQF,
     });
-
 
     // -----------------------------
     // ACCONTO BREAKDOWN (DELTA)
     // -----------------------------
     const impConsAcc = round2(withAcc.impAcquedotto - base.impAcquedotto);
-    const depFogAcc  = round2(withAcc.depFog - base.depFog);
-    const ivaAcc     = round2(withAcc.iva - base.iva);
+    const depFogAcc = round2(withAcc.depFog - base.depFog);
+    const ivaAcc = round2(withAcc.iva - base.iva);
 
-    const totAcc = round2(
-      impConsAcc +
-      depFogAcc +
-      ivaAcc
-    );
+    const totAcc = round2(impConsAcc + depFogAcc + ivaAcc);
 
     // -----------------------------
-    // RETURN SAME STRUCTURE AS BEFORE
+    // STORNO = ACQUEDOTTO ONLY ON mcStorno
     // -----------------------------
+    const mcStorno =  n2(session.mcStorno) !== 0 ? n2(session.mcStorno) : 0;
+
+   
+    const stornoCalc = calcolaStornoSoloAcquedotto({
+      consumo: mcStorno,
+      numNuae,
+      giorniInterni: session.giorni_consumi,
+      yearDays: yd,
+      imposteG,
+    });
+
+   
+    const stornoEuro = eurStorno || round2(stornoCalc.impAcquedottoStorno);
+
+    // final total after storno deduction
+    const totalePrimaStorno = round2(n2(withAcc.totale));
+    const totaleFinale = round2(Math.max(0, totalePrimaStorno + stornoEuro));
+    
+    console.log("Generale calculation", totalePrimaStorno, stornoEuro, totaleFinale);
+    
     return {
       meta: {
         anno,
         consumoNorm,
         consumoAcconto,
-        consumoTot
+        consumoTot,
+        mcStorno,
+        stornoEuro,
       },
       generale: {
-        ...withAcc,               // full totals WITH acconto
-        consumoAcconto,           // MC extra
-        impConsAcc,               // € acquedotto acconto
-        depFogAcc,                // € dep+fog acconto
-        ivaAcc,                   // € iva acconto
-        totAcc                    // TOTAL € acconto
-      }
-    };
+        ...withAcc,
+        consumoAcconto,
+        impConsAcc,
+        depFogAcc,
+        ivaAcc,
+        totAcc,
 
+        mcStorno,
+        stornoEuro,
+        stornoDettaglio: stornoCalc.righe,
+
+        totalePrimaStorno,
+        totale: totaleFinale,
+        totDaPagare: totaleFinale,
+      },
+    };
   } finally {
     conn.release();
   }
 }
- 
- async function calculateInterni(conn, session, generale, tfCode) {
+async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPrec = null, eurStorno = 0) {
   // ---------- helpers ----------
   const pick = (obj, ...keys) => {
-    for (const k of keys) if (obj?.[k] !== undefined && obj?.[k] !== null) return obj[k];
+    for (const k of keys) {
+      if (obj?.[k] !== undefined && obj?.[k] !== null) return obj[k];
+    }
     return undefined;
   };
+
   const upper = (v, fallback = "") => String(v ?? fallback).toUpperCase();
   const isSpecial = (u) => upper(pick(u, "tipo", "Tipo"), "") === "SPECIAL";
+  const isPureNumericInterno = (x) => /^\d+$/.test(String(x ?? "").trim());
 
-  const internoBase = (x) => {
-    const s = String(x ?? "").trim();
-    const m = s.match(/^(\d+)/);
-    return m ? m[1] : s;
+  /**
+   * Proportional allocator that preserves the exact total.
+   * Supports positive or negative totals.
+   * decimals=2 for money, decimals=3 for mc.
+   */
+  const allocateByWeight = (total, items, getWeight, decimals = 2) => {
+    const factor = Math.pow(10, decimals);
+    const signedTotalUnits = Math.round(n2(total) * factor);
+
+    if (!items.length || signedTotalUnits === 0) {
+      return items.map(() => 0);
+    }
+
+    const sign = signedTotalUnits < 0 ? -1 : 1;
+    const absTotalUnits = Math.abs(signedTotalUnits);
+
+    const weights = items.map((item) => Math.max(0, n2(getWeight(item))));
+    const totalWeight = weights.reduce((s, w) => s + w, 0);
+
+    if (totalWeight <= 0) {
+      const base = Math.floor(absTotalUnits / items.length);
+      let remainder = absTotalUnits - base * items.length;
+      return items.map((_, i) => sign * ((base + (i < remainder ? 1 : 0)) / factor));
+    }
+
+    const raw = weights.map((w) => (w / totalWeight) * absTotalUnits);
+    const floored = raw.map((v) => Math.floor(v));
+    let assigned = floored.reduce((s, v) => s + v, 0);
+    let remainder = absTotalUnits - assigned;
+
+    const order = raw
+      .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+      .sort((a, b) => b.frac - a.frac);
+
+    for (let k = 0; k < remainder; k++) {
+      floored[order[k].i] += 1;
+    }
+
+    return floored.map((u) => sign * (u / factor));
   };
 
-  const isPureNumericInterno = (x) => /^\d+$/.test(String(x ?? "").trim());
- 
-  // ---------- Load periods ----------
-  const [[periodoAttuale]] = await conn.query(
-    `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
-    [session.id_periodo_attuale]
-  );
-  const [[periodoPrecedente]] = await conn.query(
-    `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
-    [session.id_periodo_precedente]
-  );
-  if (!periodoAttuale || !periodoPrecedente) throw new Error("Periods not found");
+  try {
+    // ---------- Load periods ----------
+    const [[periodoAttuale]] = await conn.query(
+      `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
+      [session.id_periodo_attuale]
+    );
+    const [[periodoPrecedente]] = await conn.query(
+      `SELECT * FROM letture_sessioni WHERE id = ? LIMIT 1`,
+      [session.id_periodo_precedente]
+    );
 
-  const anno = Number(periodoAttuale.period_year);
-  const yearDays = yearDaysCount(anno);
-
-  const y = Number(periodoAttuale.period_year);
-  const m = Number(periodoAttuale.period_month);
-  const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
-  const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-
-  // ---------- Active utenze ----------
-  const [utenzeRaw] = await conn.query(
-    `
-    SELECT
-      u.*,
-      u.Doppio_Contatore AS doppio_contatore,
-      u.Nucleo AS nucleo,
-      u.Tipo AS tipo,
-      u.Isolato AS Isolato,
-      u.Scala AS Scala,
-      u.Interno AS Interno
-    FROM utenze_v2 u
-    WHERE u.condominio_id = ?
-      AND u.stato = 'ATTIVA'
-      AND (u.data_attivazione IS NULL OR u.data_attivazione <= ?)
-      AND (u.data_chiusura IS NULL OR u.data_chiusura >= ?)
-    ORDER BY u.id ASC
-    `,
-    [session.id_condominio, end, start]
-  );
-  if (!utenzeRaw.length) throw new Error("No active utenze");
-
-  const utenze = utenzeRaw.map((u) => ({
-    ...u,
-    Isolato: pick(u, "Isolato", "isolato") ?? "",
-    Scala: pick(u, "Scala", "scala") ?? "",
-    Interno: pick(u, "Interno", "interno") ?? "",
-    tipo: pick(u, "tipo", "Tipo") ?? "",
-    nucleo: pick(u, "nucleo", "Nucleo") ?? 1,
-    nuae: pick(u, "nuae", "Nuae") ?? 1,
-  }));
-
-  // ---------- Load readings ----------
-  const ids = utenze.map((u) => u.id);
-  const inList = ids.map(() => "?").join(",");
-
-  const [righeAtt] = await conn.query(
-    `
-    SELECT id_utenza, valore_lettura, stato_lettura
-    FROM letture_righe
-    WHERE id_sessione = ?
-      AND id_utenza IN (${inList})
-    `,
-    [session.id_periodo_attuale, ...ids]
-  );
-
-  const [righePrec] = await conn.query(
-    `
-    SELECT id_utenza, valore_lettura, stato_lettura
-    FROM letture_righe
-    WHERE id_sessione = ?
-      AND id_utenza IN (${inList})
-    `,
-    [session.id_periodo_precedente, ...ids]
-  );
-
-  const mapAtt = new Map(righeAtt.map((r) => [r.id_utenza, r]));
-  const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
-
-  // ---------- Condo NUAEs for QF distribution ----------
-  const [[condo]] = await conn.query(
-    `SELECT nuae FROM condomini_v2 WHERE id = ? LIMIT 1`,
-    [session.id_condominio]
-  );
-  const totNuae = condo?.nuae != null ? Math.max(1, n2(condo.nuae)) : 1;
-  const qfPerNuae = totNuae > 0 ? n2(generale.qfTot) / totNuae : 0;
-
-  // ---------- Clear snapshot ----------
-  await conn.query(`DELETE FROM fatture_acconti_movimenti WHERE id_fattura = ?`, [session.id]);
-  await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
-  await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
-
-  // ---------- Group by UNIT (billing_group_id for doppio) ----------
-  const byUnit = new Map();
-
-  for (const u of utenze) {
-    const isDoppio = String(u.Doppio_Contatore).toUpperCase() === "SI";
-
-    if (!isDoppio) {
-      byUnit.set(`__single_${u.id}`, [u]);
-      continue;
+    if (!periodoAttuale || !periodoPrecedente) {
+      throw new Error("Periods not found");
     }
 
-    const groupKey = u.billing_group_id;
+    const anno = Number(annoAtt) || Number(periodoAttuale.period_year);
+    const yearDays = yearDaysCount(anno);
 
-    if (!groupKey) {
-      byUnit.set(`__single_${u.id}`, [u]);
-      continue;
+    const y = Number(periodoAttuale.period_year);
+    const m = Number(periodoAttuale.period_month);
+    const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
+    const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+
+    // ---------- Active utenze ----------
+    const [utenzeRaw] = await conn.query(
+      `
+      SELECT
+        u.*,
+        u.Doppio_Contatore AS doppio_contatore,
+        u.Nucleo AS nucleo,
+        u.Tipo AS tipo,
+        u.Isolato AS Isolato,
+        u.Scala AS Scala,
+        u.Interno AS Interno
+      FROM utenze_v2 u
+      WHERE u.condominio_id = ?
+        AND u.stato = 'ATTIVA'
+        AND (u.data_attivazione IS NULL OR u.data_attivazione <= ?)
+        AND (u.data_chiusura IS NULL OR u.data_chiusura >= ?)
+      ORDER BY u.id ASC
+      `,
+      [session.id_condominio, end, start]
+    );
+
+    if (!utenzeRaw.length) {
+      throw new Error("No active utenze");
     }
 
-    if (!byUnit.has(groupKey)) byUnit.set(groupKey, []);
-    byUnit.get(groupKey).push(u);
-  }
+    const utenze = utenzeRaw.map((u) => ({
+      ...u,
+      Isolato: pick(u, "Isolato", "isolato") ?? "",
+      Scala: pick(u, "Scala", "scala") ?? "",
+      Interno: pick(u, "Interno", "interno") ?? "",
+      tipo: pick(u, "tipo", "Tipo") ?? "",
+      nucleo: pick(u, "nucleo", "Nucleo") ?? 1,
+      nuae: pick(u, "nuae", "Nuae") ?? 1,
+    }));
 
-  for (const [key, units] of Array.from(byUnit.entries())) {
-    if (!key.startsWith("__single_") && units.length <= 1) {
-      const u = units[0];
-      byUnit.delete(key);
-      byUnit.set(`__single_${u.id}`, [u]);
+    // ---------- Load readings ----------
+    const ids = utenze.map((u) => u.id);
+    const inList = ids.map(() => "?").join(",");
+
+    const [righeAtt] = await conn.query(
+      `
+      SELECT id_utenza, valore_lettura, stato_lettura
+      FROM letture_righe
+      WHERE id_sessione = ?
+        AND id_utenza IN (${inList})
+      `,
+      [session.id_periodo_attuale, ...ids]
+    );
+
+    const [righePrec] = await conn.query(
+      `
+      SELECT id_utenza, valore_lettura, stato_lettura
+      FROM letture_righe
+      WHERE id_sessione = ?
+        AND id_utenza IN (${inList})
+      `,
+      [session.id_periodo_precedente, ...ids]
+    );
+
+    const mapAtt = new Map(righeAtt.map((r) => [r.id_utenza, r]));
+    const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
+
+    // ---------- Condo NUAEs for QF distribution ----------
+    const [[condo]] = await conn.query(
+      `SELECT nuae FROM condomini_v2 WHERE id = ? LIMIT 1`,
+      [session.id_condominio]
+    );
+
+    const totNuae = condo?.nuae != null ? Math.max(1, n2(condo.nuae)) : 1;
+    const qfPerNuae = totNuae > 0 ? n2(generale.qfTot) / totNuae : 0;
+
+    // ---------- Clear snapshot ----------
+    await conn.query(`DELETE FROM fatture_acconti_movimenti WHERE id_fattura = ?`, [session.id]);
+    await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
+
+    // ---------- Group by UNIT (billing_group_id for doppio) ----------
+    const byUnit = new Map();
+
+    for (const u of utenze) {
+      const isDoppio = String(u.Doppio_Contatore).toUpperCase() === "SI";
+
+      if (!isDoppio) {
+        byUnit.set(`__single_${u.id}`, [u]);
+        continue;
+      }
+
+      const groupKey = u.billing_group_id;
+
+      if (!groupKey) {
+        byUnit.set(`__single_${u.id}`, [u]);
+        continue;
+      }
+
+      if (!byUnit.has(groupKey)) byUnit.set(groupKey, []);
+      byUnit.get(groupKey).push(u);
     }
-  }
 
-  // Stable ordering (guard localeCompare)
-  const unitKeys = Array.from(byUnit.keys()).sort((a, b) => {
-    const groupA = byUnit.get(a) || [];
-    const groupB = byUnit.get(b) || [];
-    const firstA = groupA[0];
-    const firstB = groupB[0];
-
-    const internoA = String(firstA?.Interno ?? "");
-    const internoB = String(firstB?.Interno ?? "");
-
-    const numA = Number(internoA);
-    const numB = Number(internoB);
-
-    if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-
-    return internoA.localeCompare(internoB);
-  });
-
-  const rows = [];
-  let totaleOneri = 0;
-
-  // -------------------------------------------------------------------
-  // PASS 1: build base rows (NO legacy acconto distribution here yet)
-  // We compute base amounts on NORMAL consumption only.
-  // Acconto will be allocated later (legacy add_Acconti).
-  // -------------------------------------------------------------------
-
-   
-  for (const key of unitKeys) {
- 
-    const group = byUnit.get(key);
-    group.sort((a, b) => {
-      const ai = String(a.Interno ?? "");
-      const bi = String(b.Interno ?? "");
-      const ap = isPureNumericInterno(ai);
-      const bp = isPureNumericInterno(bi);
-      if (ap !== bp) return ap ? -1 : 1;
-      return ai.localeCompare(bi);
-    });
-
-    const first = group[0];
-    const isMulti = group.length > 1;
-
-    // Sum readings across group
-    let sumAtt = 0;
-    let sumPrec = 0;
-    let haveAny = false;
-     
-    const ra0 = mapAtt.get(first.id);
-    const rp0 = mapPrec.get(first.id);
-    const statoAtt = ra0?.stato_lettura ?? null;
-    const statoPrec = rp0?.stato_lettura ?? null;
-
-    for (const gx of group) {
-      const ra = mapAtt.get(gx.id);
-      const rp = mapPrec.get(gx.id);
-      const a = ra?.valore_lettura ?? null;
-      const p = rp?.valore_lettura ?? null;
-
-      if (a !== null && p !== null) {
-        haveAny = true;
-        sumAtt += n2(a);
-        sumPrec += n2(p);
+    for (const [key, units] of Array.from(byUnit.entries())) {
+      if (!key.startsWith("__single_") && units.length <= 1) {
+        const u = units[0];
+        byUnit.delete(key);
+        byUnit.set(`__single_${u.id}`, [u]);
       }
     }
 
-    const lettAtt = haveAny ? sumAtt : (ra0?.valore_lettura ?? null);
-    const lettPrec = haveAny ? sumPrec : (rp0?.valore_lettura ?? null);
+    const unitKeys = Array.from(byUnit.keys()).sort((a, b) => {
+      const groupA = byUnit.get(a) || [];
+      const groupB = byUnit.get(b) || [];
+      const firstA = groupA[0];
+      const firstB = groupB[0];
 
-    let consumoNorm = null;
-    if (lettAtt !== null && lettPrec !== null) {
-      const d = n2(lettAtt) - n2(lettPrec);
-      if (d < 0) throw new Error(`Negative consumption for unit ${key} (interno ${first.Interno})`);
-      consumoNorm = d;
-    }
+      const internoA = String(firstA?.Interno ?? "");
+      const internoB = String(firstB?.Interno ?? "");
 
-    let flatTipo = "NORMAL"; // upper(pick(first, "tipo", "Tipo"), "NORMAL");
-    if(group[0].Tipo == "SPECIAL") {
-      consumoNorm = 0;
-      flatTipo = "SPECIAL";
-    }
+      const numA = Number(internoA);
+      const numB = Number(internoB);
 
+      if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+      return internoA.localeCompare(internoB);
+    });
 
-    // IMPORTANT: legacy-style acconto distribution uses consumo_normale as MC base;
-    // so here consumo_totale is still NORMAL (no automatic giorniAcc add-on).
-    const consumoTot = consumoNorm;
+    const rows = [];
+    let totaleOneri = 0;
 
-    const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
-    const tariff = await loadTariffeABC(conn, { anno, categoriaCodice, tfCode });
+    // -------------------------------------------------------------------
+    // PASS 1: build base rows
+    // -------------------------------------------------------------------
+    for (const key of unitKeys) {
+      const group = byUnit.get(key);
 
-    const nucleo = Math.max(1, n2(first.nucleo));
-    const nuaeU = Math.max(1, n2(first.nuae));
-     
-    let impAcq = 0;
-    if (consumoNorm !== null) {
-      const impNorm = allocateAcquedotto({
-        consumo: consumoNorm,
-        scaglioni: tariff.scaglioni,
-        nucleo,
-        nuae: nuaeU,
-        giorniRef: Math.max(1, n2(session.giorni_interni)), // keep your base behavior
-        yearDays,
+      group.sort((a, b) => {
+        const ai = String(a.Interno ?? "");
+        const bi = String(b.Interno ?? "");
+        const ap = isPureNumericInterno(ai);
+        const bp = isPureNumericInterno(bi);
+        if (ap !== bp) return ap ? -1 : 1;
+        return ai.localeCompare(bi);
       });
 
-      impAcq = round2(impNorm);
-    }
+      const first = group[0];
+      const isMulti = group.length > 1;
 
-    const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
-    const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
-    const impQf = flatTipo == "SPECIAL" ? 0 : round2(qfPerNuae * nuaeU);
-    
-    const impOneri = isMulti
-      ? round2(n2(session.oneri_doppio_snapshot))
-      : round2(n2(session.oneri_snapshot));
+      let sumAtt = 0;
+      let sumPrec = 0;
+      let haveAny = false;
 
-    totaleOneri += impOneri;
+      const ra0 = mapAtt.get(first.id);
+      const rp0 = mapPrec.get(first.id);
+      const statoAtt = ra0?.stato_lettura ?? null;
+      const statoPrec = rp0?.stato_lettura ?? null;
 
-    const baseIva = round2(impAcq + impFog + impDep + impQf);
-    const impIva = round2(baseIva * 0.10);
+      for (const gx of group) {
+        const ra = mapAtt.get(gx.id);
+        const rp = mapPrec.get(gx.id);
+        const a = ra?.valore_lettura ?? null;
+        const p = rp?.valore_lettura ?? null;
 
-    const baseTot = round2(impAcq + impFog + impDep + impQf + impOneri + impIva);
-    rows.push({
-      id_utenza: first.id,
-      id_user: first.id_user,
+        if (a !== null && p !== null) {
+          haveAny = true;
+          sumAtt += n2(a);
+          sumPrec += n2(p);
+        }
+      }
 
-      lettura_precedente: rp0?.valore_lettura,
-      stato_precedente: statoPrec,
-      lettura_attuale: ra0?.valore_lettura,
-      stato_attuale: statoAtt,
+      const lettAtt = haveAny ? sumAtt : (ra0?.valore_lettura ?? null);
+      const lettPrec = haveAny ? sumPrec : (rp0?.valore_lettura ?? null);
 
-      consumo_normale: consumoNorm,
-      consumo_acconto: 0,                // filled in PASS 2
-      consumo_totale: consumoNorm,       // legacy keeps MC acconto separate
+      let consumoNorm = null;
+      if (lettAtt !== null && lettPrec !== null) {
+        const d = n2(lettAtt) - n2(lettPrec);
+        if (d < 0) {
+          throw new Error(`Negative consumption for unit ${key} (interno ${first.Interno})`);
+        }
+        consumoNorm = d;
+      }
 
-      // base amounts
-      imp_acquedotto: impAcq,
-      imp_fognatura: impFog,
-      imp_depurazione: impDep,
-      imp_qf: impQf,
-      imp_oneri: impOneri,
-      imp_iva: impIva,
+      let flatTipo = "NORMAL";
+      if (upper(group[0].Tipo, "") === "SPECIAL") {
+        consumoNorm = 0;
+        flatTipo = "SPECIAL";
+      }
 
-      // acconto buckets (PASS 2)
-      imp_acconto: 0,
-      depfog_acconto: 0,
-      acconto: 0,
-      storno_acconto: 0,
+      const consumoTot = consumoNorm;
 
-      base_totale: baseTot,
-      conguaglio: 0,
-      imp_arr: 0,
-      totale: baseTot,
+      const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
+      const tariff = await loadTariffeABC(conn, { anno, categoriaCodice, tfCode });
 
-      tfEligible: !isSpecial(first) && consumoTot !== null && n2(consumoTot) > 0,
-      _unitKey: key,
-      _isPrimary: true,
-    });
+      const nucleo = Math.max(1, n2(first.nucleo));
+      const nuaeU = Math.max(1, n2(first.nuae));
 
-    // Secondary meters show as zero rows (legacy “all zero” line)
-    if (isMulti) {
-      for (let k = 1; k < group.length; k++) {
-        const gk = group[k];
-        const rak = mapAtt.get(gk.id);
-        const rpk = mapPrec.get(gk.id);
-
-        rows.push({
-          id_utenza: gk.id,
-          id_user: gk.id_user,
-
-          lettura_precedente: rpk?.valore_lettura ?? null,
-          stato_precedente: rpk?.stato_lettura ?? null,
-          lettura_attuale: rak?.valore_lettura ?? null,
-          stato_attuale: rak?.stato_lettura ?? null,
-
-          consumo_normale: 0,
-          consumo_acconto: 0,
-          consumo_totale: 0,
-
-          imp_acquedotto: 0,
-          imp_fognatura: 0,
-          imp_depurazione: 0,
-          imp_qf: 0,
-          imp_oneri: 0,
-          imp_iva: 0,
-
-          imp_acconto: 0,
-          depfog_acconto: 0,
-          acconto: 0,
-          storno_acconto: 0,
-
-          base_totale: 0,
-          conguaglio: 0,
-          imp_arr: 0,
-          totale: 0,
-
-          tfEligible: false,
-          _unitKey: key,
-          _isPrimary: false,
+      let impAcq = 0;
+      if (consumoNorm !== null) {
+        const impNorm = allocateAcquedotto({
+          consumo: consumoNorm,
+          scaglioni: tariff.scaglioni,
+          nucleo,
+          nuae: nuaeU,
+          giorniRef: Math.max(1, n2(session.giorni_interni)),
+          yearDays,
         });
+
+        impAcq = round2(impNorm);
+      }
+
+      const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
+      const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
+      const impQf = flatTipo === "SPECIAL" ? 0 : round2(qfPerNuae * nuaeU);
+
+      const impOneri = isMulti
+        ? round2(n2(session.oneri_doppio_snapshot))
+        : round2(n2(session.oneri_snapshot));
+
+      totaleOneri += impOneri;
+
+      const baseIva = round2(impAcq + impFog + impDep + impQf);
+      const impIva = round2(baseIva * 0.10);
+      const baseTot = round2(impAcq + impFog + impDep + impQf + impOneri + impIva);
+
+      rows.push({
+        id_utenza: first.id,
+        id_user: first.id_user,
+        id_riga_fattura: null,
+
+        lettura_precedente: rp0?.valore_lettura ?? null,
+        stato_precedente: statoPrec,
+        lettura_attuale: ra0?.valore_lettura ?? null,
+        stato_attuale: statoAtt,
+
+        consumo_normale: consumoNorm,
+        consumo_acconto: 0,
+        consumo_totale: consumoNorm,
+
+        imp_acquedotto: impAcq,
+        imp_fognatura: impFog,
+        imp_depurazione: impDep,
+        imp_qf: impQf,
+        imp_oneri: impOneri,
+        imp_iva: impIva,
+
+        imp_acconto: 0,
+        depfog_acconto: 0,
+        acconto: 0,
+
+        storno_calcolato: 0,   // current invoice storno from mcStorno
+        storno_pregresso: 0,   // old ledger credit consumed
+        storno_totale: 0,      // persisted printable storno
+
+        base_totale: baseTot,
+        conguaglio: 0,
+        imp_arr: 0,
+        totale: baseTot,
+
+        tfEligible: !isSpecial(first) && consumoTot !== null && n2(consumoTot) > 0,
+        _unitKey: key,
+        _isPrimary: true,
+      });
+
+      if (isMulti) {
+        for (let k = 1; k < group.length; k++) {
+          const gk = group[k];
+          const rak = mapAtt.get(gk.id);
+          const rpk = mapPrec.get(gk.id);
+
+          rows.push({
+            id_utenza: gk.id,
+            id_user: gk.id_user,
+            id_riga_fattura: null,
+
+            lettura_precedente: rpk?.valore_lettura ?? null,
+            stato_precedente: rpk?.stato_lettura ?? null,
+            lettura_attuale: rak?.valore_lettura ?? null,
+            stato_attuale: rak?.stato_lettura ?? null,
+
+            consumo_normale: 0,
+            consumo_acconto: 0,
+            consumo_totale: 0,
+
+            imp_acquedotto: 0,
+            imp_fognatura: 0,
+            imp_depurazione: 0,
+            imp_qf: 0,
+            imp_oneri: 0,
+            imp_iva: 0,
+
+            imp_acconto: 0,
+            depfog_acconto: 0,
+            acconto: 0,
+
+            storno_calcolato: 0,
+            storno_pregresso: 0,
+            storno_totale: 0,
+
+            base_totale: 0,
+            conguaglio: 0,
+            imp_arr: 0,
+            totale: 0,
+
+            tfEligible: false,
+            _unitKey: key,
+            _isPrimary: false,
+          });
+        }
       }
     }
-  }
 
-  generale.totaleOneri = round2(totaleOneri);
+    generale.totaleOneri = round2(totaleOneri);
 
-  // -------------------------------------------------------------------
-  // PASS 2: LEGACY ACCONTO DISTRIBUTION (add_Acconti)
-  // - € based on (base_totale - oneri) share
-  // - MC based on consumo_normale share
-  // - applies only to primaries
-  // -------------------------------------------------------------------
-  const primaries = rows.filter((r) => r._isPrimary);
+    // -------------------------------------------------------------------
+    // PASS 2: distribute current invoice acconto + current invoice storno
+    // -------------------------------------------------------------------
+    const primaries = rows.filter((r) => r._isPrimary);
 
-  const totAccEuro = round2(n2(generale.totAcc ?? 0));                 // € pot
-  const totConsAccMc = round2(n2(generale.consumoAcconto ?? 0));       // MC pot
-  
- 
-  const totImpConsAcc = round2(n2(generale.impConsAcc ?? 0));
-  const totDepFogAcc = round2(n2(generale.depFogAcc ?? 0));
+    const totAccEuro = round2(n2(generale.totAcc ?? 0));
+    const totConsAccMc = round3(n2(generale.consumoAcconto ?? 0));
+    const totImpConsAcc = round2(n2(generale.impConsAcc ?? 0));
+    const totDepFogAcc = round2(n2(generale.depFogAcc ?? 0));
 
-  if (totAccEuro > 0 || totConsAccMc > 0) {
-    const totMoneyNoOneri = primaries.reduce((s, r) => {
-      const v = round2(n2(r.base_totale) - n2(r.imp_oneri));
-      return s + Math.max(0, v);
-    }, 0);
+    // invoice-facing storno should be NEGATIVE
+    const totStornoCalcolato = round2(n2(eurStorno ?? 0));
 
-    const totMcNorm = primaries.reduce((s, r) => s + Math.max(0, n2(r.consumo_normale)), 0);
+    const moneyWeightFn = (r) => Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
+    const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
 
-    console.log(`Total for accconto distribution: totMoneyNoOneri=${totMoneyNoOneri.toFixed(2)}, totMcNorm=${totMcNorm.toFixed(2)}`);
+    const accEuroShares = allocateByWeight(totAccEuro, primaries, moneyWeightFn, 2);
+    const impConsAccShares = allocateByWeight(
+      totImpConsAcc > 0 ? totImpConsAcc : totAccEuro,
+      primaries,
+      moneyWeightFn,
+      2
+    );
+    const depFogAccShares = allocateByWeight(totDepFogAcc, primaries, moneyWeightFn, 2);
+    const accMcShares = allocateByWeight(totConsAccMc, primaries, mcWeightFn, 3);
+    const stornoCalcShares = allocateByWeight(totStornoCalcolato, primaries, moneyWeightFn, 2);
 
-    let distributedEuro = 0;
- 
-    for (const r of primaries) {
-      const moneyNoOneri = Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
-      const pctMoney = totMoneyNoOneri > 0 ? moneyNoOneri / totMoneyNoOneri : 0;
+    for (let i = 0; i < primaries.length; i++) {
+      const r = primaries[i];
 
-      const consNorm = Math.max(0, n2(r.consumo_normale));
-      const pctMc = totMcNorm > 0 ? consNorm / totMcNorm : 0;
-      
-      console.log(`Unit ${r._unitKey}: moneyNoOneri=${moneyNoOneri.toFixed(2)}, pctMoney=${pctMoney.toFixed(4)}, consNorm=${consNorm.toFixed(2)}, pctMc=${pctMc.toFixed(4)}`);
+      r.acconto = round2(accEuroShares[i] || 0);
+      r.imp_acconto = round2(impConsAccShares[i] || 0);
+      r.depfog_acconto = round2(depFogAccShares[i] || 0);
+      r.consumo_acconto = round3(accMcShares[i] || 0);
 
-      // € acconto
-      const accEuro = round2(pctMoney * totAccEuro);
- 
+      // must be negative if it reduces the invoice
+      r.storno_calcolato = round2(stornoCalcShares[i] || 0);
 
-      // split into buckets if available (keeps printing possible)
-      const impConsAccU = totImpConsAcc > 0 ? round2(pctMoney * totImpConsAcc) : round2(accEuro);
-      const depFogAccU = totDepFogAcc > 0 ? round2(pctMoney * totDepFogAcc) : 0;
-
-      // MC acconto
-      const accMc = round2(pctMc * totConsAccMc);
-
-      r.acconto = accEuro;
-      r.imp_acconto = impConsAccU;
-      r.depfog_acconto = depFogAccU;
-      r.consumo_acconto = accMc;
-
-      console.log(`Allocating accconto for unit ${r._unitKey}: pctMoney=${pctMoney.toFixed(4)}, pctMc=${pctMc.toFixed(4)}, accEuro=${accEuro.toFixed(2)}, accMc=${accMc.toFixed(2)}`);
-     
-      // legacy: add € acconto into total row BEFORE TF/rounding
-      r.base_totale = round2(n2(r.base_totale) + impConsAccU);
-
-      distributedEuro += accEuro;
-     
-      
+      // acconto increases total, storno_calcolato already has sign
+      r.base_totale = round2(
+        n2(r.base_totale) +
+        n2(r.imp_acconto) +
+        n2(r.depfog_acconto) +
+        n2(r.storno_calcolato)
+      );
     }
 
     // -------------------------------------------------------------------
-    // PASS 2B: APPLY OPEN STORNO FROM LEDGER
-    // - consumes old acconto credit FIFO
-    // - capped by current water-related charges only
-    // - reduces current base_totale
+    // PASS 2B: apply old open acconto credits from ledger (FIFO)
+    // IMPORTANT:
+    // applyOpenAccontoToRow(conn, row) MUST:
+    //   - set row.storno_pregresso as NEGATIVE invoice-facing value
+    //   - set row._storno_movements = [...]
+    //   - add row.storno_pregresso to row.base_totale
     // -------------------------------------------------------------------
-
     for (const r of primaries) {
       await applyOpenAccontoToRow(conn, r);
     }
 
-    // deficit fix (legacy): spread remaining cents equally
-    const deficitEuro = round2(totAccEuro - distributedEuro);
-    if (deficitEuro !== 0 && primaries.length > 0) {
-      const addEach = round2(deficitEuro / primaries.length);
-      for (const r of primaries) {
-        r.acconto = round2(n2(r.acconto) + addEach);
-        r.imp_acconto = round2(n2(r.imp_acconto) + addEach); // simplest: keep in imp bucket
-        r.base_totale = round2(n2(r.base_totale) + addEach);
-      }
+    // finalize printable storno field
+    for (const r of rows) {
+      r.storno_totale = round2(n2(r.storno_calcolato) + n2(r.storno_pregresso));
     }
-  }
 
-  // -------------------------------------------------------------------
-  // TF base (TF applied on TF1 base, not stacked)
-  // -------------------------------------------------------------------
-  const baseSum = round2(rows.reduce((s, r) => s + n2(r.base_totale), 0));
-  const diff = round2(n2(generale.totale + totaleOneri) - baseSum);
+    // -------------------------------------------------------------------
+    // TF base (TF applied on TF1 base, not stacked)
+    // -------------------------------------------------------------------
+    const baseSum = round2(rows.reduce((s, r) => s + n2(r.base_totale), 0));
+    const diff = round2(n2(generale.totale + totaleOneri) - baseSum);
 
-  applyTfToRows({ tfCode, diff, rows });
+    applyTfToRows({ tfCode, diff, rows });
 
-  // Apply conguaglio + rounding adjustment (arr)
-  for (const r of rows) {
-    const beforeRound = round2(n2(r.base_totale) + n2(r.conguaglio));
-    const rounded = roundToNearestTenth(beforeRound);
-    const arr = round2(rounded - beforeRound);
-    r.imp_arr = arr;
-    r.totale = round2(beforeRound + arr);
- }
+    // Apply conguaglio + rounding adjustment
+    for (const r of rows) {
+      const beforeRound = round2(n2(r.base_totale) + n2(r.conguaglio));
+      const rounded = roundToNearestTenth(beforeRound);
+      const arr = round2(rounded - beforeRound);
 
+      r.imp_arr = arr;
+      r.totale = round2(beforeRound + arr);
+    }
 
-   
-  // Persist
-  // NOTE: If your fatture_righe table has the acconto columns, keep them in INSERT.
-  // If not yet added, remove them from both column list and values.
-  for (const r of rows) {
-    await conn.query(
-      `
-      INSERT INTO fatture_righe
-      (id, id_fattura, id_utenza,
-       lettura_precedente, stato_precedente,
-       lettura_attuale, stato_attuale,
-       consumo_normale, consumo_acconto, consumo_totale,
-       imp_acquedotto, imp_fognatura, imp_depurazione,
-       imp_qf, imp_oneri, imp_iva,
-       conguaglio, imp_arr,
-       totale,
-       imp_acconto, depfog_acconto, acconto, storno_acconto)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        uuid(),
-        session.id,
-        r.id_utenza,
+    // ------------------------------------------------------------
+    // Persist fatture_righe
+    // ------------------------------------------------------------
+    for (const r of rows) {
+      const rowId = uuid();
+      r.id_riga_fattura = rowId;
 
-        r.lettura_precedente,
-        r.stato_precedente,
-        r.lettura_attuale,
-        r.stato_attuale,
+      await conn.query(
+        `
+        INSERT INTO fatture_righe
+        (id, id_fattura, id_utenza,
+         lettura_precedente, stato_precedente,
+         lettura_attuale, stato_attuale,
+         consumo_normale, consumo_acconto, consumo_totale,
+         imp_acquedotto, imp_fognatura, imp_depurazione,
+         imp_qf, imp_oneri, imp_iva,
+         conguaglio, imp_arr,
+         totale,
+         imp_acconto, depfog_acconto, acconto, storno_acconto)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          rowId,
+          session.id,
+          r.id_utenza,
 
-        r.consumo_normale,
-        r.consumo_acconto,
-        r.consumo_totale,
+          r.lettura_precedente,
+          r.stato_precedente,
+          r.lettura_attuale,
+          r.stato_attuale,
 
-        r.imp_acquedotto,
-        r.imp_fognatura,
-        r.imp_depurazione,
+          r.consumo_normale,
+          r.consumo_acconto,
+          r.consumo_totale,
 
-        r.imp_qf,
-        r.imp_oneri,
-        r.imp_iva,
+          r.imp_acquedotto,
+          r.imp_fognatura,
+          r.imp_depurazione,
 
-        r.conguaglio,
-        r.imp_arr,
+          r.imp_qf,
+          r.imp_oneri,
+          r.imp_iva,
 
-        r.totale,
+          r.conguaglio,
+          r.imp_arr,
 
-        r.imp_acconto,
-        r.depfog_acconto,
-        r.acconto,
-        r.storno_acconto,
-      ]
-    );
+          r.totale,
 
+          r.imp_acconto,
+          r.depfog_acconto,
+          r.acconto,
+          r.storno_totale,
+        ]
+      );
+    }
 
-  }
-for (const r of rows) {
-  // A) current invoice generates new acconto credit
-  if (n2(r.acconto) > 0 || n2(r.consumo_acconto) > 0) {
-    await conn.query(
-      `
-      INSERT INTO fatture_acconti_movimenti
-      (id, id_utenza, id_fattura, id_riga_fattura,
-       tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
-      VALUES (?, ?, ?, ?, 'ACCONTO_CARICATO', ?, ?, NULL, ?)
-      `,
-      [
-        uuid(),
-        r.id_utenza,
-        session.id,
-        r.id_riga_fattura,
-        round2(n2(r.acconto)),
-        round3(n2(r.consumo_acconto)),
-        'Acconto generato dalla fattura corrente',
-      ]
-    );
-  }
-
-    // B) current invoice consumes old open acconto credit
-    if (Array.isArray(r._storno_movements)) {
-      for (const sm of r._storno_movements) {
-        if (n2(sm.importo_euro) <= 0 && n2(sm.importo_mc) <= 0) continue;
-
+    // ------------------------------------------------------------
+    // Persist fatture_acconti_movimenti
+    // ------------------------------------------------------------
+    for (const r of rows) {
+      // A) current invoice generates new acconto credit
+      if (n2(r.acconto) > 0 || n2(r.consumo_acconto) > 0) {
         await conn.query(
           `
           INSERT INTO fatture_acconti_movimenti
           (id, id_utenza, id_fattura, id_riga_fattura,
-          tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
-          VALUES (?, ?, ?, ?, 'STORNO_APPLICATO', ?, ?, ?, ?)
+           tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
+          VALUES (?, ?, ?, ?, 'ACCONTO_CARICATO', ?, ?, NULL, ?)
           `,
           [
             uuid(),
             r.id_utenza,
             session.id,
             r.id_riga_fattura,
-            round2(n2(sm.importo_euro)),
-            round3(n2(sm.importo_mc)),
-            sm.source_movimento_id,
-            'Storno applicato dalla fattura corrente',
+            round2(n2(r.acconto)),
+            round3(n2(r.consumo_acconto)),
+            'Acconto generato dalla fattura corrente',
           ]
         );
       }
+
+      // B) current invoice consumes old open acconto credit
+      if (Array.isArray(r._storno_movements)) {
+        for (const sm of r._storno_movements) {
+          if (n2(sm.importo_euro) <= 0 && n2(sm.importo_mc) <= 0) continue;
+
+          await conn.query(
+            `
+            INSERT INTO fatture_acconti_movimenti
+            (id, id_utenza, id_fattura, id_riga_fattura,
+             tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
+            VALUES (?, ?, ?, ?, 'STORNO_APPLICATO', ?, ?, ?, ?)
+            `,
+            [
+              uuid(),
+              r.id_utenza,
+              session.id,
+              r.id_riga_fattura,
+              round2(n2(sm.importo_euro)),
+              round3(n2(sm.importo_mc)),
+              sm.source_movimento_id,
+              'Storno applicato dalla fattura corrente',
+            ]
+          );
+        }
+      }
     }
-  }
 
-
-  // Totals
-  const totAcq = round2(rows.reduce((s, r) => s + n2(r.imp_acquedotto), 0));
-  const totConsAcc = round2(rows.reduce((s, r) => s + n2(r.consumo_acconto), 0));
-  const totFog = round2(rows.reduce((s, r) => s + n2(r.imp_fognatura), 0));
-  const totDep = round2(rows.reduce((s, r) => s + n2(r.imp_depurazione), 0));
-  const totQf = round2(rows.reduce((s, r) => s + n2(r.imp_qf), 0));
-  const totOneri = round2(rows.reduce((s, r) => s + n2(r.imp_oneri), 0));
-  const totIva = round2(rows.reduce((s, r) => s + n2(r.imp_iva), 0));
-  const sumUtenti = round2(rows.reduce((s, r) => s + n2(r.totale), 0));
-  const totConguaglio = round2(rows.reduce((s, r) => s + n2(r.conguaglio), 0));
-  const totArr = round2(rows.reduce((s, r) => s + n2(r.imp_arr), 0));
-
-  
-  return {
-    totAcq,
-    totConsAcc,
-    totFog,
-    totDep,
-    totQf,
-    totOneri,
-    totIva,
-    sumUtenti,
-    totConguaglio,
-    totArr,
-    baseSum,
-    diffApplied: diff,
-    tfCode: upper(tfCode, "TF1"),
-  };
-}
-
+    // Totals
+    const totAcq = round2(rows.reduce((s, r) => s + n2(r.imp_acquedotto), 0));
+    const totConsAcc = round3(rows.reduce((s, r) => s + n2(r.consumo_acconto), 0));
+    const totStorno = round2(rows.reduce((s, r) => s + n2(r.storno_totale), 0));
+    const totFog = round2(rows.reduce((s, r) => s + n2(r.imp_fognatura), 0));
+    const totDep = round2(rows.reduce((s, r) => s + n2(r.imp_depurazione), 0));
+    const totQf = round2(rows.reduce((s, r) => s + n2(r.imp_qf), 0));
+    const totOneri = round2(rows.reduce((s, r) => s + n2(r.imp_oneri), 0));
+    const totIva = round2(rows.reduce((s, r) => s + n2(r.imp_iva), 0));
+    const sumUtenti = round2(rows.reduce((s, r) => s + n2(r.totale), 0));
+    const totConguaglio = round2(rows.reduce((s, r) => s + n2(r.conguaglio), 0));
+    const totArr = round2(rows.reduce((s, r) => s + n2(r.imp_arr), 0));
  
-
-exports.calculateSession = async function ({ sessionId, tfCode }) {
+    return {
+      totAcq,
+      totConsAcc,
+      totStorno,
+      totFog,
+      totDep,
+      totQf,
+      totOneri,
+      totIva,
+      sumUtenti,
+      totConguaglio,
+      totArr,
+      baseSum,
+      diffApplied: diff,
+      tfCode: upper(tfCode, "TF1"),
+    };
+  } catch (err) {
+    throw err;
+  }
+}
+exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPrec = null, eurStorno = 0, parsedQF = 0 }) {
 
   assertUUID(sessionId, "sessionId");
 
@@ -1921,29 +1962,15 @@ exports.calculateSession = async function ({ sessionId, tfCode }) {
     if (session.stato === "CONFERMATA") {
       throw new Error("Session is confirmed and cannot be recalculated");
     }
-
-    const generaleResult = await calculateGenerale(conn, sessionId);
-    /*
-      caps: {
-        con_agev: round2(con_agev),
-        co_fbase: round2(co_fbase),
-        fascia: round2(fascia),
-      },
-      impCons: round2(impCons),
-      depFog: round2(depFog),
-      qfTot: round2(qfTot),
-      qfPerUtenza: round2(qfPerUtenza),
-      varie: round2(varieTot),
-      iva: round2(iva),
-      totale: round2(totale),
-    
-    */ 
+    const generaleResult = await calculateGenerale(conn, sessionId, annoAtt, annoPrec, eurStorno, parsedQF);
+ 
     const g = generaleResult.generale;
+    console.log("Generale calculation result:", generaleResult);
     session.consumoNorm = generaleResult.meta.consumoNorm;
-    const interniTotals = await calculateInterni(conn, session, g, tfCode);
 
+    const interniTotals = await calculateInterni(conn, session, g, tfCode, annoAtt, annoPrec, eurStorno);
     
-      
+    //console.log(interniTotals);
     await conn.query(
       `
       UPDATE fatture_sessioni

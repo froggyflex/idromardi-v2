@@ -55,7 +55,12 @@ exports.updateSessionParams = async (req, res) => {
 exports.calculateSession = async (req, res) => {
   try {
    
-    const result = await service.calculateSession({ sessionId: req.params.id, tfCode: req.body?.tfCode });
+    const result = await service.calculateSession({ sessionId: req.params.id, 
+      tfCode: req.body?.tfCode, 
+      annoAtt: req.body?.annoTariffa,
+      eurStorno: req.body?.eurStorno,
+      parsedQF: req.body?.parsedQF,
+     });
         
     res.json(result);
   } catch (err) {
