@@ -20,7 +20,20 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage });
+// File filter to accept PDFs only for invoice imports
+const pdfFileFilter = (req, file, cb) => {
+  if (file.mimetype === "application/pdf") {
+    cb(null, true);
+  } else {
+    cb(new Error("Solo file PDF sono permessi per l'importazione fatture"), false);
+  }
+};
+
+const upload = multer({ 
+  storage: storage,
+  fileFilter: pdfFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit for PDFs
+});
 
 router.post("/sessioni", controller.createOrLoadSession);
 router.get( "/condomini/:condominioId/fatture/:id", controller.getSessionDetail);

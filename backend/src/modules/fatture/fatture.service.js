@@ -1,5 +1,9 @@
 const db = require("../../config/db");
 const { v4: uuid } = require("uuid");
+const axios = require("axios");
+
+/* ---------------- External PDF Parser Config ---------------- */
+const PDF_PARSER_API_URL = "https://idromardi-ai-17229082190.europe-west1.run.app/extract/pdf";
 
 /* ---------------- Helpers ---------------- */
 const path = require("path");
@@ -241,19 +245,45 @@ exports.parseImportedDocument = async (id) => {
   }
 
   const filePath = path.join(process.cwd(), "..", "runtime_uploads", "fatture-import", doc[0].stored_filename);
-  const rawText = await fs.readFile(filePath, "utf8");
   
+  // Read PDF file as binary buffer
   let fileBuffer;
   try {
-    fileBuffer = await fs.readFile(filePath, "utf8");
+    fileBuffer = await fs.readFile(filePath);
   } catch (e) {
     const err = new Error("File non trovato sul server");
     err.statusCode = 500;
     throw err;
   }
 
+  // Create FormData to send PDF to external parser API
+  const FormData = require("form-data");
+  const form = new FormData();
+  form.append("file", fileBuffer, {
+    filename: doc[0].original_filename,
+    contentType: "application/pdf",
+  });
+
+  // Call external PDF parsing API
+  let apiResponse;
+  try {
+    apiResponse = await axios.post(PDF_PARSER_API_URL, form, {
+      headers: {
+        ...form.getHeaders(),
+      },
+      timeout: 60000, // 60 seconds timeout for PDF processing
+    });
+  } catch (apiErr) {
+    console.error("PDF Parser API error:", apiErr.message);
+    const err = new Error(
+      apiErr.response?.data?.message || "Errore durante il parsing del PDF con l'API esterna"
+    );
+    err.statusCode = apiErr.response?.status || 500;
+    throw err;
+  }
+
   const parsedPayload = await buildParsedInvoiceFromFile({
-    fileBuffer: JSON.parse(fileBuffer),
+    fileBuffer: apiResponse.data,
     filename: doc[0].original_filename,
     mimeType: doc[0].mime_type,
   });

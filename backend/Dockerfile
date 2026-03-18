@@ -9,7 +9,6 @@ RUN npm ci --only=production
 # Copy source code
 COPY src ./src
 COPY server.js ./
-COPY uploads ./uploads
 
 # Create uploads directories if they don't exist
 RUN mkdir -p uploads/fatture-import
