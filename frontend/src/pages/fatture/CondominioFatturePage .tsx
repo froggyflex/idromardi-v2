@@ -449,6 +449,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setImportedDocs(iRes.data?.items || []);
       loadImportedDocuments();
 
+       
       console.log(sRes.data)
  
 
@@ -1790,221 +1791,216 @@ return (
               </div>
             </div>
           </div>
-          <button
-             onClick={handleExportPdf}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-white"
-          >
-            Stampa Bollette
-          </button>  
-          {/* CONTATORI INTERNI */}
-          <div className="bg-white border rounded-2xl p-6">
-                  <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
+         {selectedImportedId !== null && (
+          <><button
+                      onClick={handleExportPdf}
+                      className="rounded-xl bg-slate-900 px-4 py-2 text-white"
+                    >
+                      Stampa Bollette
+                    </button><div className="bg-white border rounded-2xl p-6">
+                        <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs border border-slate-200">
-                      <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
-                        <tr>
-                          <th className="p-2">ID</th>
-                          <th className="p-2">Utente</th>
-                          <th className="p-2">Isolato</th>
-                          <th className="p-2">Scala</th>
-                          <th className="p-2">Interno</th>
-                          <th className="p-2">Lett Att</th>
-                          <th className="p-2">Lett Prec</th>
-                          <th className="p-2">Stato</th>
-                          <th className="p-2">Consumo</th>
-                          
-                          <th className="p-2">Acq</th>
-                          <th className="p-2">Fog</th>
-                          <th className="p-2">Dep</th>
-                          <th className="p-2">QF</th>
-                          <th className="p-2">Cong.</th>
-                          <th className="p-2">Oneri</th>
-                          <th className="p-2">Oneri <br></br>Pereq.</th>
-                          <th className="p-2">IVA</th>
-                          <th className="p-2">Acconto<br></br>MC/EUR</th>
-                          <th className="p-2">Storno<br></br>EUR</th>
-                          <th className="p-2">Arr</th>
-                          <th className="p-2 font-semibold">Totale</th>
-                        </tr>
-                      </thead>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs border border-slate-200">
+                            <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
+                              <tr>
+                                <th className="p-2">ID</th>
+                                <th className="p-2">Utente</th>
+                                <th className="p-2">Isolato</th>
+                                <th className="p-2">Scala</th>
+                                <th className="p-2">Interno</th>
+                                <th className="p-2">Lett Att</th>
+                                <th className="p-2">Lett Prec</th>
+                                <th className="p-2">Stato</th>
+                                <th className="p-2">Consumo</th>
 
-                      <tbody>
-                        {righe.length === 0 && (
-                          <tr>
-                            <td colSpan={21} className="p-4 text-center text-slate-400">
-                              Nessun dato disponibile
-                            </td>
-                          </tr>
-                        )}
-                        
-                        {   }
-                        {righe.map((r: any, idx: number) => {
-                          const rowKey = r.id ?? idx;
-                          const isExpanded = !!expandedRows[rowKey];
-
-                          const utenzaKey = String(r.utenza?.id ?? "").trim();
-
-                          const tiers = dettaglioByUtenza[utenzaKey] ?? [];
-                           
-                          return (
-                            <Fragment key={rowKey}>
-                              <tr
-                                onClick={() => toggleRow(rowKey)}
-                                className={`border-t cursor-pointer transition-colors ${
-                                  isExpanded
-                                    ? "bg-sky-50"
-                                    : idx % 2 === 0
-                                    ? "bg-white hover:bg-slate-100"
-                                    : "bg-slate-50 hover:bg-slate-100"
-                                }`}
-                              >
-                                <td className="p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
-                                <td className="p-2 text-center">
-                                  {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
-                                </td>
-                                <td className="p-2 text-center">{r.utenza?.Isolato ?? ""}</td>
-                                <td className="p-2 text-center">{r.utenza?.Scala ?? ""}</td>
-                                <td className="p-2 text-center">{r.utenza?.Interno ?? ""}</td>
-                                <td className="p-2 text-center">
-                                  {r.riga?.lettura_attuale ?? r.attuale?.valore_lettura ?? "-"}
-                                </td>
-                                <td className="p-2 text-center">
-                                  {r.riga?.lettura_precedente ?? r.precedente?.valore_lettura ?? "-"}
-                                </td>
-                                <td className="p-2 text-center">
-                                  {r.riga?.stato_attuale ?? r.attuale?.stato_lettura ?? "-"}
-                                </td>
-                                <td className="p-2 text-center">
-                                  {Number(r.riga?.consumo_totale ?? 0).toFixed(0)}
-                                </td>
-                                <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
-                                <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
-                                <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
-                                <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
-                                <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
-                                <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
-                                <td className="p-2 text-center">0</td>
-                                <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
-                                <td className="p-2 text-center">
-                                  {Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc
-                                  <br />
-                                  {Number(r.riga?.imp_acconto ?? 0).toFixed(2)}
-                                </td>
-                                <td className="p-2 text-center">
-                                  {Number(r.riga?.storno_acconto ?? 0).toFixed(2)}
-                                </td>
-                                <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
-                                <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>
+                                <th className="p-2">Acq</th>
+                                <th className="p-2">Fog</th>
+                                <th className="p-2">Dep</th>
+                                <th className="p-2">QF</th>
+                                <th className="p-2">Cong.</th>
+                                <th className="p-2">Oneri</th>
+                                <th className="p-2">Oneri <br></br>Pereq.</th>
+                                <th className="p-2">IVA</th>
+                                <th className="p-2">Acconto<br></br>MC/EUR</th>
+                                <th className="p-2">Storno<br></br>EUR</th>
+                                <th className="p-2">Arr</th>
+                                <th className="p-2 font-semibold">Totale</th>
                               </tr>
+                            </thead>
 
-                              {isExpanded && (
-                                <tr className="border-t bg-sky-50">
-                                  <td colSpan={21} className="p-4">
-                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-1">
-                                      <div className="rounded-lg border border-slate-200 bg-white p-3">
-                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                          Dettaglio Consumi
-                                        </div>
-
-                                        <div className="space-y-1 text-sm text-slate-700">
-                                          {tiers.length === 0 ? (
-                                            <div className="text-slate-400">Nessun dettaglio disponibile</div>
-                                          ) : (
-                                            tiers.map((tier: any, i: number) => {
-                                              const raw = String(tier.label ?? "").trim().toLowerCase();
-
-                                              const labelMap: Record<string, string> = {
-                                                agev: "Agevolata",
-                                                agevolata: "Agevolata",
-                                                "1a": "1ª Fascia",
-                                                base: "Base",
-                                                "2a": "2ª Fascia",
-                                                "3a": "3ª Fascia",
-                                                "1": "1ª Fascia",
-                                                "2": "2ª Fascia",
-                                                "3": "3ª Fascia",
-                                                fascia1: "1ª Fascia",
-                                                fascia2: "2ª Fascia",
-                                                fascia3: "3ª Fascia",
-                                                ecc: "Eccedenza",
-                                                eccedenza: "Eccedenza",
-                                                bonus: "Bonus Idrico",
-                                                bonus_idrico: "Bonus Idrico",
-                                              };
-
-                                              const uiLabel =
-                                                labelMap[raw] || tier.label || `Scaglione ${tier.ordine ?? i + 1}`;
-
-                                              return (
-                                                <div
-                                                  key={`${utenzaKey}-${tier.ordine ?? i}-${raw}`}
-                                                  className="grid grid-cols-3 items-center gap-2 border-b border-slate-100 pb-1"
-                                                >
-                                                  <span className="font-medium">{uiLabel}</span>
-                                                  <span className="text-center">
-                                                    {Number(tier.mc_allocati ?? 0).toFixed(2)} mc
-                                                  </span>
-                                                  <span className="text-right">
-                                                    {Number(tier.importo ?? 0).toFixed(2)} €
-                                                  </span>
-                                                </div>
-                                              );
-                                            })
-                                          )}
-
-                                          <div className="mt-2 border-t pt-2 flex items-center justify-between text-base font-bold text-slate-900">
-                                          
-                                            <span>Totale Consumo</span>
-                                            <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* <div className="rounded-lg border border-slate-200 bg-white p-3">
-                                       
-                                      </div> */}
-                                    </div>
+                            <tbody>
+                              {righe.length === 0 && (
+                                <tr>
+                                  <td colSpan={21} className="p-4 text-center text-slate-400">
+                                    Nessun dato disponibile
                                   </td>
                                 </tr>
                               )}
-                            </Fragment>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot className="bg-slate-200 font-semibold">
-                        <tr>
-                          <td colSpan={8} className="p-2 text-right">
-                            TOTALE
-                          </td>
-                          <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
-                          <td className="p-2 text-center">{totals.acq.toFixed(2)}</td>
-                          <td className="p-2 text-center">{totals.fog.toFixed(2)}</td>
-                          <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
-                          <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
-                          <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
-                          <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
-                          <td className="p-2 text-center">0.00</td>
-                          <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
-                          <td className="p-2 text-center">
-                            {totals.totConsAcc.toFixed(2)}mc
-                            <br />
-                            {totals.acconto.toFixed(2)}
-                          </td>
-                          <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
-                          <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
-                          <td
-                            className={`p-2 text-center font-bold ${
-                              totals.isGreen ? "text-green-600" : "text-red-600"
-                            }`}
-                          >
-                            {totals.totaleInterni.toFixed(2)}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-          </div>
+
+
+                              {righe.map((r: any, idx: number) => {
+                                const rowKey = r.id ?? idx;
+                                const isExpanded = !!expandedRows[rowKey];
+
+                                const utenzaKey = String(r.utenza?.id ?? "").trim();
+
+                                const tiers = dettaglioByUtenza[utenzaKey] ?? [];
+
+                                return (
+                                  <Fragment key={rowKey}>
+                                    <tr
+                                      onClick={() => toggleRow(rowKey)}
+                                      className={`border-t cursor-pointer transition-colors ${isExpanded
+                                          ? "bg-sky-50"
+                                          : idx % 2 === 0
+                                            ? "bg-white hover:bg-slate-100"
+                                            : "bg-slate-50 hover:bg-slate-100"}`}
+                                    >
+                                      <td className="p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
+                                      <td className="p-2 text-center">
+                                        {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                                      </td>
+                                      <td className="p-2 text-center">{r.utenza?.Isolato ?? ""}</td>
+                                      <td className="p-2 text-center">{r.utenza?.Scala ?? ""}</td>
+                                      <td className="p-2 text-center">{r.utenza?.Interno ?? ""}</td>
+                                      <td className="p-2 text-center">
+                                        {r.riga?.lettura_attuale ?? r.attuale?.valore_lettura ?? "-"}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {r.riga?.lettura_precedente ?? r.precedente?.valore_lettura ?? "-"}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {r.riga?.stato_attuale ?? r.attuale?.stato_lettura ?? "-"}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {Number(r.riga?.consumo_totale ?? 0).toFixed(0)}
+                                      </td>
+                                      <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
+                                      <td className="p-2 text-center">0</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
+                                      <td className="p-2 text-center">
+                                        {Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc
+                                        <br />
+                                        {Number(r.riga?.imp_acconto ?? 0).toFixed(2)}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {Number(r.riga?.storno_acconto ?? 0).toFixed(2)}
+                                      </td>
+                                      <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
+                                      <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>
+                                    </tr>
+
+                                    {isExpanded && (
+                                      <tr className="border-t bg-sky-50">
+                                        <td colSpan={21} className="p-4">
+                                          <div className="grid grid-cols-1 gap-4 md:grid-cols-1">
+                                            <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                                Dettaglio Consumi
+                                              </div>
+
+                                              <div className="space-y-1 text-sm text-slate-700">
+                                                {tiers.length === 0 ? (
+                                                  <div className="text-slate-400">Nessun dettaglio disponibile</div>
+                                                ) : (
+                                                  tiers.map((tier: any, i: number) => {
+                                                    const raw = String(tier.label ?? "").trim().toLowerCase();
+
+                                                    const labelMap: Record<string, string> = {
+                                                      agev: "Agevolata",
+                                                      agevolata: "Agevolata",
+                                                      "1a": "1ª Fascia",
+                                                      base: "Base",
+                                                      "2a": "2ª Fascia",
+                                                      "3a": "3ª Fascia",
+                                                      "1": "1ª Fascia",
+                                                      "2": "2ª Fascia",
+                                                      "3": "3ª Fascia",
+                                                      fascia1: "1ª Fascia",
+                                                      fascia2: "2ª Fascia",
+                                                      fascia3: "3ª Fascia",
+                                                      ecc: "Eccedenza",
+                                                      eccedenza: "Eccedenza",
+                                                      bonus: "Bonus Idrico",
+                                                      bonus_idrico: "Bonus Idrico",
+                                                    };
+
+                                                    const uiLabel = labelMap[raw] || tier.label || `Scaglione ${tier.ordine ?? i + 1}`;
+
+                                                    return (
+                                                      <div
+                                                        key={`${utenzaKey}-${tier.ordine ?? i}-${raw}`}
+                                                        className="grid grid-cols-3 items-center gap-2 border-b border-slate-100 pb-1"
+                                                      >
+                                                        <span className="font-medium">{uiLabel}</span>
+                                                        <span className="text-center">
+                                                          {Number(tier.mc_allocati ?? 0).toFixed(2)} mc
+                                                        </span>
+                                                        <span className="text-right">
+                                                          {Number(tier.importo ?? 0).toFixed(2)} €
+                                                        </span>
+                                                      </div>
+                                                    );
+                                                  })
+                                                )}
+
+                                                <div className="mt-2 border-t pt-2 flex items-center justify-between text-base font-bold text-slate-900">
+
+                                                  <span>Totale Consumo</span>
+                                                  <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
+                                                </div>
+                                              </div>
+                                            </div>
+
+                                            {/* <div className="rounded-lg border border-slate-200 bg-white p-3">
+                         
+                        </div> */}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot className="bg-slate-200 font-semibold">
+                              <tr>
+                                <td colSpan={8} className="p-2 text-right">
+                                  TOTALE
+                                </td>
+                                <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
+                                <td className="p-2 text-center">{totals.acq.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.fog.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
+                                <td className="p-2 text-center">0.00</td>
+                                <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
+                                <td className="p-2 text-center">
+                                  {totals.totConsAcc.toFixed(2)}mc
+                                  <br />
+                                  {totals.acconto.toFixed(2)}
+                                </td>
+                                <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
+                                <td
+                                  className={`p-2 text-center font-bold ${totals.isGreen ? "text-green-600" : "text-red-600"}`}
+                                >
+                                  {totals.totaleInterni.toFixed(2)}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div></>
+          )}
 
           </div>
       
