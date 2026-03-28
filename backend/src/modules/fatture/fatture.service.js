@@ -1,10 +1,15 @@
 const db = require("../../config/db");
 const { v4: uuid } = require("uuid");
-
+const axios = require("axios");
+const FormData = require("form-data");
 /* ---------------- Helpers ---------------- */
 const path = require("path");
 const e = require("express");
 const fs = require("fs").promises;
+const fs1 = require("fs");
+const puppeteer = require("puppeteer");
+const { buildRipartizionePdfHtml } = require("./fatture.pdf");
+ 
 // const db = require(... your existing db helper ...)
 
 
@@ -94,7 +99,19 @@ function summarizeTariffeAcquedotto(rows) {
 
   return summary;
 }
+ 
+function summarizeImporto(rows) {
+   
+  let summary = 0;
+  rows.map((r) => (
 
+    summary = summary + r.importo
+
+  ));
+
+   
+  return summary;
+}
 
 function deriveLettureSummary(letture = []) {
   const items = Array.isArray(letture) ? letture : [];
@@ -222,55 +239,149 @@ function deriveValoriFromLetture(letture = []) {
   };
 }
 
+
+exports.exportRipartizionePdf = async ({
+  righe,
+  dettaglioByUtenza,
+  trimestreLabel,
+  dataLettura,
+  logoUrl,
+}) => {
+
+  if (!Array.isArray(righe) || righe.length === 0) {
+    const err = new Error("Nessuna riga disponibile per generare il PDF");
+    err.statusCode = 400;
+    throw err;
+  }
+
+
+  const html = buildRipartizionePdfHtml({
+    righe,
+    dettaglioByUtenza,
+    trimestreLabel: trimestreLabel || "",
+    dataLettura: dataLettura || "",
+    logoUrl: logoUrl || "",
+  });
+
+  let browser;
+
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+
+    await page.setContent(html, {
+      waitUntil: "networkidle0",
+    });
+
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      landscape: true,
+      printBackground: true,
+      margin: {
+        top: "8mm",
+        right: "8mm",
+        bottom: "8mm",
+        left: "8mm",
+      },
+    });
+
+    return pdfBuffer;
+  } catch (error) {
+    console.error("exportRipartizionePdf error:", error);
+    const err = new Error("Errore durante la generazione del PDF");
+    err.statusCode = 500;
+    throw err;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+};
+
 exports.parseImportedDocument = async (id) => {
   const rows = await db.query(
     `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
     [id]
   );
 
-  const doc = rows[0];
- 
+  const doc = rows[0][0];
+   
+
   if (!doc) {
     const err = new Error("Documento importato non trovato");
     err.statusCode = 404;
     throw err;
   }
 
-
-  if (!doc[0].stored_filename) {
+  if (!doc.stored_filename) {
     const err = new Error("Nessun file associato al documento");
     err.statusCode = 400;
     throw err;
   }
 
-  const filePath = path.join(process.cwd(), "..", "runtime_uploads", "fatture-import", doc[0].stored_filename);
-  const rawText = await fs.readFile(filePath, "utf8");
-  
-  let fileBuffer;
-  try {
-    fileBuffer = await fs.readFile(filePath, "utf8");
-  } catch (e) {
+  const filePath = path.join(
+    process.cwd(),
+    "..",
+    "runtime_uploads",
+    "fatture-import",
+    doc.stored_filename
+  );
+
+  if (!fs1.existsSync(filePath)) {
     const err = new Error("File non trovato sul server");
     err.statusCode = 500;
     throw err;
   }
 
-  const parsedPayload = await buildParsedInvoiceFromFile({
-    fileBuffer: JSON.parse(fileBuffer),
-    filename: doc[0].original_filename,
-    mimeType: doc[0].mime_type,
-  });
+  let parsedPayload;
+
+  try {
+    const form = new FormData();
+    form.append("file", fs1.createReadStream(filePath), doc.original_filename || doc.stored_filename);
+
+    const aiResponse = await axios.post(
+      "https://idromardi-ai-17229082190.europe-west1.run.app/extract/pdf",
+      form,
+      {
+        headers: form.getHeaders(),
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
+    );
+
+    parsedPayload = aiResponse?.data?.data || aiResponse?.data;
+
+    if (!parsedPayload || typeof parsedPayload !== "object") {
+      const err = new Error("Risposta parser non valida");
+      err.statusCode = 500;
+      throw err;
+    }
+  } catch (e) {
+    console.error("parseImportedDocument AI error:", e.response?.data || e.message);
+    const err = new Error("Errore durante il parsing del PDF");
+    err.statusCode = 500;
+    throw err;
+  }
+
+  const lettureSummary = deriveLettureSummary(parsedPayload.letture || []);
+  const groupedLetture = groupLettureByTipo(parsedPayload.letture || []);
+  const tariffeSummary = summarizeTariffeAcquedotto(parsedPayload.componente_tariffa_acquedotto || []);
+  const depurazioneSum = summarizeImporto(parsedPayload.componente_tariffa_depurazione);
+  const fognaturaSum   = summarizeImporto(parsedPayload.componente_tariffa_fognatura);
 
 
 
-  const lettureSummary = deriveLettureSummary(parsedPayload.letture);
-  const groupedLetture = groupLettureByTipo(parsedPayload.letture);
-  const tariffeSummary = summarizeTariffeAcquedotto(parsedPayload.componente_tariffa_acquedotto);
-  
-  parsedPayload.letture_summary = lettureSummary|| null;
-  parsedPayload.grouped_letture = groupedLetture  || null;
+  parsedPayload.letture_summary = lettureSummary || null;
+  parsedPayload.grouped_letture = groupedLetture || null;
   parsedPayload.summaryTariffeAcquedotto = tariffeSummary || null;
-  
+  parsedPayload.totale_dep_fog = depurazioneSum + fognaturaSum;
+ 
+
+
   const validation = buildParsedInvoiceValidation(parsedPayload);
 
   const validationStatus =
@@ -280,10 +391,13 @@ exports.parseImportedDocument = async (id) => {
       ? "Attenzione"
       : "Valido";
 
-  
-  
- 
-  
+  const periodi = Array.isArray(parsedPayload?.periodi_fatturazione)
+    ? parsedPayload.periodi_fatturazione
+    : [];
+
+  const firstPeriodo = periodi[0] || null;
+  const lastPeriodo = periodi.length ? periodi[periodi.length - 1] : null;
+
   await db.query(
     `
     UPDATE imported_invoice_documents
@@ -320,10 +434,8 @@ exports.parseImportedDocument = async (id) => {
       parsedPayload?.anagrafica?.indirizzo_fornitura || null,
       parsedPayload?.fornitore_servizi || null,
       parsedPayload?.bill_type || "unknown",
-      toMysqlDate(parsedPayload?.periodi_fatturazione?.[0]?.data_inizio) || null,
-      toMysqlDate(
-        parsedPayload?.periodi_fatturazione?.[parsedPayload.periodi_fatturazione.length - 1]?.data_fine
-      ) || null,
+      toMysqlDate(firstPeriodo?.data_inizio) || null,
+      toMysqlDate(lastPeriodo?.data_fine) || null,
       parsedPayload?.consumo_globale_mc ?? null,
       parsedPayload?.importo_totale_da_pagare ?? null,
       "v1.0.0",
@@ -344,10 +456,9 @@ exports.parseImportedDocument = async (id) => {
     ok: true,
     document: updatedRows[0] || null,
   };
-}
- 
+};
+
 exports.uploadImportedDocument = async ({ file, body }) => {
-    
   if (!file) {
     const err = new Error("File mancante");
     err.statusCode = 400;
@@ -360,6 +471,9 @@ exports.uploadImportedDocument = async ({ file, body }) => {
     throw err;
   }
 
+  const form = new FormData();
+  form.append("file", fs1.createReadStream(file.path), file.originalname);
+  
   const sql = `
     INSERT INTO imported_invoice_documents (
       condominio_id,
@@ -376,8 +490,8 @@ exports.uploadImportedDocument = async ({ file, body }) => {
   const params = [
     body.condominioId,
     body.providerId || null,
-    file.originalname,
-    file.filename,
+    file.originalname || null,
+    file.filename || file.stored_filename || null,
     file.mimetype || null,
     file.size || null,
   ];
@@ -392,8 +506,9 @@ exports.uploadImportedDocument = async ({ file, body }) => {
   return {
     ok: true,
     document: rows[0] || null,
+    // parsedData: aiData,
   };
-}
+};
 
 
 function assertUUID(value, name) {
@@ -478,7 +593,7 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
 
 async function applyOpenAccontoToRow(conn, row) {
   const credits = await loadOpenAccontoCredits(conn, row.id_utenza);
-  console.log(`Found ${credits.length} open acconto credits for utenza ${row.id_utenza}`);
+  
   const cap = getStornoCapienza(row);
 
   let remainingEuroCap = round2(cap.euro);
@@ -522,7 +637,7 @@ async function applyOpenAccontoToRow(conn, row) {
       importo_mc: takeMc,
     });
 
-    //console.log(movements);
+   
   }
 
   row.storno_pregresso = round2(usedEuro);
@@ -536,7 +651,7 @@ async function applyOpenAccontoToRow(conn, row) {
   return row;
 }
  
-function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearDays }) {
+function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearDays, key}) {
   let remaining = Math.max(0, n2(consumo));
   let total = 0;
 
@@ -546,7 +661,8 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
 
   // Sort by ordine or mc_da_base ascending (defensive)
   const ordered = [...scaglioni].sort((a, b) => n2(a.ordine) - n2(b.ordine));
-
+  
+  const tiers = [];
   for (const s of ordered) {
     if (remaining <= 0) break;
 
@@ -566,14 +682,38 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
         : (spanBase * multN  / yearDays) * days;
 
     const take = capacity === Infinity ? remaining : Math.min(remaining, capacity);
-
+    
+    const mcAllocati = round2(take);
     const price = n2(s.prezzo_acquedotto);
+    const importo = round2(mcAllocati * price);
+    
+
     total += take * price;
-
     remaining -= take;
-  }
 
-  return round2(total);
+      tiers.push({
+        ordine: n2(s.ordine),
+        label:
+          s.label ??
+          s.nome ??
+          s.descrizione ??
+          `Scaglione ${s.ordine ?? tiers.length + 1}`,
+        mc_allocati: mcAllocati,
+        price,
+        importo,
+        mc_da_base: baseFrom,
+        mc_a_base: baseTo,
+        key,
+        capacity: capacity === Infinity ? null : round2(capacity),
+      });
+     
+  }
+  
+  return {
+    total: round2(total),
+    tiers,
+    
+  };
 }
 
 /* ---------------- Load Tariffe for ABC ---------------- */
@@ -1004,11 +1144,13 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     `,
     [sessionId]
   );
-   
+  
+  righeRows.dettaglio_consumi = interniTotals.dettaglio_consumi;
   return {
     session: sessionRows[0],
     righe: righeRows, 
     generale: generaleResult?.generale || null
+     
   };
 }
 
@@ -1075,7 +1217,7 @@ function calcolaGeneraleLegacy({
   const qfTot = Number(parsedQF) || (n2(qfAnnua) / yd) * A * daysQFv;
 
    
-   console.log(qfTot, qfAnnua, yd, A, daysQFv);
+ 
   
   const baseIva = impAcquedotto + depFog + qfTot;
   const iva = baseIva * n2(aliquotaIva);
@@ -1322,7 +1464,7 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
         depFogAcc,
         ivaAcc,
         totAcc,
-
+      
         mcStorno,
         stornoEuro,
         stornoDettaglio: stornoCalc.righe,
@@ -1540,6 +1682,9 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     // -------------------------------------------------------------------
     // PASS 1: build base rows
     // -------------------------------------------------------------------
+
+    const dettaglio_consumi = [];
+    let dettaglioConsumiAcquedotto = [];
     for (const key of unitKeys) {
       const group = byUnit.get(key);
 
@@ -1603,7 +1748,12 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
       const nucleo = Math.max(1, n2(first.nucleo));
       const nuaeU = Math.max(1, n2(first.nuae));
 
+      //qui potremmo aggiornare consumoNorm e assegnare una percentuale (60 con tariffe 2024, 40 con tariffe 2025) da addebitare a cavallo di due periodi.
+
       let impAcq = 0;
+      
+      let user_id = ra0.id_utenza;
+      
       if (consumoNorm !== null) {
         const impNorm = allocateAcquedotto({
           consumo: consumoNorm,
@@ -1612,9 +1762,12 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
           nuae: nuaeU,
           giorniRef: Math.max(1, n2(session.giorni_interni)),
           yearDays,
-        });
+          key:user_id
 
-        impAcq = round2(impNorm);
+        });
+  
+        impAcq = round2(impNorm.total);
+        dettaglioConsumiAcquedotto.push(impNorm.tiers);
       }
 
       const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
@@ -1651,6 +1804,7 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
         imp_qf: impQf,
         imp_oneri: impOneri,
         imp_iva: impIva,
+        
 
         imp_acconto: 0,
         depfog_acconto: 0,
@@ -1716,10 +1870,12 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
           });
         }
       }
+
     }
 
-    generale.totaleOneri = round2(totaleOneri);
 
+    generale.totaleOneri = round2(totaleOneri);
+    generale.dettaglio = dettaglioConsumiAcquedotto
     // -------------------------------------------------------------------
     // PASS 2: distribute current invoice acconto + current invoice storno
     // -------------------------------------------------------------------
@@ -1937,6 +2093,7 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
       totArr,
       baseSum,
       diffApplied: diff,
+      rows,
       tfCode: upper(tfCode, "TF1"),
     };
   } catch (err) {
@@ -1965,12 +2122,12 @@ exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPre
     const generaleResult = await calculateGenerale(conn, sessionId, annoAtt, annoPrec, eurStorno, parsedQF);
  
     const g = generaleResult.generale;
-    console.log("Generale calculation result:", generaleResult);
+ 
     session.consumoNorm = generaleResult.meta.consumoNorm;
 
     const interniTotals = await calculateInterni(conn, session, g, tfCode, annoAtt, annoPrec, eurStorno);
     
-    //console.log(interniTotals);
+    
     await conn.query(
       `
       UPDATE fatture_sessioni
@@ -2177,7 +2334,7 @@ exports.deleteSession = async function ({ sessionId }) {
         i === eligible.length - 1
           ? round2(delta - applied)
           : round2(each);
-
+v
       eligible[i].conguaglio = share;
       applied = round2(applied + share);
     }

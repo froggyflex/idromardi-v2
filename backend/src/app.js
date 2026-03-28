@@ -27,4 +27,5 @@ app.use("/api", billingGroupsRoutes);
 app.use("/api", prospettoRoutes);
 app.use("/api/fatture", fattureRoutes);
 
+
 module.exports = app;
