@@ -1,7 +1,8 @@
  
 const fs = require("fs");
 const crypto = require("crypto");
-const { PDFParse } = require("pdf-parse");
+//const { PDFParse } = require("pdf-parse");
+const pdf = require("pdf-parse");
 const db = require("../../config/db");
 
 function safeJsonParse(value, fallback = null) {
@@ -67,29 +68,55 @@ function monthNameToNumberIT(month) {
 }
 
 function extractSupplierInfo(lines) {
-  const firstLine = lines[0] || "";
-  const m = firstLine.match(/^(.*?)\s*-\s*P\.?\s*iva\s*([A-Z0-9]+)/i);
+  const head = lines.slice(0, 5);
+
+  for (const line of head) {
+    const m = line.match(
+      /^(.*?)\s*(?:-|–|—)?\s*(?:P\.?\s*IVA|PARTITA\s+IVA)\s*:?\s*([A-Z0-9 ]{8,20})/i
+    );
+    if (m) {
+      return {
+        supplierName: cleanValue(m[1]) || null,
+        supplierVatNumber: cleanValue(m[2]).replace(/\s+/g, "") || null
+      };
+    }
+  }
 
   return {
-    supplierName: m ? cleanValue(m[1]) : cleanValue(firstLine) || null,
-    supplierVatNumber: m ? cleanValue(m[2]) : null
+    supplierName: cleanValue(head[0] || "") || null,
+    supplierVatNumber: null
   };
 }
 
 function extractDocumentHeader(text) {
-  const m = text.match(
-    /Proforma\s+di\s+fattura\s+n\.\s*([A-Z0-9\/-]+)\s+del\s+([^\n]+)/i
-  );
+  const normalized = normalizePdfText(text);
+
+  const patterns = [
+    /Proforma\s+di\s+fattura\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
+    /Proforma\s+di\s+fattura\s+([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
+    /Proforma\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i
+  ];
+
+  for (const pattern of patterns) {
+    const m = normalized.match(pattern);
+    if (m) {
+      return {
+        documentType: "proforma_invoice",
+        invoiceNumber: cleanValue(m[1]) || null,
+        invoiceDate: parseItalianLongDate(m[2]) || null
+      };
+    }
+  }
 
   return {
-    documentType: m ? "proforma_invoice" : null,
-    invoiceNumber: m ? cleanValue(m[1]) : null,
-    invoiceDate: m ? parseItalianLongDate(m[2]) : null
+    documentType: null,
+    invoiceNumber: null,
+    invoiceDate: null
   };
 }
 
 function extractCustomerInfo(lines) {
-  const idx = lines.findIndex((l) => /^Spett\.?le$/i.test(l));
+  const idx = lines.findIndex((l) => /^Spett\.?le\b/i.test(l));
 
   if (idx === -1) {
     return {
@@ -102,12 +129,16 @@ function extractCustomerInfo(lines) {
   const block = [];
   for (let i = idx + 1; i < lines.length; i++) {
     const line = lines[i];
+
     if (
-      /^Lettura e fatturazione consumi idrici/i.test(line) ||
-      /^Totale\b/i.test(line)
+      /^Lettura\b/i.test(line) ||
+      /^Totale\b/i.test(line) ||
+      /^Oggetto\b/i.test(line) ||
+      /^Descrizione\b/i.test(line)
     ) {
       break;
     }
+
     block.push(line);
   }
 
@@ -115,8 +146,11 @@ function extractCustomerInfo(lines) {
   const addressLines = [];
 
   for (const line of block) {
-    const m = line.match(/C\.F\.\s*\/\s*P\.\s*Iva\s*([A-Z0-9]+)/i);
-    if (m) {
+    const m = line.match(
+      /(?:C\.?\s*F\.?|COD\.?\s*FISCALE|P\.?\s*IVA|C\.?\s*F\.?\s*\/\s*P\.?\s*IVA)\s*:?\s*([A-Z0-9]{8,20})/i
+    );
+
+    if (m && !customerVatOrTaxCode) {
       customerVatOrTaxCode = cleanValue(m[1]);
     } else {
       addressLines.push(line);
@@ -124,53 +158,110 @@ function extractCustomerInfo(lines) {
   }
 
   return {
-    customerName: addressLines[0] || null,
+    customerName: cleanValue(addressLines[0] || "") || null,
     customerVatOrTaxCode,
     customerAddressLines: addressLines.slice(1)
   };
 }
 
 function extractServiceInfo(text) {
-  const descriptionMatch = text.match(
-    /Lettura e fatturazione consumi idrici/i
+  const normalized = normalizePdfText(text);
+
+  const descriptionMatch = normalized.match(
+    /Lettura\s+e\s+fatturazione\s+consumi\s+idrici/i
   );
 
-  const periodMatch = text.match(
-    /periodo\s+(.+?)\s+per\s+condominio/i
+  const periodMatch = normalized.match(
+    /periodo\s+(.+?)(?:\s+per\s+condominio|\s+sito\s+in|\n|$)/i
   );
 
-  const addressMatch = text.match(
-    /sito\s+in\s+(.+?)\./i
+  const addressMatch = normalized.match(
+    /sito\s+in\s+(.+?)(?:\.|\n|$)/i
   );
 
   return {
-    serviceDescription: descriptionMatch ? "Lettura e fatturazione consumi idrici" : null,
-    servicePeriodDescription: periodMatch ? `periodo ${cleanValue(periodMatch[1])}` : null,
+    serviceDescription: descriptionMatch
+      ? "Lettura e fatturazione consumi idrici"
+      : null,
+    servicePeriodDescription: periodMatch
+      ? `periodo ${cleanValue(periodMatch[1])}`
+      : null,
     propertyAddress: addressMatch ? cleanValue(addressMatch[1]) : null
   };
 }
 
 function extractPaymentInfo(text) {
-  const ibanMatch = text.match(/iban:\s*([A-Z0-9]+)/i);
-  const swiftMatch = text.match(/swift:\s*([A-Z0-9]+)/i);
-  const paymentMethodMatch = text.match(/versato a mezzo ([^.:\n]+)/i);
+  const normalized = normalizePdfText(text);
+
+  const ibanMatch = normalized.match(
+    /\bIBAN\b\s*:?\s*([A-Z]{2}\d{2}[A-Z0-9 ]{10,40})/i
+  );
+
+  const swiftMatch = normalized.match(
+    /\b(?:SWIFT|BIC)\b\s*:?\s*([A-Z0-9]{8,11})/i
+  );
+
+  const paymentMethodMatch = normalized.match(
+    /versato\s+a\s+mezzo\s+([^.:\n]+)/i
+  );
 
   return {
     paymentMethod: paymentMethodMatch ? cleanValue(paymentMethodMatch[1]) : null,
-    iban: ibanMatch ? cleanValue(ibanMatch[1]) : null,
+    iban: ibanMatch ? cleanValue(ibanMatch[1]).replace(/\s+/g, "") : null,
     swift: swiftMatch ? cleanValue(swiftMatch[1]) : null
   };
 }
-
 function extractNotes(lines) {
   return lines.filter((l) =>
-    /Entro \d+ giorni dall’avvenuto pagamento/i.test(l)
+    /entro\s+\d+\s+giorni.*pagamento/i.test(
+      l.replace(/[’']/g, "'")
+    )
   );
 }
 
 function extractTotalAmount(text) {
-  const m = text.match(/Totale\s+€\s*([\d.,]+)/i);
-  return m ? parseItalianAmount(m[1]) : null;
+  const normalized = normalizePdfText(text);
+  const lines = normalized
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const candidates = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    const labelScore =
+      /totale da pagare/i.test(line) ? 100 :
+      /importo totale/i.test(line) ? 90 :
+      /totale fattura/i.test(line) ? 85 :
+      /^totale\b/i.test(line) ? 70 :
+      /totale/i.test(line) ? 50 : 0;
+
+    if (!labelScore) continue;
+
+    const sameLineMatch = line.match(/€?\s*([\d.]+,\d{2})\b/);
+    if (sameLineMatch) {
+      const amount = parseItalianAmount(sameLineMatch[1]);
+      if (amount !== null) {
+        candidates.push({ amount, score: labelScore + 20, line });
+      }
+    }
+
+    const nextLine = lines[i + 1] || "";
+    const nextLineMatch = nextLine.match(/^€?\s*([\d.]+,\d{2})\b/);
+    if (nextLineMatch) {
+      const amount = parseItalianAmount(nextLineMatch[1]);
+      if (amount !== null) {
+        candidates.push({ amount, score: labelScore + 10, line: `${line} ${nextLine}` });
+      }
+    }
+  }
+
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].amount;
 }
 
 function parseItalianLongDate(value) {
@@ -189,7 +280,7 @@ function parseItalianLongDate(value) {
   if (!month) return null;
   return `${year}-${month}-${day}`;
 }
-function normalizeRawText(raw) {
+function normalizePdfText(raw) {
   return String(raw || "")
     .replace(/\r/g, "\n")
     .replace(/[ \t]+/g, " ")
@@ -201,7 +292,8 @@ function normalizeRawText(raw) {
 }
 
 function parseProformaRawText(rawText) {
-  const normalizedText = normalizeRawText(rawText);
+  const normalizedText = normalizePdfText(rawText);
+
   const lines = getLines(normalizedText);
 
   const supplier = extractSupplierInfo(lines);
@@ -454,11 +546,10 @@ async function parseImportedDocument(fileId) {
 
   let parser;
   try {
+    
     const buffer = fs.readFileSync(detail.file_path);
-
-    parser = new PDFParse({ data: buffer });
-    const pdfData = await parser.getText();
-    const rawText = pdfData?.text || "";
+    parser = await pdf(buffer);
+    const rawText = parser?.text || "";
 
     if (!rawText.trim()) {
       await db.query(
