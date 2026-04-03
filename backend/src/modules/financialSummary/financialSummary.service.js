@@ -1,4 +1,4 @@
-require("pdf-parse/worker");
+ 
 const fs = require("fs");
 const crypto = require("crypto");
 const { PDFParse } = require("pdf-parse");
