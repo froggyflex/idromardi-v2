@@ -2,6 +2,8 @@ const pool = require("../../config/db");
 const { geocodeAddress } = require("../geocoding/geocoding.services");
 const { v4: uuidv4 } = require("uuid");
 
+
+
 exports.create = async (data) => {
   const {
     nome,

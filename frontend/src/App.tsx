@@ -15,6 +15,7 @@ import CondominioUtenze from "./pages/CondominioUtenze";
 import LetturePage from "./pages/LetturePage";
 import AdminTariffe from "./pages/admin/AdminTariffe";
 import CondominioFatturePage from "./pages/fatture/CondominioFatturePage ";
+import FinancialSummaryPageTemplate from "./pages/admin/FinancialSummaryPageTemplate";
 
 function App() {
   return (
@@ -41,6 +42,7 @@ function App() {
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/admin/tools" element={<AdminTools />} />
         <Route path="/admin/tariffe" element={<AdminTariffe />} />  
+        <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />  
       </Routes>
     </MainLayout>
   );

@@ -8,6 +8,9 @@ const tariffeRoutes = require("./modules/tariffe/tariffe.routes");
 const fattureRoutes = require("./modules/fatture/fatture.routes");
 const billingGroupsRoutes = require("./modules/billingGroups/billingGroups.routes");
 const prospettoRoutes = require("./modules/prospetti/prospetti.routes");
+const financialSummaryRoutes = require("./modules/financialSummary/financialSummary.routes");
+
+
 const app = express();
 const path = require("path");
 
@@ -26,6 +29,7 @@ app.use("/api/tariffe", tariffeRoutes);
 app.use("/api", billingGroupsRoutes);
 app.use("/api", prospettoRoutes);
 app.use("/api/fatture", fattureRoutes);
+app.use("/api/financial-summary", financialSummaryRoutes);
 
 
 module.exports = app;

@@ -112,9 +112,11 @@ export default function MainLayout({ children }: Props) {
             <div className="space-y-1">
               <NavItem
                 to="/admin/tools"
-                label="Strumenti Sistema"
+                label="Gegolocalizzazione Condomini"
               />
               <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
+              <NavItem to="/admin/contabilita" label="Contabilità" />
+              
             </div>
           </div>
         </nav>
