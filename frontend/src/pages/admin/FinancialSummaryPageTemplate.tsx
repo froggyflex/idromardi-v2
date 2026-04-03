@@ -524,8 +524,8 @@ async function parseImportedProforma(id: string) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-7xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-50 text-slate-900 quick-sand">
+      <div className="mx-auto max-w-8xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
         <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
