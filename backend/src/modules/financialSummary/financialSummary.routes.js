@@ -20,4 +20,11 @@ router.post("/imported-documents/:fileId/promote", controller.promoteImportedDoc
 router.get("/search", controller.searchCondomini);
 router.get("/list", controller.listCondominiSimple);
 
+router.post("/:id/collega-fattura", controller.collegaProformaAFattura);
+router.get("/proformas", controller.listProformas);
+router.get("/fatture", controller.listFattureSimple);
+
+router.post("/:id/annulla", controller.annullaProforma);
+router.delete("/:id", controller.deleteProforma);
+
 module.exports = router;

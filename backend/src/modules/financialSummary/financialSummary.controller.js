@@ -116,6 +116,65 @@ async function promoteImportedDocumentToProforma(req, res) {
   }
 }
 
+async function annullaProforma(req, res) {
+  try {
+    const result = await service.annullaProforma(
+      req.params.id,
+      req.body?.reason || "",
+      null // replace with user id later
+    );
+    return res.json(result);
+  } catch (err) {
+    console.error("annullaProforma error:", err);
+    return res.status(500).json({ error: err.message || "Errore durante l'annullamento della proforma." });
+  }
+}
+
+async function deleteProforma(req, res) {
+  try {
+    const result = await service.deleteProforma(req.params.id);
+    return res.json(result);
+  } catch (err) {
+    console.error("deleteProforma error:", err);
+    return res.status(500).json({ error: err.message || "Errore durante l'eliminazione della proforma." });
+  }
+}
+
+async function listProformas(req, res) {
+  try {
+    const rows = await service.listProformas();
+    return res.json(rows);
+  } catch (err) {
+    console.error("listProformas error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento delle proforme." });
+  }
+}
+
+async function collegaProformaAFattura(req, res) {
+  try {
+    const result = await service.collegaProformaAFattura(
+      req.params.id,
+      req.body?.fatturaId || null
+    );
+    return res.json(result);
+  } catch (err) {
+    console.error("collegaProformaAFattura error:", err);
+    return res.status(500).json({
+      error: err.message || "Errore durante il collegamento della proforma.",
+    });
+  }
+}
+
+async function listFattureSimple(req, res) {
+  try {
+    const rows = await service.listFattureSimple();
+    return res.json(rows);
+  } catch (err) {
+    console.error("listFattureSimple error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento delle fatture." });
+  }
+}
+
 module.exports = {
   getSummary,
   getRecentRows,
@@ -127,4 +186,9 @@ module.exports = {
   promoteImportedDocumentToProforma,
   searchCondomini,
   listCondominiSimple,
+  annullaProforma,
+  deleteProforma,
+  listProformas,
+  collegaProformaAFattura,
+  listFattureSimple
 };

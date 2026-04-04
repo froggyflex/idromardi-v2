@@ -28,6 +28,7 @@ type ImportedProformaItem = {
   original_filename: string;
   parse_status: string;
   review_status: string;
+  descrizione: string | null;
   numero: string | null;
   data_documento: string | null;
   importo: number | null;
@@ -59,6 +60,33 @@ type ImportedProformaDetail = {
 type RecentResponse = {
   rows: RecentRow[];
 };
+
+
+type ProformaRow = {
+  id: string;
+  condominio_id: string | null;
+  fattura_id: string | null;
+  numero_progressivo: number;
+  numero: string;
+  descrizione: string | null;
+  data_documento: string;
+  importo: number;
+  stato: string;
+  source_import_file_id: string | null;
+  condominio: string;
+  fattura_numero: string | null;
+};
+
+type FatturaRow = {
+  id: string;
+  numero: string;
+  descrizione: string | null;
+  data_documento: string;
+  importo: number;
+  stato: string;
+  condominio: string;
+};
+
 
 function euro(value: number) {
   return new Intl.NumberFormat("it-IT", {
@@ -136,12 +164,32 @@ export default function FinancialSummaryPageTemplate() {
   const [isLocked, setIsLocked] = useState(false);
   const [activeImportTab, setActiveImportTab] = useState<"PROFORMA" | "FATTURA">("PROFORMA");
   const [selectedCondomini, setSelectedCondomini] = useState<{ id: string; indirizzo: string }[]>([]);
+  
 
   const [loadingCondomini, setLoadingCondomini] = useState(false);
 
-  const [promoting, setPromoting] = useState(false);
-  
 
+  const [promoting, setPromoting] = useState(false);
+  const [annullingId, setAnnullingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [activeDetailSection, setActiveDetailSection] = useState<"PROFORMA" | "FATTURA" | "PAGAMENTO" | null>(null);
+  
+ 
+
+  const [proformasRows, setProformasRows] = useState<ProformaRow[]>([]);
+  const [fattureRows, setFattureRows] = useState<FatturaRow[]>([]);
+  const [loadingProformas, setLoadingProformas] = useState(false);
+  const [loadingFatture, setLoadingFatture] = useState(false);
+
+  const [proformaSearch, setProformaSearch] = useState("");
+  const [proformaStatusFilter, setProformaStatusFilter] = useState("TUTTI");
+
+  const [linkingProforma, setLinkingProforma] = useState<ProformaRow | null>(null);
+  const [selectedFatturaId, setSelectedFatturaId] = useState("");
+  const [linking, setLinking] = useState(false);
+
+  const selectedCondominioIds = selectedCondomini.map((c) => c.id);
+  
   
   const summaryCards = [
     {
@@ -230,7 +278,7 @@ export default function FinancialSummaryPageTemplate() {
   },
 } as const;
 
-const area = importAreaConfig[activeImportTab];
+  const area = importAreaConfig[activeImportTab];
   
 
   const [importedDocsSearch, setImportedDocsSearch] = useState("");
@@ -275,6 +323,69 @@ const area = importAreaConfig[activeImportTab];
   }
   }, [importedDocs]);
  
+
+    useEffect(() => {
+    if (activeDetailSection === "PROFORMA") {
+      void loadProformasRows();
+      void loadFattureRows();
+    }
+    if (activeDetailSection === "FATTURA") {
+      void loadFattureRows();
+    }
+  }, [activeDetailSection]);
+
+    async function loadProformasRows() {
+    try {
+      setLoadingProformas(true);
+      const { data } = await api.get("/financial-summary/proformas");
+      setProformasRows(Array.isArray(data) ? data : []);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore nel caricamento proforme.");
+    } finally {
+      setLoadingProformas(false);
+    }
+  }
+
+  async function loadFattureRows() {
+    try {
+      setLoadingFatture(true);
+      const { data } = await api.get("/financial-summary/fatture");
+      setFattureRows(Array.isArray(data) ? data : []);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore nel caricamento fatture.");
+    } finally {
+      setLoadingFatture(false);
+    }
+  }
+  async function collegaProformaAFattura() {
+    if (!linkingProforma?.id || !selectedFatturaId) {
+      setError("Seleziona una fattura.");
+      return;
+    }
+
+    try {
+      setLinking(true);
+      setError("");
+
+      await api.post(`/financial-summary/proformas/${linkingProforma.id}/collega-fattura`, {
+        fatturaId: selectedFatturaId,
+      });
+
+      setLinkingProforma(null);
+      setSelectedFatturaId("");
+
+      await loadProformasRows();
+      await loadFattureRows();
+      await loadRecentRows();
+      await loadSummary();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore durante il collegamento della proforma.");
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  
   function getParseStatusClasses(status?: string) {
     switch (status) {
       case "COMPLETATO":
@@ -320,7 +431,45 @@ const area = importAreaConfig[activeImportTab];
     }
   }
 
+  async function annullaProforma(id: string) {
+    const reason = window.prompt("Motivo annullamento proforma:");
+    if (reason === null) return;
 
+    try {
+      setAnnullingId(id);
+      setError("");
+
+      await api.post(`/financial-summary/${id}/annulla`, { reason });
+
+      await loadSummary();
+      await loadRecentRows();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore durante l'annullamento.");
+    } finally {
+      setAnnullingId(null);
+    }
+  }
+
+  async function deleteProforma(id: string) {
+    const ok = window.confirm(
+      "Eliminare definitivamente questa proforma? Consentito solo per righe sicure."
+    );
+    if (!ok) return;
+
+    try {
+      setDeletingId(id);
+      setError("");
+
+      await api.delete(`/financial-summary/${id}`);
+
+      await loadSummary();
+      await loadRecentRows();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore durante l'eliminazione.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
   async function promoteImportedProformaWithCondomini(fileId: string) {
     const selectedCondominioIds = selectedCondomini.map((c) => c.id);
     try {
@@ -351,6 +500,7 @@ const area = importAreaConfig[activeImportTab];
     } catch (err: any) {
       console.error("Promote error:", err?.response?.data || err);
       setError(err?.response?.data?.error || "Errore durante la creazione delle proforme.");
+
     } finally {
       setPromoting(false);
     }
@@ -378,68 +528,51 @@ const area = importAreaConfig[activeImportTab];
       setLoadingSummary(false);
     }
   }
-async function loadImportedDocuments() {
-  try {
-    setLoadingImportedDocs(true);
-    const { data } = await api.get("/financial-summary/imported-documents");
-    setImportedDocs(Array.isArray(data) ? data : []);
-    
-  } catch (err: any) {
-    setError(err?.response?.data?.error || "Errore caricando i documenti proforma importati.");
-  } finally {
-    setLoadingImportedDocs(false);
-  }
-}
-
-async function promoteImportedProforma(id: string) {
-  try {
-    setError("");
-
-    const { data } = await api.post(`/imported-documents/${id}/promote`);
-    console.log("Promote result:", data);
-
-    await loadImportedDocuments();
-    await loadImportedDocumentDetail(id);
-    await loadSummary();
-    await loadRecentRows();
-  } catch (err: any) {
-    console.error("Promote error:", err?.response?.data || err);
-    setError(err?.response?.data?.error || "Errore durante la creazione della proforma.");
-  }
-}
-
-async function loadImportedDocumentDetail(id: string) {
-  
-  try {
-    const { data } = await api.get(`/financial-summary/imported-documents/${id}`);
- 
-    setSelectedImportedDoc(data);
-    if(data?.parse_status == "COMPLETATO_PROMOSSO") {
-      setIsLocked(true);
-    } else {
-      setIsLocked(false);
+  async function loadImportedDocuments() {
+    try {
+      setLoadingImportedDocs(true);
+      const { data } = await api.get("/financial-summary/imported-documents");
+      setImportedDocs(Array.isArray(data) ? data : []);
+      
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore caricando i documenti proforma importati.");
+    } finally {
+      setLoadingImportedDocs(false);
     }
-    console.log("Dettaglio documento importato:", data.parse_status);  
-  } catch (err: any) {
-    setError(err?.response?.data?.error || "Errore caricando il dettaglio del documento.");
   }
-}
  
-async function parseImportedProforma(id: string) {
-  try {
-    setParsingImportId(id);
-    setError("");
-
-    await api.post(`/financial-summary/imported-documents/${id}/parse`);
-
-    await loadImportedDocuments();
-    await loadImportedDocumentDetail(id);
-  } catch (err: any) {
-    setError(err?.response?.data?.error || "Errore parsing proforma.");
-  } finally {
-    setParsingImportId(null);
+  async function loadImportedDocumentDetail(id: string) {
+    
+    try {
+      const { data } = await api.get(`/financial-summary/imported-documents/${id}`);
+  
+      setSelectedImportedDoc(data);
+      if(data?.parse_status == "COMPLETATO_PROMOSSO") {
+        setIsLocked(true);
+      } else {
+        setIsLocked(false);
+      }
+      console.log("Dettaglio documento importato:", data.parse_status);  
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore caricando il dettaglio del documento.");
+    }
   }
-}
+  
+  async function parseImportedProforma(id: string) {
+    try {
+      setParsingImportId(id);
+      setError("");
+
+      await api.post(`/financial-summary/imported-documents/${id}/parse`);
+
+      await loadImportedDocuments();
+      await loadImportedDocumentDetail(id);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore parsing proforma.");
+    } finally {
+      setParsingImportId(null);
+    }
+  }
   async function loadRecentRows() {
     try {
       setLoadingRows(true);
@@ -487,6 +620,7 @@ async function parseImportedProforma(id: string) {
       console.log("TODO: apri upload batch fatture");
     }
   }
+
   async function uploadProformaFiles() {
     if (!selectedUploadFiles.length) {
       setError("Seleziona almeno un file PDF.");
@@ -508,20 +642,49 @@ async function parseImportedProforma(id: string) {
 
       setSelectedUploadFiles([]);
       await loadImportedDocuments();
+
+      if (selectedImportedDoc) {
+        if (activeImportTab === "PROFORMA") {
+          parseImportedProforma(selectedImportedDoc.id);
+        } else {
+          parseImportedFattura(selectedImportedDoc.id);
+        }
+      }
+
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore nel caricamento dei file proforma.");
     } finally {
       setUploading(false);
     }
   }
-
-
-
-
-
+ 
   function parseImportedFattura(id: string) {
     throw new Error("Function not implemented.");
   }
+ 
+  const filteredProformasRows = useMemo(() => {
+    return proformasRows.filter((row) => {
+      const q = proformaSearch.trim().toLowerCase();
+
+      const matchesSearch =
+        !q ||
+        [
+          row.numero,
+          row.condominio || "",
+          row.descrizione || "",
+          row.fattura_numero || "",
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+
+      const matchesStatus =
+        proformaStatusFilter === "TUTTI" || row.stato === proformaStatusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [proformasRows, proformaSearch, proformaStatusFilter]);
+
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 quick-sand">
@@ -533,9 +696,7 @@ async function parseImportedProforma(id: string) {
                 Dashboard proforme · fatture · incassi
               </div>
               <h1 className="text-3xl font-bold tracking-tight">Riepilogo documenti e incassi</h1>
-              <p className="max-w-3xl text-sm text-slate-600 sm:text-base">
-                Vista unificata per proforme, fatture e pagamenti con staging parser e inserimento manuale.
-              </p>
+       
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -555,128 +716,650 @@ async function parseImportedProforma(id: string) {
           ) : null}
         </header>
 
-        <section className="grid gap-5 xl:grid-cols-3">
-          {summaryCards.map((card) => (
-            <article
-              key={card.key}
-              className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-md"
-            >
-              <div className={`bg-gradient-to-br ${card.accent} p-6 text-white`}>
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">
-                      {card.eyebrow}
+        <div className="space-y-6 bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100/80 p-1 rounded-[36px]">
+          {/* Summary cards */}
+          <section className="grid gap-4 xl:grid-cols-3">
+            {summaryCards.map((card) => (
+              <article
+                key={card.key}
+                className="group relative overflow-hidden rounded-[30px] border border-slate-300/70 bg-gradient-to-b from-white via-slate-50 to-slate-100/80 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
+              >
+                <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${card.accent}`} />
+
+                <div className="p-5 sm:p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        {card.eyebrow}
+                      </div>
+
+                      <h2 className="mt-3 text-lg font-bold tracking-tight text-slate-900">
+                        {card.title}
+                      </h2>
                     </div>
-                    <div className="max-w-[14rem] text-3xl leading-none">{card.icon}</div>
+
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-slate-300/70 bg-slate-200/80 text-2xl text-slate-700 shadow-inner">
+                      {card.icon}
+                    </div>
                   </div>
 
-                  <button className="rounded-2xl bg-white/20 px-3 py-2 text-sm font-semibold backdrop-blur transition hover:bg-white/30">
-                    +
+                  <div className="mt-7 flex items-end justify-between gap-4">
+                    <div>
+                      <div className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
+                        Totale
+                      </div>
+                      <div className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
+                        {loadingSummary ? "..." : card.amount}
+                      </div>
+                    </div>
+
+                    <button
+                      className={`inline-flex items-center rounded-2xl border px-4 py-2.5 text-sm font-semibold transition ${card.border} ${card.text} bg-white/90 shadow-sm hover:bg-white`}
+                        onClick={() =>
+                          setActiveDetailSection(
+                            card.key === "proforma"
+                              ? "PROFORMA"
+                              : card.key === "fatture"
+                              ? "FATTURA"
+                              : "PAGAMENTO"
+                          )
+                        }
+                    >
+                      Dettagli
+                    </button>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-200 bg-slate-100/80 px-5 py-3 sm:px-6">
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span>Panoramica aggiornata</span>
+                    <span className="font-semibold text-slate-700">Dashboard</span>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          {activeDetailSection === "PROFORMA" ? (
+            <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold">Dettaglio proforme</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Elenco completo delle proforme con possibilità di collegarle a una fattura.
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <input
+                    value={proformaSearch}
+                    onChange={(e) => setProformaSearch(e.target.value)}
+                    placeholder="Cerca numero, condominio, descrizione..."
+                    className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                  />
+                  <select
+                    value={proformaStatusFilter}
+                    onChange={(e) => setProformaStatusFilter(e.target.value)}
+                    className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                  >
+                    <option value="TUTTI">Tutti gli stati</option>
+                    <option value="BOZZA">Bozza</option>
+                    <option value="EMESSA">Emessa</option>
+                    <option value="COLLEGATA">Collegata</option>
+                    <option value="PARZIALMENTE_SALDATA">Parzialmente saldata</option>
+                    <option value="SALDATA">Saldata</option>
+                    <option value="ANNULLATA">Annullata</option>
+                  </select>
+
+                  <button
+                    onClick={() => setActiveDetailSection(null)}
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                  >
+                    Chiudi sezione
                   </button>
                 </div>
+              </div>
 
-                <div className="mt-8 space-y-2">
-                  <h2 className="max-w-xs text-2xl font-bold leading-tight">{card.title}</h2>
-                  <div className="text-right text-3xl font-bold tracking-tight">
-                    {loadingSummary ? "..." : card.amount}
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <tr>
+                      <th className="px-6 py-4">Numero</th>
+                      <th className="px-6 py-4">Condominio</th>
+                      <th className="px-6 py-4">Descrizione</th>
+                      <th className="px-6 py-4">Data</th>
+                      <th className="px-6 py-4">Importo</th>
+                      <th className="px-6 py-4">Stato</th>
+                      <th className="px-6 py-4">Fattura associata</th>
+                      <th className="px-6 py-4 text-right">Azioni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadingProformas ? (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
+                          Caricamento proforme...
+                        </td>
+                      </tr>
+                    ) : filteredProformasRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
+                          Nessuna proforma trovata.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredProformasRows.map((row) => (
+                        <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
+                          <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
+                          <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
+                          <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
+                          <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>
+                          <td className="px-6 py-4 font-semibold text-slate-900">{euro(Number(row.importo || 0))}</td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusClass[row.stato] || "bg-slate-100 text-slate-700 ring-slate-200"}`}>
+                              {String(row.stato || "").replaceAll("_", " ")}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-slate-700">{row.fattura_numero || "-"}</td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => {
+                                setLinkingProforma(row);
+                                setSelectedFatturaId("");
+                              }}
+                              disabled={row.stato === "ANNULLATA"}
+                              className="rounded-xl border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 disabled:opacity-50"
+                            >
+                              Collega a fattura
+                            </button>
+                              <button
+                                onClick={() => annullaProforma(row.id)}
+                                disabled={row.stato === "ANNULLATA"}
+                                className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-60"
+                              >
+                                {annullingId === row.id ? "..." : "Annulla"}
+                              </button>
+
+                              <button
+                                onClick={() => deleteProforma(row.id)}
+                                disabled={deletingId === row.id}
+                                className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                              >
+                                {deletingId === row.id ? "..." : "Elimina"}
+                              </button>
+
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+
+
+          {/* Main command center */}
+          <section className="overflow-hidden rounded-[34px] border border-slate-300/70 bg-white shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
+            {/* Header */}
+            
+
+            {/* Table */}
+            {/* <div className="overflow-x-auto bg-white">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-100/95 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-600 backdrop-blur">
+                  <tr>
+                    <th className="px-6 py-4">Tipo</th>
+                    <th className="px-6 py-4">Numero</th>
+                    <th className="px-6 py-4">Condominio</th>
+                    <th className="px-6 py-4">Origine</th>
+                    <th className="px-6 py-4">Stato</th>
+                    <th className="px-6 py-4">Data</th>
+                    <th className="px-6 py-4 text-right">Importo</th>
+                    <th className="px-6 py-4 text-right">Azioni</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {loadingRows ? (
+                    <tr>
+                      <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
+                        Caricamento movimenti...
+                      </td>
+                    </tr>
+                  ) : filteredRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
+                        Nessun movimento trovato.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredRows.map((row, index) => (
+                      <tr
+                        key={row.id}
+                        className={`transition ${
+                          index % 2 === 0 ? "bg-white" : "bg-slate-50/60"
+                        } hover:bg-slate-100/80`}
+                      >
+                        <td className="px-6 py-4">
+                          <span className="inline-flex rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                            {labelType(row.type)}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <div className="font-semibold text-slate-900">{row.number || "-"}</div>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <div className="max-w-[260px] truncate text-slate-700">
+                            {row.condominio || "-"}
+                          </div>
+                        </td>
+
+                        <td className="px-6 py-4 text-slate-500">{labelSource(row.source)}</td>
+
+                        <td className="px-6 py-4">
+                          <span
+                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                              statusClass[row.status] ||
+                              "bg-slate-100 text-slate-700 ring-slate-200"
+                            }`}
+                          >
+                            {row.status.replaceAll("_", " ")}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4 text-slate-500">{formatDate(row.date)}</td>
+
+                        <td className="px-6 py-4 text-right font-bold text-slate-900">
+                          {euro(row.amount)}
+                        </td>
+
+                        <td className="px-6 py-4">
+                          {row.type === "PROFORMA" ? (
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => annullaProforma(row.id)}
+                                disabled={annullingId === row.id}
+                                className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-60"
+                              >
+                                {annullingId === row.id ? "..." : "Annulla"}
+                              </button>
+
+                              <button
+                                onClick={() => deleteProforma(row.id)}
+                                disabled={deletingId === row.id}
+                                className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                              >
+                                {deletingId === row.id ? "..." : "Elimina"}
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="text-right text-xs text-slate-400">-</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div> */}
+          </section>
+
+          {/* Associate modal */}
+          {isAssociateModalOpen && selectedImportedDoc ? (
+            <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/70 backdrop-blur-md">
+              <div className="flex min-h-full items-center justify-center p-3 sm:p-6">
+                <div className="relative flex w-full max-w-6xl flex-col overflow-hidden rounded-[32px] border border-white/20 bg-white shadow-[0_40px_120px_rgba(15,23,42,0.45)]">
+                  {/* Ambient background */}
+                  <div className="pointer-events-none absolute inset-0">
+                    <div className="absolute inset-x-0 top-0 h-44 bg-gradient-to-r from-sky-100 via-cyan-50 to-emerald-100" />
+                    <div className="absolute -left-16 top-12 h-40 w-40 rounded-full bg-sky-200/40 blur-3xl" />
+                    <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-emerald-200/30 blur-3xl" />
+                    <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-violet-200/20 blur-3xl" />
+                  </div>
+
+                  <div className="relative flex max-h-[calc(100vh-24px)] flex-col sm:max-h-[calc(100vh-48px)]">
+                    {/* Header */}
+                    <div className="shrink-0 border-b border-slate-200/70 bg-white/80 px-4 py-4 backdrop-blur-xl sm:px-8 sm:py-6">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/90 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700 shadow-sm">
+                            <span className="h-2 w-2 rounded-full bg-sky-500" />
+                            Associazione documento
+                          </div>
+
+                          <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
+                            Associa il documento ai condomini
+                          </h3>
+
+                          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 sm:text-[15px]">
+                            Seleziona uno o più condomini e crea automaticamente una nuova
+                            proforma per ciascuno, partendo dal documento importato.
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => setIsAssociateModalOpen(false)}
+                          className="inline-flex h-11 shrink-0 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+                        >
+                          Chiudi
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Body */}
+                    <div className="min-h-0 flex-1 overflow-y-auto">
+                      <div className="grid gap-6 p-4 sm:p-6 lg:grid-cols-[1.25fr_0.75fr] lg:p-8">
+                        {/* Left column */}
+                        <div className="space-y-6">
+                          {/* Document preview */}
+                          <section className="overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/90 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+                            <div className="flex items-center justify-between gap-3 border-b border-slate-200/80 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-5 py-4">
+                              <div>
+                                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                  Documento importato
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-slate-700">
+                                  Anteprima dei dati che verranno usati per la creazione
+                                </div>
+                              </div>
+
+                              <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
+                                Ready
+                              </div>
+                            </div>
+
+                            <div className="grid gap-4 p-5 sm:grid-cols-2">
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                  Numero
+                                </div>
+                                <div className="mt-2 break-words text-sm font-semibold text-slate-900">
+                                  {selectedImportedDoc.extracted?.numero || "-"}
+                                </div>
+                              </div>
+
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                  Data
+                                </div>
+                                <div className="mt-2 text-sm font-semibold text-slate-900">
+                                  {selectedImportedDoc.extracted?.data_documento || "-"}
+                                </div>
+                              </div>
+
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 sm:col-span-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                  Descrizione
+                                </div>
+                                <div className="mt-2 break-words text-sm leading-6 text-slate-700">
+                                  {selectedImportedDoc.extracted?.descrizione || "-"}
+                                </div>
+                              </div>
+
+                              <div className="rounded-[24px] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-5 text-white shadow-[0_20px_50px_rgba(15,23,42,0.25)] sm:col-span-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300">
+                                  Importo documento
+                                </div>
+                                <div className="mt-2 text-3xl font-bold tracking-tight">
+                                  {selectedImportedDoc.extracted?.importo != null
+                                    ? euro(selectedImportedDoc.extracted.importo)
+                                    : "-"}
+                                </div>
+                              </div>
+                            </div>
+                          </section>
+
+                          {/* Search */}
+                          <section className="rounded-[28px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+                            <div className="mb-4">
+                              <div className="text-sm font-semibold text-slate-900">
+                                Cerca condominio
+                              </div>
+                              <div className="mt-1 text-sm text-slate-500">
+                                Filtra per indirizzo, nome o riferimento utile.
+                              </div>
+                            </div>
+
+                            <div className="relative">
+                              <input
+                                value={condominiSearch}
+                                onChange={(e) => setCondominiSearch(e.target.value)}
+                                placeholder="Scrivi indirizzo o riferimento..."
+                                className="h-12 w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                              />
+                            </div>
+                          </section>
+
+                          {/* Condomini list */}
+                          <section className="rounded-[28px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-base font-semibold text-slate-950">
+                                  Condomini disponibili
+                                </div>
+                                <div className="mt-1 text-sm text-slate-500">
+                                  Tocca un elemento per selezionarlo o deselezionarlo.
+                                </div>
+                              </div>
+
+                              <div className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
+                                {filteredCondomini.length} risultati
+                              </div>
+                            </div>
+
+                            <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                              {loadingCondomini ? (
+                                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                                  Caricamento condomini...
+                                </div>
+                              ) : filteredCondomini.length === 0 ? (
+                                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                                  Nessun condominio trovato.
+                                </div>
+                              ) : (
+                                filteredCondomini.map((c) => {
+                                  const isSelected = selectedCondomini.some((x) => x.id === c.id);
+
+                                  return (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      onClick={() => toggleCondominio(c)}
+                                      className={`group w-full rounded-[22px] border p-4 text-left transition-all ${
+                                        isSelected
+                                          ? "border-emerald-300 bg-gradient-to-r from-emerald-50 to-teal-50 shadow-[0_10px_25px_rgba(16,185,129,0.10)]"
+                                          : "border-slate-200 bg-slate-50/70 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
+                                      }`}
+                                    >
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div
+                                            className={`break-words text-sm font-semibold ${
+                                              isSelected ? "text-emerald-950" : "text-slate-900"
+                                            }`}
+                                          >
+                                            {c.indirizzo}
+                                          </div>
+
+                                          {"amministratore" in c && c.amministratore ? (
+                                            <div className="mt-1 break-words text-xs leading-5 text-slate-500">
+                                              Amministratore: {c.amministratore}
+                                            </div>
+                                          ) : (
+                                            <div className="mt-1 text-xs text-slate-400">
+                                              Nessun amministratore indicato
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        <div
+                                          className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition ${
+                                            isSelected
+                                              ? "border-emerald-500 bg-emerald-500 text-white"
+                                              : "border-slate-300 bg-white text-slate-400 group-hover:border-slate-400"
+                                          }`}
+                                        >
+                                          {isSelected ? "✓" : ""}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </section>
+                        </div>
+
+                        {/* Right column */}
+                        <div className="space-y-6">
+                          <section className="rounded-[30px] border border-slate-200/80 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-800 p-5 text-white shadow-[0_25px_60px_rgba(15,23,42,0.28)] lg:sticky lg:top-0">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-white">
+                                  Riepilogo selezione
+                                </div>
+                                <div className="mt-1 text-sm text-slate-300">
+                                  Controlla cosa stai per generare.
+                                </div>
+                              </div>
+
+                              <div className="rounded-2xl bg-white/10 px-3 py-2 text-lg font-bold text-white ring-1 ring-white/15">
+                                {selectedCondomini.length}
+                              </div>
+                            </div>
+
+                            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                  Condomini selezionati
+                                </div>
+                                <div className="mt-2 text-3xl font-bold tracking-tight text-white">
+                                  {selectedCondomini.length}
+                                </div>
+                              </div>
+
+                              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                  Proforme da creare
+                                </div>
+                                <div className="mt-2 text-3xl font-bold tracking-tight text-white">
+                                  {selectedCondomini.length}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
+                              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                Azione prevista
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-slate-200">
+                                Verrà generata una proforma distinta per ogni condominio
+                                selezionato, utilizzando i dati del documento importato come base.
+                              </p>
+                            </div>
+
+                            <div className="mt-5">
+                              <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                Condomini selezionati
+                              </div>
+
+                              {selectedCondomini.length === 0 ? (
+                                <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-8 text-center text-sm text-slate-300">
+                                  Nessun condominio selezionato.
+                                </div>
+                              ) : (
+                                <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                                  {selectedCondomini.map((c, index) => (
+                                    <div
+                                      key={c.id}
+                                      className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3"
+                                    >
+                                      <div className="flex min-w-0 items-center gap-3">
+                                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-white">
+                                          {index + 1}
+                                        </div>
+
+                                        <div className="min-w-0">
+                                          <div className="truncate text-sm font-semibold text-white">
+                                            {c.indirizzo}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleCondominio(c)}
+                                        className="shrink-0 rounded-xl px-2.5 py-1.5 text-sm font-semibold text-emerald-200 transition hover:bg-white/10 hover:text-white"
+                                      >
+                                        Rimuovi
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </section>
+
+                          {error ? (
+                            <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700 shadow-sm">
+                              {error}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="shrink-0 border-t border-slate-200/80 bg-white/85 px-4 py-4 backdrop-blur sm:px-8">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-sm text-slate-600">
+                          {selectedCondomini.length === 0 ? (
+                            "Seleziona almeno un condominio per continuare."
+                          ) : (
+                            <>
+                              Stai per creare{" "}
+                              <span className="font-semibold text-slate-950">
+                                {selectedCondomini.length}
+                              </span>{" "}
+                              proforma dal documento selezionato.
+                            </>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            onClick={() => setIsAssociateModalOpen(false)}
+                            className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                          >
+                            Annulla
+                          </button>
+
+                          <button
+                            onClick={() =>
+                              promoteImportedProformaWithCondomini(selectedImportedDoc.id)
+                            }
+                            disabled={promoting || selectedCondomini.length === 0}
+                            className="rounded-2xl bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-3 text-sm font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.24)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {promoting ? "Creazione..." : "Conferma e crea proforme"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-
-              <div className="flex items-center justify-between gap-3 p-5">
-                <button
-                  className={`w-full rounded-2xl border ${card.border} bg-white px-4 py-3 text-sm font-semibold uppercase tracking-wide ${card.text} transition hover:opacity-85`}
-                >
-                  Dettagli per condominio
-                </button>
-              </div>
-            </article>
-          ))}
-        </section>
-
-        {/* <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h3 className="text-xl font-bold">Struttura logica iniziale</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Una fattura può aggregare più proforme. Un pagamento può coprire più fatture.
-                </p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
-                Base per il dominio
-              </div>
             </div>
-
-            <div className="mt-5 grid gap-4 lg:grid-cols-3">
-              <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">Proforma</div>
-                <div className="mt-3 text-lg font-bold text-slate-900">Documento preliminare</div>
-                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
-                  <li>• Caricabile da parser o inseribile manualmente</li>
-                  <li>• Collegabile a una sola fattura</li>
-                  <li>• Numerazione sicura, mai riutilizzata</li>
-                </ul>
-              </div>
-
-              <div className="rounded-3xl border border-fuchsia-200 bg-fuchsia-50 p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-fuchsia-700">Fattura</div>
-                <div className="mt-3 text-lg font-bold text-slate-900">Documento contabile centrale</div>
-                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
-                  <li>• Può collegarsi a più proforme</li>
-                  <li>• Può ricevere più pagamenti</li>
-                  <li>• Stato ricalcolato dalle allocazioni</li>
-                </ul>
-              </div>
-
-              <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Pagamento</div>
-                <div className="mt-3 text-lg font-bold text-slate-900">Movimento finanziario</div>
-                <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
-                  <li>• Metodo reale: bonifico, contanti, carta</li>
-                  <li>• Un pagamento può essere allocato su più fatture</li>
-                  <li>• Parser sempre con fase di revisione</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </section> */}
+          ) : null}
+        </div>
 
         <section className="grid gap-5 xl:grid-cols-1">
-          {/* <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-xl font-bold">Azioni operative</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Inserimento manuale e upload batch separati per tipo documento.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
-                Wiring pronto
-              </div>
-            </div>
-
-            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              {quickActions.map((action) => (
-                <button
-                  key={action.key}
-                  onClick={() => handleQuickAction(action.key)}
-                  className="group rounded-3xl border border-slate-200 bg-slate-50 p-5 text-left transition hover:border-slate-300 hover:bg-white hover:shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 ring-1 ring-slate-200">
-                      {action.badge}
-                    </span>
-                    <span className="text-xl transition group-hover:translate-x-1">→</span>
-                  </div>
-                  <div className="mt-4 text-lg font-bold text-slate-900">{action.title}</div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{action.description}</p>
-                </button>
-              ))}
-            </div>
-          </div> */}
- 
+  
           <aside className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -707,38 +1390,39 @@ async function parseImportedProforma(id: string) {
               })}
             </div>
 
-<div className="mt-5 rounded-3xl border border-dashed border-blue-300 bg-blue-50 p-5">
-  <div className="space-y-4">
-    <div>
-      <div className="text-sm font-semibold text-blue-800">{area.uploadTitle}</div>
-      <div className="mt-1 text-sm text-blue-700/80">{area.uploadDescription}</div>
-    </div>
+            <div className="mt-5 rounded-3xl border border-dashed border-blue-300 bg-blue-50 p-5">
+              <div className="space-y-4">
+                <div>
+                  <div className="text-sm font-semibold text-blue-800">{area.uploadTitle}</div>
+                  <div className="mt-1 text-sm text-blue-700/80">{area.uploadDescription}</div>
+                </div>
 
-    <div className="flex flex-col gap-3">
-      <input
-        type="file"
-        multiple
-        accept="application/pdf"
-        onChange={(e) => setSelectedUploadFiles(Array.from(e.target.files || []))}
-        className="block w-full rounded-2xl border border-blue-200 bg-white px-4 py-3 text-sm text-slate-700"
-      />
+                <div className="flex flex-col gap-3">
+                  <input
+                    type="file"
+                    multiple
+                    accept="application/pdf"
+                    onChange={(e) => setSelectedUploadFiles(Array.from(e.target.files || []))}
+                    className="block w-full rounded-2xl border border-blue-200 bg-white px-4 py-3 text-sm text-slate-700"
+                  />
 
-      <button
-        onClick={() => {
-          if (activeImportTab === "PROFORMA") {
-            uploadProformaFiles();
-          } else {
-            uploadProformaFiles();
-          }
-        }}
-        disabled={uploading}
-        className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {uploading ? "Caricamento..." : area.uploadButtonLabel}
-      </button>
-    </div>
-  </div>
-</div>
+                  <button
+                    onClick={() => {
+                      if (activeImportTab === "PROFORMA") {
+                        uploadProformaFiles();
+                      } else {
+                        uploadProformaFiles();
+                      }
+
+                    }}
+                    disabled={uploading}
+                    className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {uploading ? "Caricamento..." : area.uploadButtonLabel}
+                  </button>
+                </div>
+              </div>
+            </div>
 
             <div className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -780,10 +1464,11 @@ async function parseImportedProforma(id: string) {
                           <th className="px-4 py-3">File</th>
                           <th className="px-4 py-3">Parse</th>
                           
-                          {/* <th className="px-4 py-3">Review</th> */}
+                          <th className="px-4 py-3">Dettaglio</th>
                           <th className="px-4 py-3">Importo</th>
                           <th className="px-4 py-3">Data Documento</th>
                           <th className="px-4 py-3">Data Importazione</th>
+                          <th className="px-4 py-3">Azioni</th>
                         </tr>
                       </thead>
 
@@ -802,7 +1487,7 @@ async function parseImportedProforma(id: string) {
                                     if (activeImportTab === "PROFORMA") {
                                     loadImportedDocumentDetail(doc.id);
                                   } else {
-                                    loadImportedFatturaDetail(doc.id);
+                                    loadImportedDocumentDetail(doc.id);
                                   }
                               }}
                               className={[
@@ -843,16 +1528,12 @@ async function parseImportedProforma(id: string) {
                                   {doc.parse_status || "-"}
                                 </span>
                               </td>
-
-                              {/* <td className="px-4 py-3 align-middle">
-                                <span
-                                  className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${getReviewStatusClasses(
-                                    doc.review_status
-                                  )}`}
-                                >
-                                  {doc.review_status || "-"}
-                                </span>
-                              </td> */}
+ 
+                              <td className="px-4 py-3 align-middle">
+                                <div className="text-sm text-slate-500">
+                                  {doc.descrizione !== null ? doc.descrizione : "-"}
+                                </div>
+                              </td>
                               <td className="px-4 py-3 align-middle">
                                 <div className="text-sm text-slate-500">
                                   {doc.importo !== null ? doc.importo.toFixed(2) + " €" : "-"}
@@ -866,6 +1547,37 @@ async function parseImportedProforma(id: string) {
                               <td className="px-4 py-3 align-middle">
                                 <div className="text-sm text-slate-500">
                                   {doc.uploaded_at || "-"}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 align-middle">
+                                <div className="text-sm text-slate-500">
+                                  {
+                                    (doc.parse_status === "CARICATO" || doc.parse_status === "COMPLETATO") && (
+                                      <button
+                                        onClick={() => {
+                                          if (activeImportTab === "PROFORMA") {
+                                            parseImportedProforma(doc.id);
+                                          } else {
+                                            parseImportedFattura(doc.id);
+                                          }
+                                        }}
+                                        disabled={parsingImportId === doc.id}
+                                        className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-800 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-400 hover:bg-slate-50 hover:shadow-md disabled:translate-y-0 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+                                      >
+                                        {parsingImportId === doc.id ? (
+                                          <>
+                                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                                            Parsing...
+                                          </>
+                                        ) : (
+                                          <>
+                                            <span className="text-base leading-none">✦</span>
+                                            Esegui parser
+                                          </>
+                                        )}
+                                      </button>
+                                    )
+                                  }
                                 </div>
                               </td>
 
@@ -898,7 +1610,7 @@ async function parseImportedProforma(id: string) {
                           Stato parse: {selectedImportedDoc.parse_status} · Revisione: {selectedImportedDoc.review_status}
                         </div>
                       </div>
-
+{/* 
                       <button
                         onClick={() => {
                           if (activeImportTab === "PROFORMA") {
@@ -911,7 +1623,7 @@ async function parseImportedProforma(id: string) {
                         className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {parsingImportId === selectedImportedDoc.id ? "Parsing..." : "Esegui parser"}
-                      </button>
+                      </button> */}
                     </div>
 
                     <div className="grid gap-4 md:grid-cols-2">
@@ -962,6 +1674,7 @@ async function parseImportedProforma(id: string) {
                           setCondominiSearch("");
                           setIsAssociateModalOpen(true);
                           void loadCondomini();
+
                         } else {
                           setSelectedCondomini([]);
                           setCondominiSearch("");
@@ -983,246 +1696,74 @@ async function parseImportedProforma(id: string) {
               </div>
             </div>
           </aside>
-        </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h3 className="text-xl font-bold">Movimenti recenti</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Lista unificata dei documenti e movimenti più recenti.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Cerca numero, condominio, cliente..."
-                className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none ring-0 placeholder:text-slate-400 focus:border-slate-400"
-              />
-              <select
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-              >
-                <option value="TUTTI">Tutti i tipi</option>
-                <option value="PROFORMA">Proforma</option>
-                <option value="FATTURA">Fattura</option>
-                <option value="PAGAMENTO">Pagamento</option>
-              </select>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-              >
-                <option value="TUTTI">Tutti gli stati</option>
-                <option value="BOZZA">Bozza</option>
-                <option value="EMESSA">Emessa</option>
-                <option value="COLLEGATA">Collegata</option>
-                <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
-                <option value="PAGATA">Pagata</option>
-                <option value="REGISTRATO">Registrato</option>
-                <option value="ALLOCATO">Allocato</option>
-                <option value="ANNULLATA">Annullata</option>
-                <option value="ANNULLATO">Annullato</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <tr>
-                  <th className="px-6 py-4">Tipo</th>
-                  <th className="px-6 py-4">Numero</th>
-                  <th className="px-6 py-4">Condominio</th>
-                  <th className="px-6 py-4">Cliente</th>
-                  <th className="px-6 py-4">Origine</th>
-                  <th className="px-6 py-4">Metodo</th>
-                  <th className="px-6 py-4">Stato</th>
-                  <th className="px-6 py-4">Data</th>
-                  <th className="px-6 py-4 text-right">Importo</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loadingRows ? (
-                  <tr>
-                    <td colSpan={9} className="px-6 py-8 text-center text-slate-500">
-                      Caricamento movimenti...
-                    </td>
-                  </tr>
-                ) : filteredRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="px-6 py-8 text-center text-slate-500">
-                      Nessun movimento trovato.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredRows.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                      <td className="px-6 py-4 font-semibold text-slate-800">{labelType(row.type)}</td>
-                      <td className="px-6 py-4 text-slate-700">{row.number}</td>
-                      <td className="px-6 py-4 text-slate-700">{row.condominio}</td>
-                      <td className="px-6 py-4 text-slate-700">{row.customer || "-"}</td>
-                      <td className="px-6 py-4 text-slate-500">{labelSource(row.source)}</td>
-                      <td className="px-6 py-4 text-slate-500">{labelPaymentMethod(row.paymentMethod)}</td>
-                      <td className="px-6 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                            statusClass[row.status] || "bg-slate-100 text-slate-700 ring-slate-200"
-                          }`}
-                        >
-                          {row.status.replaceAll("_", " ")}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-slate-500">{formatDate(row.date)}</td>
-                      <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                        {euro(row.amount)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {isAssociateModalOpen && selectedImportedDoc ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-              <div className="w-full max-w-3xl rounded-3xl bg-white shadow-2xl">
-                <div className="border-b border-slate-200 px-6 py-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="text-xl font-bold text-slate-900">Associa proforma ai condomini</h3>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Seleziona uno o più condomini. Verrà creata una riga in proformas per ciascun condominio selezionato.
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setIsAssociateModalOpen(false)}
-                      className="rounded-2xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-600"
-                    >
-                      Chiudi
-                    </button>
+          {linkingProforma ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+            <div className="w-full max-w-2xl rounded-3xl bg-white shadow-2xl">
+              <div className="border-b border-slate-200 px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Collega proforma a fattura</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Una proforma può appartenere a una sola fattura. Una fattura può avere più proforme.
+                    </p>
                   </div>
-                </div>
-
-                <div className="grid gap-6 p-6 lg:grid-cols-[1fr_1fr]">
-                  <div className="space-y-4">
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        Documento da approvare
-                      </div>
-                      <div className="mt-3 space-y-2 text-sm text-slate-700">
-                        <div><span className="font-semibold">Numero:</span> {selectedImportedDoc.extracted?.numero || "-"}</div>
-                        <div><span className="font-semibold">Data:</span> {selectedImportedDoc.extracted?.data_documento || "-"}</div>
-                        <div><span className="font-semibold">Descrizione:</span> {selectedImportedDoc.extracted?.descrizione || "-"}</div>
-                        <div><span className="font-semibold">Importo:</span> {selectedImportedDoc.extracted?.importo != null ? euro(selectedImportedDoc.extracted.importo) : "-"}</div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700">
-                        Cerca condominio
-                      </label>
-                      <input
-                        value={condominiSearch}
-                        onChange={(e) => setCondominiSearch(e.target.value)}
-                        placeholder="Scrivi indirizzo o riferimento..."
-                        className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-                      />
-                    </div>
-
-                    <div className="max-h-72 space-y-2 overflow-auto rounded-2xl border border-slate-200 bg-slate-50 p-3  ">
-                      {loadingCondomini ? (
-                        <div className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-500">
-                          Caricamento condomini...
-                        </div>
-                      ) : filteredCondomini.length === 0 ? (
-                        <div className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-500">
-                          Nessun condominio trovato.
-                        </div>
-                      ) : (
-                        filteredCondomini.map((c) => {
-                          const isSelected = selectedCondomini.some((x) => x.id === c.id);
-
-                          return (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onClick={() => toggleCondominio(c)}
-                              className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                                isSelected
-                                  ? "border-emerald-300 bg-emerald-50"
-                                  : "border-slate-200 bg-white hover:border-slate-300"
-                              }`}
-                            >
-                              <div className="text-sm font-semibold text-slate-800">
-                                {c.indirizzo}
-                              </div>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        Condomini selezionati
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {selectedCondomini.length === 0 ? (
-                          <div className="text-sm text-slate-500">Nessun condominio selezionato.</div>
-                        ) : (
-                          selectedCondomini.map((c) => (
-                            <span
-                              key={c.id}
-                              className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800"
-                            >
-                              {c.indirizzo}
-                              <button
-                                type="button"
-                                onClick={() => toggleCondominio(c)}
-                                className="text-emerald-700"
-                              >
-                                ×
-                              </button>
-                            </span>
-                          ))
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-sm text-slate-600">
-                        Verranno create <span className="font-semibold text-slate-900">{selectedCondomini.length}</span> proforme.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
                   <button
-                    onClick={() => setIsAssociateModalOpen(false)}
-                    className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                    onClick={() => setLinkingProforma(null)}
+                    className="rounded-2xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-600"
                   >
-                    Annulla
-                  </button>
-                  <button
-                    onClick={() => promoteImportedProformaWithCondomini(selectedImportedDoc.id)}
-                    disabled={promoting || selectedCondomini.length === 0}
-                    className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {promoting ? "Creazione..." : "Conferma e crea proforme"}
+                    Chiudi
                   </button>
                 </div>
               </div>
+
+              <div className="space-y-4 p-6">
+                <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
+                  <div><span className="font-semibold">Proforma:</span> {linkingProforma.numero}</div>
+                  <div><span className="font-semibold">Condominio:</span> {linkingProforma.condominio || "-"}</div>
+                  <div><span className="font-semibold">Importo:</span> {euro(Number(linkingProforma.importo || 0))}</div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Seleziona fattura
+                  </label>
+                  <select
+                    value={selectedFatturaId}
+                    onChange={(e) => setSelectedFatturaId(e.target.value)}
+                    className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                  >
+                    <option value="">Seleziona una fattura</option>
+                    {fattureRows.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.numero} · {f.condominio || "-"} · {euro(Number(f.importo || 0))}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
+                <button
+                  onClick={() => setLinkingProforma(null)}
+                  className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                >
+                  Annulla
+                </button>
+                <button
+                  onClick={collegaProformaAFattura}
+                  disabled={linking || !selectedFatturaId}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {linking ? "Collegamento..." : "Conferma collegamento"}
+                </button>
+              </div>
             </div>
-          ) : null}
+          </div>
+        ) : null}
         </section>
+
+
       </div>
     </div>
   );

@@ -366,6 +366,169 @@ function parseProformaText(rawText) {
   };
 }
 
+async function listProformas() {
+  const [rows] = await db.query(
+    `
+    SELECT
+      p.id,
+      p.condominio_id,
+      p.fattura_id,
+      p.numero_progressivo,
+      p.numero,
+      p.descrizione,
+      p.data_documento,
+      p.importo,
+      p.stato,
+      p.source_import_file_id,
+      p.created_at,
+      p.updated_at,
+      c.indirizzo AS condominio,
+      f.numero AS fattura_numero
+    FROM proformas p
+    LEFT JOIN condomini_v2 c
+      ON c.id = p.condominio_id
+    LEFT JOIN fatture f
+      ON f.id = p.fattura_id
+    ORDER BY p.created_at DESC
+    `
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    condominio_id: row.condominio_id,
+    fattura_id: row.fattura_id,
+    numero_progressivo: row.numero_progressivo,
+    numero: row.numero,
+    descrizione: row.descrizione,
+    data_documento: row.data_documento,
+    importo: Number(row.importo || 0),
+    stato: row.stato,
+    source_import_file_id: row.source_import_file_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    condominio: row.condominio || "-",
+    fattura_numero: row.fattura_numero || null,
+  }));
+}
+
+async function listFattureSimple() {
+  const [rows] = await db.query(
+    `
+    SELECT
+      f.id,
+      f.condominio_id,
+      f.numero_progressivo,
+      f.numero,
+      f.descrizione,
+      f.data_documento,
+      f.importo,
+      f.stato,
+      f.created_at,
+      f.updated_at,
+      c.indirizzo AS condominio
+    FROM fatture f
+    LEFT JOIN condomini_v2 c
+      ON c.id = f.condominio_id
+    WHERE f.stato <> 'ANNULLATA'
+    ORDER BY f.created_at DESC
+    `
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    condominio_id: row.condominio_id,
+    numero_progressivo: row.numero_progressivo,
+    numero: row.numero,
+    descrizione: row.descrizione,
+    data_documento: row.data_documento,
+    importo: Number(row.importo || 0),
+    stato: row.stato,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    condominio: row.condominio || "-",
+  }));
+}
+
+
+async function collegaProformaAFattura(proformaId, fatturaId) {
+  if (!fatturaId) {
+    throw new Error("Seleziona una fattura.");
+  }
+
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const [proformaRows] = await conn.query(
+      `
+      SELECT id, stato, fattura_id
+      FROM proformas
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [proformaId]
+    );
+
+    if (!proformaRows.length) {
+      throw new Error("Proforma non trovata.");
+    }
+
+    const proforma = proformaRows[0];
+
+    if (proforma.stato === "ANNULLATA") {
+      throw new Error("La proforma è annullata e non può essere collegata.");
+    }
+
+    const [fatturaRows] = await conn.query(
+      `
+      SELECT id, stato
+      FROM fatture
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [fatturaId]
+    );
+
+    if (!fatturaRows.length) {
+      throw new Error("Fattura non trovata.");
+    }
+
+    const fattura = fatturaRows[0];
+
+    if (fattura.stato === "ANNULLATA") {
+      throw new Error("La fattura è annullata e non può ricevere proforme.");
+    }
+
+    await conn.query(
+      `
+      UPDATE proformas
+      SET
+        fattura_id = ?,
+        stato = CASE
+          WHEN stato IN ('BOZZA', 'EMESSA') THEN 'COLLEGATA'
+          ELSE stato
+        END,
+        updated_at = NOW()
+      WHERE id = ?
+      `,
+      [fatturaId, proformaId]
+    );
+
+    await conn.commit();
+
+    return { success: true };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+
 async function listImportedDocuments() {
   const [rows] = await db.query(
     `
@@ -379,7 +542,8 @@ async function listImportedDocuments() {
       i.review_status,
       i.extracted_number,
       i.extracted_date,
-      i.extracted_amount
+      i.extracted_amount,
+      i.extracted_description
     FROM import_batch_files f
     LEFT JOIN import_items i
       ON i.batch_id = f.batch_id
@@ -394,6 +558,7 @@ async function listImportedDocuments() {
     original_filename: r.original_filename,
     parse_status: r.parse_status,
     review_status: r.review_status || "DA_REVISIONARE",
+    descrizione: r.extracted_description || null,
     numero: r.extracted_number || null,
     data_documento: r.extracted_date || null,
     importo: r.extracted_amount != null ? Number(r.extracted_amount) : null,
@@ -569,7 +734,7 @@ async function parseImportedDocument(fileId) {
     const extractedNumber = parsed?.invoiceNumber || null;
     const extractedDate = parsed?.invoiceDate || null; // already ISO yyyy-mm-dd in new parser
     const extractedDescription =
-      parsed?.serviceDescription +" "+ parsed?.customerAddressLines ||
+      parsed?.serviceDescription +" "+ parsed?.customerAddressLines +" "+ parsed?.servicePeriodDescription ||
       "Proforma importata da parser";
 
     const extractedAmount =
@@ -776,6 +941,70 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
   throw new Error("Tipo documento non supportato per la numerazione.");
 }
 
+async function annullaProforma(id, reason, userId = null) {
+  const [rows] = await db.query(
+    `
+    SELECT id, stato, fattura_id
+    FROM proformas
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  if (!rows.length) throw new Error("Proforma non trovata.");
+
+  const row = rows[0];
+
+  if (row.stato === "ANNULLATA") {
+    throw new Error("La proforma è già annullata.");
+  }
+
+  await db.query(
+    `
+    UPDATE proformas
+    SET
+      stato = 'ANNULLATA',
+      cancellation_reason = ?,
+      cancellation_date = NOW(),
+      cancellation_user_id = ?,
+      updated_at = NOW()
+    WHERE id = ?
+    `,
+    [reason || "Annullata manualmente", userId, id]
+  );
+
+  return { success: true };
+}
+
+async function deleteProforma(id) {
+  const [rows] = await db.query(
+    `
+    SELECT id, stato, fattura_id
+    FROM proformas
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  if (!rows.length) throw new Error("Proforma non trovata.");
+
+  const row = rows[0];
+
+  if (row.fattura_id) {
+    throw new Error("La proforma è collegata a una fattura e non può essere eliminata definitivamente.");
+  }
+
+  if (!["BOZZA", "EMESSA"].includes(row.stato)) {
+    throw new Error("Solo le proforme in stato BOZZA o EMESSA possono essere eliminate definitivamente.");
+  }
+
+  await db.query(`DELETE FROM proformas WHERE id = ?`, [id]);
+
+  return { success: true };
+}
+
 async function promoteImportedDocumentToProforma(fileId, condominioIds = []) {
   const conn = await db.getConnection();
 
@@ -871,7 +1100,7 @@ async function promoteImportedDocumentToProforma(fileId, condominioIds = []) {
       );
 
       if (existing.length) {
-        throw new Error("Proforma già creata per questo documento.");
+        throw new Error("Proforma già creato per questo documento.");
       }
 
     for (const condominio of condominiRows) {
@@ -1116,7 +1345,7 @@ async function getRecentRows() {
         pay.created_at
     ) x
     ORDER BY x.sort_date DESC
-    LIMIT 50
+     
     `
   );
 
@@ -1144,5 +1373,11 @@ async function getRecentRows() {
   getNextDocumentNumber,
   promoteImportedDocumentToProforma,
   searchCondomini,
-  listCondominiSimple
+  listCondominiSimple,
+  annullaProforma,
+  deleteProforma,
+  listProformas,
+  collegaProformaAFattura,
+  listFattureSimple,
+
 };
