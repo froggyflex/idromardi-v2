@@ -90,6 +90,20 @@ async function uploadImportedDocuments(req, res) {
   }
 }
 
+async function uploadImportedDocumentsF(req, res) {
+  try {
+    if (!req.files || !req.files.length) {
+      return res.status(400).json({ error: "Nessun file ricevuto." });
+    }
+
+    const result = await service.uploadImportedDocumentsF(req.files);
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("uploadImportedDocuments error:", err);
+    return res.status(500).json({ error: "Errore durante il caricamento dei file." });
+  }
+}
+
 async function parseImportedDocument(req, res) {
   try {
     const row = await service.parseImportedDocument(req.params.fileId);
@@ -99,6 +113,16 @@ async function parseImportedDocument(req, res) {
     return res.status(500).json({ error: err.message || "Errore parsing proforma." });
   }
 }
+async function parseImportedDocumentF(req, res) {
+  try {
+    const row = await service.parseImportedDocumentF(req.params.fileId);
+    return res.json(row);
+  } catch (err) {
+    console.error("parseImportedDocument error:", err);
+    return res.status(500).json({ error: err.message || "Errore parsing proforma." });
+  }
+}
+
 
 async function promoteImportedDocumentToProforma(req, res) {
   try {
@@ -152,13 +176,22 @@ async function listProformas(req, res) {
 
 async function collegaProformaAFattura(req, res) {
   try {
-    const result = await service.collegaProformaAFattura(
-      req.params.id,
-      req.body?.fatturaId || null
-    );
+    const { id } = req.params;
+    const { fatturaId } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ error: "id proforma mancante" });
+    }
+
+    if (!fatturaId) {
+      return res.status(400).json({ error: "fatturaId mancante" });
+    }
+
+    const result = await service.collegaSingolaProformaAFattura(id, fatturaId);
+
     return res.json(result);
   } catch (err) {
-    console.error("collegaProformaAFattura error:", err);
+    console.error("❌ collegaProformaAFattura:", err);
     return res.status(500).json({
       error: err.message || "Errore durante il collegamento della proforma.",
     });
@@ -172,6 +205,71 @@ async function listFattureSimple(req, res) {
   } catch (err) {
     console.error("listFattureSimple error:", err);
     return res.status(500).json({ error: "Errore nel caricamento delle fatture." });
+  }
+}
+
+async function getFatturaDetail(req, res) {
+  try {
+    const row = await service.getFatturaDetail(req.params.id);
+
+    if (!row) {
+      return res.status(404).json({ error: "Fattura non trovata." });
+    }
+
+    return res.json(row);
+  } catch (err) {
+    console.error("getFatturaDetail error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento della fattura." });
+  }
+}
+
+async function promoteImportedDocumentToFattura(req, res) {
+  try {
+    const { fileId } = req.params;
+    const { condominioId, proformaIds } = req.body;
+
+    if (!fileId) {
+      return res.status(400).json({ error: "fileId mancante" });
+    }
+
+    if (!condominioId) {
+      return res.status(400).json({ error: "condominioId mancante" });
+    }
+
+    const result = await service.promoteImportedDocumentToFattura(
+      fileId,
+      condominioId,
+      proformaIds || []
+    );
+
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("promoteImportedDocumentToFattura:", err);
+
+    return res.status(500).json({
+      error: err.message || "Errore creazione fattura",
+    });
+  }
+}
+
+
+async function listFattureWithProforme(req, res) {
+  try {
+    const rows = await service.listFattureWithProforme();
+    return res.json(rows);
+  } catch (err) {
+    console.error("listFattureWithProforme error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento dettaglio fatture." });
+  }
+}
+
+async function getFatturaProforme(req, res) {
+  try {
+    const rows = await service.getFatturaProforme(req.params.id);
+    return res.json(rows);
+  } catch (err) {
+    console.error("getFatturaProforme error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento delle proforme associate." });
   }
 }
 
@@ -190,5 +288,11 @@ module.exports = {
   deleteProforma,
   listProformas,
   collegaProformaAFattura,
-  listFattureSimple
+  listFattureSimple,
+  promoteImportedDocumentToFattura,
+  listFattureWithProforme,
+  getFatturaProforme,
+  uploadImportedDocumentsF,
+  parseImportedDocumentF
+
 };

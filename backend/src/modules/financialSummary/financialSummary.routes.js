@@ -13,10 +13,21 @@ router.get("/imported-documents/:id", controller.getImportedDocumentDetail);
 router.post(
   "/imported-documents/upload",
   uploadPdf.array("files", 20),
+  
   controller.uploadImportedDocuments
 );
+router.post(
+  "/imported-documents/uploadf",
+  uploadPdf.array("files", 20),
+  
+  controller.uploadImportedDocumentsF
+);
 router.post("/imported-documents/:fileId/parse", controller.parseImportedDocument);
+router.post("/imported-documents/:fileId/parsef", controller.parseImportedDocumentF);
 router.post("/imported-documents/:fileId/promote", controller.promoteImportedDocumentToProforma);
+router.post("/imported-documents/:fileId/promotef", controller.promoteImportedDocumentToFattura);
+
+
 router.get("/search", controller.searchCondomini);
 router.get("/list", controller.listCondominiSimple);
 

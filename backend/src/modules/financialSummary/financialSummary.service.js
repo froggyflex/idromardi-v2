@@ -94,7 +94,8 @@ function extractDocumentHeader(text) {
   const patterns = [
     /Proforma\s+di\s+fattura\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
     /Proforma\s+di\s+fattura\s+([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
-    /Proforma\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i
+    /Proforma\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
+    /Fattura\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
   ];
 
   for (const pattern of patterns) {
@@ -291,7 +292,8 @@ function normalizePdfText(raw) {
     .trim();
 }
 
-function parseProformaRawText(rawText) {
+function parseProformaRawText(rawText, isFatura = false) {
+
   const normalizedText = normalizePdfText(rawText);
 
   const lines = getLines(normalizedText);
@@ -411,8 +413,8 @@ async function listProformas() {
   }));
 }
 
-async function listFattureSimple() {
-  const [rows] = await db.query(
+async function getFatturaDetail(id) {
+  const [[fattura]] = await db.query(
     `
     SELECT
       f.id,
@@ -429,103 +431,222 @@ async function listFattureSimple() {
     FROM fatture f
     LEFT JOIN condomini_v2 c
       ON c.id = f.condominio_id
+    WHERE f.id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  if (!fattura) return null;
+
+  const [proformas] = await db.query(
+    `
+    SELECT
+      p.id,
+      p.numero,
+      p.descrizione,
+      p.data_documento,
+      p.importo,
+      p.stato,
+      c.indirizzo AS condominio
+    FROM proformas p
+    LEFT JOIN condomini_v2 c
+      ON c.id = p.condominio_id
+    WHERE p.fattura_id = ?
+    ORDER BY p.data_documento DESC, p.created_at DESC
+    `,
+    [id]
+  );
+
+  const importoFattura = Number(fattura.importo || 0);
+  const totaleProforme = proformas.reduce((sum, p) => sum + Number(p.importo || 0), 0);
+
+  return {
+    id: fattura.id,
+    condominio_id: fattura.condominio_id,
+    numero_progressivo: fattura.numero_progressivo,
+    numero: fattura.numero,
+    descrizione: fattura.descrizione,
+    data_documento: fattura.data_documento,
+    importo: importoFattura,
+    stato: fattura.stato,
+    created_at: fattura.created_at,
+    updated_at: fattura.updated_at,
+    condominio: fattura.condominio || "-",
+
+    totale_proforme_collegate: totaleProforme,
+    residuo_da_associare: Math.max(importoFattura - totaleProforme, 0),
+    eccedenza_proforme: Math.max(totaleProforme - importoFattura, 0),
+    copertura_completa: totaleProforme >= importoFattura,
+
+    proformas: proformas.map((p) => ({
+      id: p.id,
+      numero: p.numero,
+      descrizione: p.descrizione,
+      data_documento: p.data_documento,
+      importo: Number(p.importo || 0),
+      stato: p.stato,
+      condominio: p.condominio || "-",
+    })),
+  };
+}
+
+async function listFattureSimple() {
+  const [rows] = await db.query(
+    `
+    SELECT
+      f.id,
+      f.condominio_id,
+      f.numero_progressivo,
+      f.numero,
+      f.descrizione,
+      f.data_documento,
+      f.importo,
+      f.stato,
+      f.created_at,
+      f.updated_at,
+      c.indirizzo AS condominio,
+
+      COALESCE(SUM(p.importo), 0) AS totale_proforme_collegate,
+      COUNT(p.id) AS numero_proforme_collegate
+
+    FROM fatture f
+    LEFT JOIN condomini_v2 c
+      ON c.id = f.condominio_id
+    LEFT JOIN proformas p
+      ON p.fattura_id = f.id
+     AND p.stato <> 'ANNULLATA'
+
     WHERE f.stato <> 'ANNULLATA'
+
+    GROUP BY
+      f.id,
+      f.condominio_id,
+      f.numero_progressivo,
+      f.numero,
+      f.descrizione,
+      f.data_documento,
+      f.importo,
+      f.stato,
+      f.created_at,
+      f.updated_at,
+      c.indirizzo
+
     ORDER BY f.created_at DESC
     `
   );
 
-  return rows.map((row) => ({
-    id: row.id,
-    condominio_id: row.condominio_id,
-    numero_progressivo: row.numero_progressivo,
-    numero: row.numero,
-    descrizione: row.descrizione,
-    data_documento: row.data_documento,
-    importo: Number(row.importo || 0),
-    stato: row.stato,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    condominio: row.condominio || "-",
-  }));
+  return rows.map((row) => {
+    const importoFattura = Number(row.importo || 0);
+    const totaleProforme = Number(row.totale_proforme_collegate || 0);
+
+    return {
+      id: row.id,
+      condominio_id: row.condominio_id,
+      numero_progressivo: row.numero_progressivo,
+      numero: row.numero,
+      descrizione: row.descrizione,
+      data_documento: row.data_documento,
+      importo: importoFattura,
+      stato: row.stato,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      condominio: row.condominio || "-",
+
+      totale_proforme_collegate: totaleProforme,
+      numero_proforme_collegate: Number(row.numero_proforme_collegate || 0),
+      residuo_da_associare: Math.max(importoFattura - totaleProforme, 0),
+      eccedenza_proforme: Math.max(totaleProforme - importoFattura, 0),
+      copertura_completa: totaleProforme >= importoFattura,
+    };
+  });
 }
 
-
-async function collegaProformaAFattura(proformaId, fatturaId) {
-  if (!fatturaId) {
-    throw new Error("Seleziona una fattura.");
-  }
-
+async function collegaSingolaProformaAFattura(proformaId, fatturaId) {
   const conn = await db.getConnection();
 
   try {
     await conn.beginTransaction();
 
-    const [proformaRows] = await conn.query(
-      `
-      SELECT id, stato, fattura_id
-      FROM proformas
-      WHERE id = ?
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [proformaId]
-    );
-
-    if (!proformaRows.length) {
-      throw new Error("Proforma non trovata.");
+    if (!proformaId) {
+      throw new Error("Proforma non valida.");
     }
 
-    const proforma = proformaRows[0];
-
-    if (proforma.stato === "ANNULLATA") {
-      throw new Error("La proforma è annullata e non può essere collegata.");
+    if (!fatturaId) {
+      throw new Error("Seleziona una fattura.");
     }
 
-    const [fatturaRows] = await conn.query(
-      `
-      SELECT id, stato
-      FROM fatture
-      WHERE id = ?
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [fatturaId]
-    );
+    const result = await collegaProformaAFattura(conn, fatturaId, [proformaId]);
 
-    if (!fatturaRows.length) {
-      throw new Error("Fattura non trovata.");
+    if (!result.updatedCount) {
+      throw new Error("Nessuna proforma aggiornata.");
     }
-
-    const fattura = fatturaRows[0];
-
-    if (fattura.stato === "ANNULLATA") {
-      throw new Error("La fattura è annullata e non può ricevere proforme.");
-    }
-
-    await conn.query(
-      `
-      UPDATE proformas
-      SET
-        fattura_id = ?,
-        stato = CASE
-          WHEN stato IN ('BOZZA', 'EMESSA') THEN 'COLLEGATA'
-          ELSE stato
-        END,
-        updated_at = NOW()
-      WHERE id = ?
-      `,
-      [fatturaId, proformaId]
-    );
 
     await conn.commit();
 
-    return { success: true };
+    return {
+      success: true,
+      updatedCount: result.updatedCount,
+    };
   } catch (err) {
     await conn.rollback();
     throw err;
   } finally {
     conn.release();
   }
+}
+
+
+async function collegaProformaAFattura(conn, fatturaId, proformaIds = []) {
+  const cleanIds = [...new Set((Array.isArray(proformaIds) ? proformaIds : []).map(String).filter(Boolean))];
+
+  console.log("collegaProformaAFattura called with:", { fatturaId, proformaIds, cleanIds });
+
+  if (!cleanIds.length) {
+    return { updatedCount: 0 };
+  }
+
+  const placeholders = cleanIds.map(() => "?").join(",");
+
+  const [proformas] = await conn.query(
+    `
+    SELECT id, stato, fattura_id
+    FROM proformas
+    WHERE id IN (${placeholders})
+    FOR UPDATE
+    `,
+    cleanIds
+  );
+
+  if (proformas.length !== cleanIds.length) {
+    throw new Error("Una o più proforme selezionate non esistono.");
+  }
+
+  for (const p of proformas) {
+    if (p.stato === "ANNULLATA") {
+      throw new Error("Una proforma selezionata è annullata e non può essere associata.");
+    }
+
+    if (p.fattura_id) {
+      throw new Error("Una proforma selezionata è già collegata a una fattura.");
+    }
+  }
+
+  const [updateResult] = await conn.query(
+    `
+    UPDATE proformas
+    SET
+      fattura_id = ?,
+      stato = 'COLLEGATA',
+      updated_at = NOW()
+    WHERE id IN (${placeholders})
+    `,
+    [fatturaId, ...cleanIds]
+  );
+
+  return {
+    updatedCount: updateResult.affectedRows || 0,
+  };
 }
 
 
@@ -692,6 +813,72 @@ async function uploadImportedDocuments(files) {
   };
 }
 
+async function uploadImportedDocumentsF(files, documentType = "FATTURA") {
+  const batchId = crypto.randomUUID();
+
+  await db.query(
+    `
+    INSERT INTO import_batches (
+      id,
+      document_type,
+      original_filename,
+      stored_filename,
+      mime_type,
+      file_path,
+      stato,
+      uploaded_at,
+      created_at,
+      updated_at
+    )
+    VALUES (?, 'FATTURA', ?, NULL, NULL, NULL, 'CARICATO', NOW(), NOW(), NOW())
+    `,
+    [batchId, `Batch fattura (${files.length} file)`]
+  );
+
+  for (const file of files) {
+    await db.query(
+      `
+      INSERT INTO import_batch_files (
+        id,
+        batch_id,
+        original_filename,
+        stored_filename,
+        mime_type,
+        file_path,
+        parse_status,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'CARICATO', NOW(), NOW())
+      `,
+      [
+        crypto.randomUUID(),
+        batchId,
+        file.originalname,
+        file.filename,
+        file.mimetype,
+        file.path,
+      ]
+    );
+  }
+
+  const [uploadedFiles] = await db.query(
+    `
+    SELECT id, batch_id, original_filename, parse_status, created_at
+    FROM import_batch_files
+    WHERE batch_id = ?
+    ORDER BY created_at DESC
+    `,
+    [batchId]
+  );
+
+  return {
+    batch_id: batchId,
+    files: uploadedFiles,
+  };
+}
+
+
 async function parseImportedDocument(fileId) {
   const detail = await getImportedDocumentDetail(fileId);
   if (!detail) {
@@ -735,7 +922,7 @@ async function parseImportedDocument(fileId) {
     const extractedDate = parsed?.invoiceDate || null; // already ISO yyyy-mm-dd in new parser
     const extractedDescription =
       parsed?.serviceDescription +" "+ parsed?.customerAddressLines +" "+ parsed?.servicePeriodDescription ||
-      "Proforma importata da parser";
+      "Proforma importato da parser";
 
     const extractedAmount =
       parsed?.totalAmount != null ? Number(parsed.totalAmount) : null;
@@ -884,6 +1071,198 @@ async function parseImportedDocument(fileId) {
   }
 }
 
+async function parseImportedDocumentF(fileId) {
+  const detail = await getImportedDocumentDetail(fileId);
+  if (!detail) {
+    throw new Error("Documento non trovato.");
+  }
+
+  if (!detail.file_path || !fs.existsSync(detail.file_path)) {
+    throw new Error("File PDF non trovato sul server.");
+  }
+
+  await db.query(
+    `UPDATE import_batch_files
+     SET parse_status = 'IN_ELABORAZIONE', updated_at = NOW()
+     WHERE id = ?`,
+    [fileId]
+  );
+
+  let parser;
+  try {
+    
+    const buffer = fs.readFileSync(detail.file_path);
+    parser = await pdf(buffer);
+    const rawText = parser?.text || "";
+
+    if (!rawText.trim()) {
+      await db.query(
+        `UPDATE import_batch_files
+         SET parse_status = 'COMPLETATO_CON_ERRORI',
+             processed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = ?`,
+        [fileId]
+      );
+      throw new Error("Il PDF non contiene testo leggibile. Probabilmente serve OCR.");
+    }
+ 
+    const parsed = parseProformaRawText(rawText);
+
+    // ---- map new parser contract to DB fields ----
+    const extractedNumber = parsed?.invoiceNumber || null;
+    const extractedDate = parsed?.invoiceDate || null; // already ISO yyyy-mm-dd in new parser
+    const extractedDescription =
+      parsed?.serviceDescription +" "+ parsed?.customerAddressLines +" "+ parsed?.servicePeriodDescription ||
+      "Fattura importata da parser";
+
+    const extractedAmount =
+      parsed?.totalAmount != null ? Number(parsed.totalAmount) : null;
+
+    const extractedPaymentMethod = parsed?.paymentMethod || null;
+
+    // merge parser warnings with hard validation errors
+    const validationErrors = [];
+
+    if (!extractedNumber) {
+      validationErrors.push("Numero documento non rilevato.");
+    }
+
+    if (!extractedDate) {
+      validationErrors.push("Data documento non rilevata.");
+    }
+
+    if (extractedAmount == null || !Number.isFinite(extractedAmount)) {
+      validationErrors.push("Importo non rilevato.");
+    }
+
+    if (Array.isArray(parsed?.warnings) && parsed.warnings.length) {
+      validationErrors.push(...parsed.warnings);
+    }
+
+    // Save a richer payload. Do not save only parsed fields.
+    // Keep raw text too, otherwise debugging later becomes stupidly hard.
+    const rawPayload = {
+      parserVersion: "v2",
+      documentType: parsed?.documentType || "unknown",
+      rawText: "", //rawText
+      parsed,
+    };
+
+    const [existingItems] = await db.query(
+      `
+      SELECT id
+      FROM import_items
+      WHERE promoted_entity_id = ?
+        AND document_type = 'FATTURA'
+      LIMIT 1
+      `,
+      [fileId]
+    );
+
+    if (existingItems.length) {
+      await db.query(
+        `
+        UPDATE import_items
+        SET
+          batch_id = ?,
+          extracted_number = ?,
+          extracted_date = ?,
+          extracted_description = ?,
+          extracted_amount = ?,
+          extracted_payment_method = ?,
+          raw_payload = ?,
+          validation_errors = ?,
+          review_status = 'DA_REVISIONARE',
+          updated_at = NOW()
+        WHERE promoted_entity_id = ?
+        `,
+        [
+          detail.batch_id,
+          extractedNumber,
+          extractedDate,
+          extractedDescription,
+          extractedAmount,
+          extractedPaymentMethod,
+          JSON.stringify(rawPayload),
+          JSON.stringify(validationErrors),
+          fileId,
+        ]
+      );
+    } else {
+      await db.query(
+        `
+        INSERT INTO import_items (
+          id,
+          batch_id,
+          document_type,
+          extracted_number,
+          extracted_date,
+          extracted_description,
+          extracted_amount,
+          extracted_payment_method,
+          raw_payload,
+          validation_errors,
+          review_status,
+          promoted_entity_id,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, 'FATTURA', ?, ?, ?, ?, ?, ?, ?, 'DA_REVISIONARE', ?, NOW(), NOW())
+        `,
+        [
+          crypto.randomUUID(),
+          detail.batch_id,
+          extractedNumber,
+          extractedDate,
+          extractedDescription,
+          extractedAmount,
+          extractedPaymentMethod,
+          JSON.stringify(rawPayload),
+          JSON.stringify(validationErrors),
+          fileId,
+        ]
+      );
+    }
+
+    await db.query(
+      `
+      UPDATE import_batch_files
+      SET
+        parse_status = ?,
+        processed_at = NOW(),
+        updated_at = NOW()
+      WHERE id = ?
+      `,
+      [validationErrors.length ? "COMPLETATO_CON_ERRORI" : "COMPLETATO", fileId]
+    );
+
+    return await getImportedDocumentDetail(fileId);
+  } catch (error) {
+    await db.query(
+      `
+      UPDATE import_batch_files
+      SET
+        parse_status = 'COMPLETATO_CON_ERRORI',
+        processed_at = NOW(),
+        updated_at = NOW()
+      WHERE id = ?
+      `,
+      [fileId]
+    );
+
+    throw error;
+  } finally {
+    if (parser) {
+      try {
+        await parser.destroy();
+      } catch (_) {
+        // ignore destroy errors
+      }
+    }
+  }
+}
+
 async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = null) {
   const [rows] = await conn.query(
     `
@@ -899,18 +1278,26 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
 
   if (!rows.length) {
     const counterId = crypto.randomUUID();
+
     await conn.query(
       `
       INSERT INTO document_number_counters (
-        id, document_type, anno, current_value, created_at, updated_at
+        id,
+        document_type,
+        anno,
+        current_value,
+        created_at,
+        updated_at
       )
       VALUES (?, ?, ?, 1, NOW(), NOW())
       `,
       [counterId, documentType, anno]
     );
+
     nextValue = 1;
   } else {
     nextValue = Number(rows[0].current_value || 0) + 1;
+
     await conn.query(
       `
       UPDATE document_number_counters
@@ -931,10 +1318,10 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
         .replace(/^-+|-+$/g, "")
     : null;
 
-  if (documentType === "PROFORMA") {
+  if (documentType === "FATTURA") {
     return {
       progressivo: nextValue,
-      numero: slug ? `PF-${padded}-${slug}` : `PF-${padded}`,
+      numero: slug ? `FT-${padded}-${slug}` : `FT-${padded}`,
     };
   }
 
@@ -1363,6 +1750,263 @@ async function getRecentRows() {
   }));
 }
 
+async function listFattureWithProforme() {
+  const [rows] = await db.query(
+    `
+    SELECT
+      f.id,
+      f.condominio_id,
+      f.numero_progressivo,
+      f.numero,
+      f.descrizione,
+      f.data_documento,
+      f.importo,
+      f.stato,
+      f.created_at,
+      f.updated_at,
+      c.indirizzo AS condominio,
+      COUNT(p.id) AS proforme_count
+    FROM fatture f
+    LEFT JOIN condomini_v2 c
+      ON c.id = f.condominio_id
+    LEFT JOIN proformas p
+      ON p.fattura_id = f.id
+    GROUP BY
+      f.id,
+      f.condominio_id,
+      f.numero_progressivo,
+      f.numero,
+      f.descrizione,
+      f.data_documento,
+      f.importo,
+      f.stato,
+      f.created_at,
+      f.updated_at,
+      c.indirizzo
+    ORDER BY f.created_at DESC
+    `
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    condominio_id: row.condominio_id,
+    numero_progressivo: row.numero_progressivo,
+    numero: row.numero,
+    descrizione: row.descrizione,
+    data_documento: row.data_documento,
+    importo: Number(row.importo || 0),
+    stato: row.stato,
+    condominio: row.condominio || "-",
+    proforme_count: Number(row.proforme_count || 0),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+async function getFatturaProforme(fatturaId) {
+  const [rows] = await db.query(
+    `
+    SELECT
+      p.id,
+      p.numero,
+      p.descrizione,
+      p.data_documento,
+      p.importo,
+      p.stato,
+      c.indirizzo AS condominio
+    FROM proformas p
+    LEFT JOIN condomini_v2 c
+      ON c.id = p.condominio_id
+    WHERE p.fattura_id = ?
+    ORDER BY p.created_at DESC
+    `,
+    [fatturaId]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    numero: row.numero,
+    descrizione: row.descrizione,
+    data_documento: row.data_documento,
+    importo: Number(row.importo || 0),
+    stato: row.stato,
+    condominio: row.condominio || "-",
+  }));
+}
+
+async function promoteImportedDocumentToFattura(fileId, condominioId, proformaIds = []) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    if (!fileId) throw new Error("File mancante");
+    if (!condominioId) throw new Error("Condominio mancante");
+
+    const cleanProformaIds = Array.isArray(proformaIds)
+      ? proformaIds.filter(Boolean)
+      : [];
+
+    console.log("👉 PROMOTE FATTURA");
+    console.log("fileId:", fileId);
+    console.log("condominioId:", condominioId);
+    console.log("proformaIds:", cleanProformaIds);
+
+    // 1. GET IMPORTED DOC
+    const [[imported]] = await conn.query(
+      `
+      SELECT *
+      FROM import_items
+      WHERE promoted_entity_id = ?
+      AND document_type = 'FATTURA'
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [fileId]
+    );
+
+    if (!imported) {
+      throw new Error("Documento importato non trovato");
+    }
+
+    if (imported.review_status === "PROMOSSO") {
+      throw new Error("Documento già promosso");
+    }
+
+    // 2. VALIDATE DATA
+    const data = imported.extracted_date;
+    const descrizione = imported.extracted_description || "Fattura da parser";
+    const importo = Number(imported.extracted_amount);
+
+    if (!data) throw new Error("Data mancante");
+    if (!Number.isFinite(importo)) throw new Error("Importo non valido");
+
+    // 3. GET CONDOMINIO
+    const [[condominio]] = await conn.query(
+      `SELECT id, indirizzo FROM condomini_v2 WHERE id = ?`,
+      [condominioId]
+    );
+
+    if (!condominio) throw new Error("Condominio non trovato");
+
+    // 4. CREATE FATTURA
+    const anno = new Date(data).getFullYear();
+
+    const numbering = await getNextDocumentNumber(
+      conn,
+      "FATTURA",
+      anno,
+      condominio.indirizzo
+    );
+
+    const fatturaId = crypto.randomUUID();
+
+    await conn.query(
+      `
+      INSERT INTO fatture (
+        id,
+        condominio_id,
+        source_import_file_id,
+        numero_progressivo,
+        numero,
+        descrizione,
+        data_documento,
+        importo,
+        stato,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'EMESSA', NOW(), NOW())
+      `,
+      [
+        fatturaId,
+        condominioId,
+        fileId,
+        numbering.progressivo,
+        numbering.numero,
+        descrizione,
+        data,
+        importo,
+      ]
+    );
+
+    console.log("✅ Fattura creata:", fatturaId);
+
+    // 5. LINK PROFORMAS (CRITICAL PART)
+    if (cleanProformaIds.length > 0) {
+      const placeholders = cleanProformaIds.map(() => "?").join(",");
+
+      const [existing] = await conn.query(
+        `
+        SELECT id, fattura_id
+        FROM proformas
+        WHERE id IN (${placeholders})
+        FOR UPDATE
+        `,
+        cleanProformaIds
+      );
+
+      console.log("🔍 Proforme trovate:", existing.length);
+
+      if (existing.length !== cleanProformaIds.length) {
+        throw new Error("Alcune proforme non esistono");
+      }
+
+      // HARD UPDATE
+      const [updateResult] = await conn.query(
+        `
+        UPDATE proformas
+        SET
+          fattura_id = ?,
+          stato = 'COLLEGATA',
+          updated_at = NOW()
+        WHERE id IN (${placeholders})
+        `,
+        [fatturaId, ...cleanProformaIds]
+      );
+
+      console.log("🧠 UPDATE RESULT:", updateResult);
+
+      if (updateResult.affectedRows === 0) {
+        throw new Error("Nessuna proforma aggiornata (BUG)");
+      }
+    }
+
+    // 6. MARK IMPORT AS DONE
+    await conn.query(
+      `
+      UPDATE import_items
+      SET review_status = 'PROMOSSO', updated_at = NOW()
+      WHERE id = ?
+      `,
+      [imported.id]
+    );
+
+    await conn.query(
+        `
+        UPDATE import_bach_files
+        SET
+          parse_status = 'PROMOSSO',
+          updated_at = NOW()
+        WHERE id = ?
+        `,
+        [imported.id]
+      );
+
+    await conn.commit();
+
+    return {
+      success: true,
+      fatturaId,
+    };
+  } catch (err) {
+    await conn.rollback();
+    console.error("❌ promoteImportedDocumentToFattura:", err);
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
  module.exports = {
   listImportedDocuments,
   getImportedDocumentDetail,
@@ -1379,5 +2023,12 @@ async function getRecentRows() {
   listProformas,
   collegaProformaAFattura,
   listFattureSimple,
+  listFattureWithProforme,
+  getFatturaProforme,
+  uploadImportedDocumentsF,
+  parseImportedDocumentF,
+  collegaSingolaProformaAFattura,
+  promoteImportedDocumentToFattura,
+  getFatturaDetail
 
 };
