@@ -1554,7 +1554,7 @@ async function promoteImportedDocumentToProforma(fileId, condominioIds = []) {
       `
       UPDATE import_items
       SET
-        review_status = 'PROMOSSO',
+        review_status = 'COMPLETATO_PROMOSSO',
         reviewed_at = NOW(),
         updated_at = NOW()
       WHERE id = ?
@@ -1986,7 +1986,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
         `
         UPDATE import_bach_files
         SET
-          parse_status = 'PROMOSSO',
+          parse_status = 'COMPLETATO_PROMOSSO',
           updated_at = NOW()
         WHERE id = ?
         `,
