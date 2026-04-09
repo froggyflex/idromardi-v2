@@ -32,6 +32,17 @@ type FatturaDetail = {
     data_documento: string;
     importo: number;
     stato: string;
+    condominio_id: string;
+    condominio: string;
+  }>;
+  available_proformas: Array<{
+    id: string;
+    numero: string;
+    descrizione: string | null;
+    data_documento: string;
+    importo: number;
+    stato: string;
+    condominio_id: string;
     condominio: string;
   }>;
 };
@@ -262,7 +273,10 @@ export default function FinancialSummaryPageTemplate() {
   const [fatturaStatusFilter, setFatturaStatusFilter] = useState("TUTTI");
   const [selectedFatturaDetail, setSelectedFatturaDetail] = useState<FatturaDetail | null>(null);
   const [loadingFatturaDetail, setLoadingFatturaDetail] = useState(false);
-  
+  const [annullingFatturaId, setAnnullingFatturaId] = useState<string | null>(null);
+  const [isManageFatturaModalOpen, setIsManageFatturaModalOpen] = useState(false);
+  const [selectedProformaIdsForExistingFattura, setSelectedProformaIdsForExistingFattura] = useState<string[]>([]);
+  const [linkingProformasToFattura, setLinkingProformasToFattura] = useState(false);
   
   const filteredFattureRows = useMemo(() => {
     return fattureRows.filter((row: any) => {
@@ -380,6 +394,34 @@ export default function FinancialSummaryPageTemplate() {
 
   const [importedDocsSearch, setImportedDocsSearch] = useState("");
 
+  
+    async function annullaFattura(id: string) {
+    const reason = window.prompt("Motivo annullamento fattura:");
+    if (reason === null) return;
+
+    try {
+      setAnnullingFatturaId(id);
+      setError("");
+
+      await api.post(`/financial-summary/${id}/annullaF`, { reason });
+
+      if (selectedFatturaDetail?.id === id) {
+        setSelectedFatturaDetail(null);
+      }
+
+      await Promise.all([
+        loadSummary(),
+        loadRecentRows(),
+        loadProformasRows(),
+        loadFattureRows(),
+      ]);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore durante l'annullamento della fattura.");
+    } finally {
+      setAnnullingFatturaId(null);
+    }
+  }
+
   async function loadFatturaDetail(id: string) {
     try {
       setLoadingFatturaDetail(true);
@@ -397,6 +439,47 @@ export default function FinancialSummaryPageTemplate() {
       [id]: !prev[id],
     }));
   }
+
+  const filteredAvailableProformasForExistingFattura = useMemo(() => {
+    const q = fatturaProformaSearch.trim().toLowerCase();
+    const list = selectedFatturaDetail?.available_proformas || [];
+
+    if (!q) return list;
+
+    return list.filter((p) =>
+      [
+        p.numero,
+        p.condominio || "",
+        p.descrizione || "",
+        String(p.importo || ""),
+        p.stato || "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [selectedFatturaDetail, fatturaProformaSearch]);
+
+  const [fatturaAssociatedProformaSearch, setFatturaAssociatedProformaSearch] = useState("");
+  const filteredAssociatedProformasForExistingFattura = useMemo(() => {
+    const q = fatturaAssociatedProformaSearch.trim().toLowerCase();
+    const list = selectedFatturaDetail?.proformas || [];
+
+    if (!q) return list;
+
+    return list.filter((p) =>
+      [
+        p.numero,
+        p.condominio || "",
+        p.descrizione || "",
+        String(p.importo || ""),
+        p.stato || "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [selectedFatturaDetail, fatturaAssociatedProformaSearch]);
   const filteredImportedDocs = useMemo(() => {
     const q = importedDocsSearch.trim().toLowerCase();
 
@@ -431,6 +514,7 @@ export default function FinancialSummaryPageTemplate() {
     return proformasRows.filter((p) => !p.fattura_id && p.stato !== "ANNULLATA");
   }, [proformasRows]);
 
+
   const filteredAvailableProformasForFattura = useMemo(() => {
     const q = fatturaProformaSearch.trim().toLowerCase();
     if (!q) return availableProformasForFattura;
@@ -448,6 +532,7 @@ export default function FinancialSummaryPageTemplate() {
         .includes(q)
     );
   }, [availableProformasForFattura, fatturaProformaSearch]);
+  
   useEffect(() => {
     void loadImportedFattureDocuments();
   }, []);
@@ -503,52 +588,41 @@ export default function FinancialSummaryPageTemplate() {
       setLoadingFatture(false);
     }
   }
-    async function collegaProformaAFattura() {
-
-      if (!linkingProforma?.id) {
-        setError("Proforma non valida");
-        return;
-      }
-
-      if (!selectedFatturaId) {
-        setError("Seleziona una fattura");
-        return;
-      }
- 
-      try {
-        setLinking(true);
-        setError("");
-
-        await api.post(`/financial-summary/${linkingProforma.id}/collega-fattura`, {
-          fatturaId: selectedFatturaId,
-        });
-
-        
-        // CLOSE MODAL
-         
-        setLinkingProforma(null);
-        setSelectedFatturaId("");
-
-         
-        await Promise.all([
-          loadProformasRows(),
-          loadFattureRows(),
-          loadRecentRows(),
-          loadSummary(),
-        ]);
-
-      } catch (err: any) {
-        console.error("❌ LINK ERROR:", err);
-
-        setError(
-          err?.response?.data?.error ||
-          "Errore durante il collegamento"
-        );
-      } finally {
-        setLinking(false);
-      }
+  
+  async function collegaProformaAFattura() {
+    if (!linkingProforma?.id) {
+      setError("Proforma non valida");
+      return;
     }
-
+  
+    if (!selectedFatturaId) {
+      setError("Seleziona una fattura");
+      return;
+    }
+  
+    try {
+      setLinking(true);
+      setError("");
+  
+      await api.post(`/financial-summary/${linkingProforma.id}/collega-fattura`, {
+        fatturaId: selectedFatturaId,
+      });
+  
+      setLinkingProforma(null);
+      setSelectedFatturaId("");
+  
+      await Promise.all([
+        loadProformasRows(),
+        loadFattureRows(),
+        loadRecentRows(),
+        loadSummary(),
+      ]);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore durante il collegamento");
+    } finally {
+      setLinking(false);
+    }
+  }
   
   function getParseStatusClasses(status?: string) {
     switch (status) {
@@ -676,6 +750,51 @@ export default function FinancialSummaryPageTemplate() {
         : [...prev, condominio]
     );
   }
+
+async function collegaProformeAFatturaEsistente() {
+  if (!selectedFatturaDetail?.id) {
+    setError("Fattura non valida.");
+    return;
+  }
+
+  if (!selectedProformaIdsForExistingFattura.length) {
+    setError("Seleziona almeno una proforma.");
+    return;
+  }
+
+  try {
+    setLinkingProformasToFattura(true);
+    setError("");
+
+    await api.post(`/financial-summary/${selectedFatturaDetail.id}/collega-proforme`, {
+      proformaIds: selectedProformaIdsForExistingFattura,
+    });
+
+    const fatturaId = selectedFatturaDetail.id;
+
+    setIsManageFatturaModalOpen(false);
+    setSelectedProformaIdsForExistingFattura([]);
+    setFatturaProformaSearch("");
+    setFatturaAssociatedProformaSearch("");
+
+    await Promise.all([
+      loadSummary(),
+      loadRecentRows(),
+      loadProformasRows(),
+      loadFattureRows(),
+      loadFatturaDetail(fatturaId),
+    ]);
+  } catch (err: any) {
+    console.error("❌ collegaProformeAFatturaEsistente", err?.response?.data || err);
+    setError(
+      err?.response?.data?.error ||
+        "Errore durante il collegamento delle proforme alla fattura."
+    );
+  } finally {
+    setLinkingProformasToFattura(false);
+  }
+}
+
   async function loadSummary() {
     try {
       setLoadingSummary(true);
@@ -999,6 +1118,22 @@ async function uploadFatturaFiles() {
       }
     }, [fatturaPage, totalFatturaPages]);
 
+    useEffect(() => {
+    if (!isManageFatturaModalOpen) return;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [isManageFatturaModalOpen]);
+
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 quick-sand">
       <div className="mx-auto max-w-8xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
@@ -1199,6 +1334,27 @@ async function uploadFatturaFiles() {
                             <td className="px-6 py-4 text-slate-700">{row.fattura_numero || "-"}</td>
                             <td className="px-6 py-4 text-right">
                               <div className="flex justify-end gap-2">
+                                {row.stato === "EMESSA" ? (
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      onClick={() => annullaProforma(row.id)}
+                                      disabled={annullingId === row.id}
+                                      className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-60"
+                                    >
+                                      {annullingId === row.id ? "..." : "ANNULLA"}
+                                    </button>
+
+                                    <button
+                                      onClick={() => deleteProforma(row.id)}
+                                      disabled={deletingId === row.id}
+                                      className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                                    >
+                                      {deletingId === row.id ? "..." : "ELIMINA"}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="text-right text-xs text-slate-400">-</div>
+                                )}
                                 <button
                                   onClick={() => {
                                     setLinkingProforma(row);
@@ -1207,7 +1363,7 @@ async function uploadFatturaFiles() {
                                   disabled={row.stato === "ANNULLATA" || row.fattura_numero != null}
                                   className="rounded-xl border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-50"
                                 >
-                                  Collega a fattura
+                                  ASSOCIA
                                 </button>
                               </div>
                             </td>
@@ -1263,295 +1419,253 @@ async function uploadFatturaFiles() {
                 ) : null}
               </section>
             ) : null}
-            {activeDetailSection === "FATTURA" ? (
-              <section className="space-y-6">
-                <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-                  <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h3 className="text-xl font-bold">Dettaglio fatture</h3>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Elenco completo delle fatture con copertura da proforme collegate.
-                      </p>
-                    </div>
+{activeDetailSection === "FATTURA" ? (
+  <section className="space-y-6">
+    <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h3 className="text-xl font-bold">Dettaglio fatture</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Elenco completo delle fatture con copertura da proforme collegate.
+          </p>
+        </div>
 
-                    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                      <input
-                        value={fatturaSearch}
-                        onChange={(e) => setFatturaSearch(e.target.value)}
-                        placeholder="Cerca numero, condominio, descrizione..."
-                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-                      />
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <input
+            value={fatturaSearch}
+            onChange={(e) => setFatturaSearch(e.target.value)}
+            placeholder="Cerca numero, condominio, descrizione..."
+            className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+          />
 
-                      <select
-                        value={fatturaStatusFilter}
-                        onChange={(e) => setFatturaStatusFilter(e.target.value)}
-                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+          <select
+            value={fatturaStatusFilter}
+            onChange={(e) => setFatturaStatusFilter(e.target.value)}
+            className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+          >
+            <option value="TUTTI">Tutti gli stati</option>
+            <option value="BOZZA">Bozza</option>
+            <option value="EMESSA">Emessa</option>
+            <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
+            <option value="PAGATA">Pagata</option>
+            <option value="ANNULLATA">Annullata</option>
+          </select>
+
+          <button
+            onClick={() => setActiveDetailSection(null)}
+            className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+          >
+            Chiudi sezione
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            <tr>
+              <th className="px-6 py-4">Numero</th>
+              <th className="px-6 py-4">Condominio</th>
+              <th className="px-6 py-4">Descrizione</th>
+              <th className="px-6 py-4">Data</th>
+              <th className="px-6 py-4 text-right">Importo fattura</th>
+              <th className="px-6 py-4 text-right">Credito associato</th>
+              <th className="px-6 py-4 text-right">Residuo</th>
+              <th className="px-6 py-4 text-right">Eccedenza</th>
+              <th className="px-6 py-4">Stato</th>
+              <th className="px-6 py-4 text-right">Azioni</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loadingFatture ? (
+              <tr>
+                <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
+                  Caricamento fatture...
+                </td>
+              </tr>
+            ) : filteredFattureRows.length === 0 ? (
+              <tr>
+                <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
+                  Nessuna fattura trovata.
+                </td>
+              </tr>
+            ) : (
+              filteredFattureRows.map((row: any) => (
+                <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
+                  <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
+                  <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
+                  <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>
+                  <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                    {euro(Number(row.importo || 0))}
+                  </td>
+                  <td className="px-6 py-4 text-right font-semibold text-fuchsia-700">
+                    {euro(Number(row.totale_proforme_collegate || 0))}
+                  </td>
+                  <td className="px-6 py-4 text-right font-semibold text-amber-700">
+                    {euro(Number(row.residuo_da_associare || 0))}
+                  </td>
+                  <td className="px-6 py-4 text-right font-semibold text-rose-700">
+                    {euro(Number(row.eccedenza_proforme || 0))}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                        statusClass[row.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                      }`}
+                    >
+                      {String(row.stato || "").replaceAll("_", " ")}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => void loadFatturaDetail(row.id)}
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
                       >
-                        <option value="TUTTI">Tutti gli stati</option>
-                        <option value="BOZZA">Bozza</option>
-                        <option value="EMESSA">Emessa</option>
-                        <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
-                        <option value="PAGATA">Pagata</option>
-                        <option value="ANNULLATA">Annullata</option>
-                      </select>
-
-                      <select
-                        value={fatturaRowsPerPage}
-                        onChange={(e) => {
-                          setFatturaRowsPerPage(Number(e.target.value));
-                          setFatturaPage(1);
-                        }}
-                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-                      >
-                        <option value={5}>5 righe</option>
-                        <option value={10}>10 righe</option>
-                        <option value={20}>20 righe</option>
-                        <option value={50}>50 righe</option>
-                      </select>
+                        Apri dettaglio
+                      </button>
 
                       <button
-                        onClick={() => setActiveDetailSection(null)}
-                        className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                        onClick={() => void annullaFattura(row.id)}
+                        disabled={annullingFatturaId === row.id}
+                        className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 disabled:opacity-60"
                       >
-                        Chiudi sezione
+                        {annullingFatturaId === row.id ? "..." : "Annulla"}
                       </button>
                     </div>
-                  </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                        <tr>
-                          <th className="px-6 py-4">Numero</th>
-                          <th className="px-6 py-4">Condominio</th>
-                          <th className="px-6 py-4">Descrizione</th>
-                          <th className="px-6 py-4">Data</th>
-                          <th className="px-6 py-4 text-right">Importo fattura</th>
-                          <th className="px-6 py-4 text-right">Credito associato</th>
-                          <th className="px-6 py-4 text-right">Residuo</th>
-                          <th className="px-6 py-4 text-right">Eccedenza</th>
-                          <th className="px-6 py-4">Stato</th>
-                          <th className="px-6 py-4 text-right">Azioni</th>
-                        </tr>
-                      </thead>
+    {selectedFatturaDetail ? (
+      <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-xl font-bold">Dettaglio fattura {selectedFatturaDetail.numero}</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Vista delle proforme collegate e del credito residuo da associare.
+            </p>
+          </div>
 
-                      <tbody>
-                        {loadingFatture ? (
-                          <tr>
-                            <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
-                              Caricamento fatture...
-                            </td>
-                          </tr>
-                        ) : filteredFattureRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
-                              Nessuna fattura trovata.
-                            </td>
-                          </tr>
-                        ) : (
-                          paginatedFattureRows.map((row: any) => (
-                            <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
-                              <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
-                              <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
-                              <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                setSelectedProformaIdsForExistingFattura([]);
+                setFatturaProformaSearch("");
+                setIsManageFatturaModalOpen(true);
+              }}
+              className="rounded-2xl border border-fuchsia-300 bg-fuchsia-50 px-4 py-3 text-sm font-semibold text-fuchsia-700"
+            >
+              Associa proforme
+            </button>
 
-                              <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                                {euro(Number(row.importo || 0))}
-                              </td>
+            <button
+              onClick={() => setSelectedFatturaDetail(null)}
+              className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              Chiudi dettaglio
+            </button>
+          </div>
+        </div>
 
-                              <td className="px-6 py-4 text-right font-semibold text-fuchsia-700">
-                                {euro(Number(row.totale_proforme_collegate || 0))}
-                              </td>
+        <div className="grid gap-4 p-6 lg:grid-cols-4">
+          <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              Importo fattura
+            </div>
+            <div className="mt-2 text-xl font-bold text-slate-900">
+              {euro(selectedFatturaDetail.importo)}
+            </div>
+          </div>
 
-                              <td className="px-6 py-4 text-right font-semibold text-amber-700">
-                                {euro(Number(row.residuo_da_associare || 0))}
-                              </td>
+          <div className="rounded-2xl bg-fuchsia-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+              Credito associato
+            </div>
+            <div className="mt-2 text-xl font-bold text-fuchsia-800">
+              {euro(selectedFatturaDetail.totale_proforme_collegate)}
+            </div>
+          </div>
 
-                              <td className="px-6 py-4 text-right font-semibold text-rose-700">
-                                {euro(Number(row.eccedenza_proforme || 0))}
-                              </td>
+          <div className="rounded-2xl bg-amber-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
+              Residuo da coprire
+            </div>
+            <div className="mt-2 text-xl font-bold text-amber-800">
+              {euro(selectedFatturaDetail.residuo_da_associare)}
+            </div>
+          </div>
 
-                              <td className="px-6 py-4">
-                                <span
-                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                                    statusClass[row.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
-                                  }`}
-                                >
-                                  {String(row.stato || "").replaceAll("_", " ")}
-                                </span>
-                              </td>
+          <div className="rounded-2xl bg-rose-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">
+              Eccedenza
+            </div>
+            <div className="mt-2 text-xl font-bold text-rose-800">
+              {euro(selectedFatturaDetail.eccedenza_proforme)}
+            </div>
+          </div>
+        </div>
 
-                              <td className="px-6 py-4 text-right">
-                                <button
-                                  onClick={() => void loadFatturaDetail(row.id)}
-                                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                                >
-                                  Apri dettaglio
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {!loadingFatture && filteredFattureRows.length > 0 ? (
-                    <div className="flex flex-col gap-4 border-t border-slate-200 px-5 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
-                      <div className="text-sm text-slate-500">
-                        Mostrando{" "}
-                        <span className="font-semibold text-slate-700">
-                          {(fatturaPage - 1) * fatturaRowsPerPage + 1}
-                        </span>{" "}
-                        -{" "}
-                        <span className="font-semibold text-slate-700">
-                          {Math.min(fatturaPage * fatturaRowsPerPage, filteredFattureRows.length)}
-                        </span>{" "}
-                        di{" "}
-                        <span className="font-semibold text-slate-700">
-                          {filteredFattureRows.length}
-                        </span>{" "}
-                        fatture
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => setFatturaPage((p) => Math.max(1, p - 1))}
-                          disabled={fatturaPage === 1}
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Precedente
-                        </button>
-
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">
-                          Pagina {fatturaPage} di {totalFatturaPages}
-                        </div>
-
-                        <button
-                          onClick={() => setFatturaPage((p) => Math.min(totalFatturaPages, p + 1))}
-                          disabled={fatturaPage === totalFatturaPages}
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          Successiva
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                </section>
-
-                {selectedFatturaDetail ? (
-                  <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-                    <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <h3 className="text-xl font-bold">
-                          Dettaglio fattura {selectedFatturaDetail.numero}
-                        </h3>
-                        <p className="mt-1 text-sm text-slate-500">
-                          Vista delle proforme collegate e del credito residuo da associare.
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={() => setSelectedFatturaDetail(null)}
-                        className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+        <div className="overflow-x-auto border-t border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              <tr>
+                <th className="px-6 py-4">Numero proforma</th>
+                <th className="px-6 py-4">Condominio</th>
+                <th className="px-6 py-4">Descrizione</th>
+                <th className="px-6 py-4">Data</th>
+                <th className="px-6 py-4 text-right">Importo</th>
+                <th className="px-6 py-4">Stato</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingFatturaDetail ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                    Caricamento dettaglio...
+                  </td>
+                </tr>
+              ) : selectedFatturaDetail.proformas.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                    Nessuna proforma collegata.
+                  </td>
+                </tr>
+              ) : (
+                selectedFatturaDetail.proformas.map((p) => (
+                  <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-6 py-4 font-semibold text-slate-800">{p.numero}</td>
+                    <td className="px-6 py-4 text-slate-700">{p.condominio || "-"}</td>
+                    <td className="px-6 py-4 text-slate-700">{p.descrizione || "-"}</td>
+                    <td className="px-6 py-4 text-slate-500">{formatDate(p.data_documento)}</td>
+                    <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                      {euro(p.importo)}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                          statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                        }`}
                       >
-                        Chiudi dettaglio
-                      </button>
-                    </div>
-
-                    <div className="grid gap-4 p-6 lg:grid-cols-4">
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                          Importo fattura
-                        </div>
-                        <div className="mt-2 text-xl font-bold text-slate-900">
-                          {euro(selectedFatturaDetail.importo)}
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl bg-fuchsia-50 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
-                          Credito associato
-                        </div>
-                        <div className="mt-2 text-xl font-bold text-fuchsia-800">
-                          {euro(selectedFatturaDetail.totale_proforme_collegate)}
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl bg-amber-50 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
-                          Residuo da coprire
-                        </div>
-                        <div className="mt-2 text-xl font-bold text-amber-800">
-                          {euro(selectedFatturaDetail.residuo_da_associare)}
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl bg-rose-50 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">
-                          Eccedenza
-                        </div>
-                        <div className="mt-2 text-xl font-bold text-rose-800">
-                          {euro(selectedFatturaDetail.eccedenza_proforme)}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="overflow-x-auto border-t border-slate-200">
-                      <table className="min-w-full text-sm">
-                        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                          <tr>
-                            <th className="px-6 py-4">Numero proforma</th>
-                            <th className="px-6 py-4">Condominio</th>
-                            <th className="px-6 py-4">Descrizione</th>
-                            <th className="px-6 py-4">Data</th>
-                            <th className="px-6 py-4 text-right">Importo</th>
-                            <th className="px-6 py-4">Stato</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {loadingFatturaDetail ? (
-                            <tr>
-                              <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
-                                Caricamento dettaglio...
-                              </td>
-                            </tr>
-                          ) : selectedFatturaDetail.proformas.length === 0 ? (
-                            <tr>
-                              <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
-                                Nessuna proforma collegata.
-                              </td>
-                            </tr>
-                          ) : (
-                            selectedFatturaDetail.proformas.map((p) => (
-                              <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
-                                <td className="px-6 py-4 font-semibold text-slate-800">{p.numero}</td>
-                                <td className="px-6 py-4 text-slate-700">{p.condominio || "-"}</td>
-                                <td className="px-6 py-4 text-slate-700">{p.descrizione || "-"}</td>
-                                <td className="px-6 py-4 text-slate-500">{formatDate(p.data_documento)}</td>
-                                <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                                  {euro(p.importo)}
-                                </td>
-                                <td className="px-6 py-4">
-                                  <span
-                                    className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                                      statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
-                                    }`}
-                                  >
-                                    {String(p.stato || "").replaceAll("_", " ")}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-                ) : null}
-              </section>
-            ) : null}
+                        {String(p.stato || "").replaceAll("_", " ")}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    ) : null}
+  </section>
+) : null}
 
           {/* Main command center */}
           <section className="overflow-hidden rounded-[34px] border border-slate-300/70 bg-white shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
@@ -2944,10 +3058,352 @@ async function uploadFatturaFiles() {
               </div>
             </div>
           ) : null}
+          {isManageFatturaModalOpen && selectedFatturaDetail ? (
+            <div className="fixed inset-0 z-50 overflow-hidden">
+              {/* Backdrop */}
+              <div
+                className="absolute inset-0 bg-slate-950/55 backdrop-blur-[3px]"
+                onClick={() => {
+                  setIsManageFatturaModalOpen(false);
+                  setSelectedProformaIdsForExistingFattura([]);
+                  setFatturaProformaSearch("");
+                }}
+              />
+
+              {/* Modal shell */}
+              <div className="relative flex h-full w-full items-center justify-center p-4 lg:p-6">
+                <div
+                  className="relative flex h-[92vh] w-full max-w-[1800px] flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-slate-50 shadow-[0_25px_80px_rgba(15,23,42,0.30)]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Header */}
+                  <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-5 sm:px-7">
+                    <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <div className="inline-flex items-center rounded-full border border-fuchsia-200 bg-fuchsia-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-fuchsia-700">
+                          Gestione collegamenti
+                        </div>
+
+                        <h3 className="mt-3 text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+                          Associa proforme alla fattura{" "}
+                          <span className="text-fuchsia-700">{selectedFatturaDetail.numero}</span>
+                        </h3>
+
+                        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                          Seleziona le proforme da collegare per coprire il residuo della fattura.
+                          La parte sinistra mostra ciò che è già associato, mentre a destra puoi
+                          scegliere nuove proforme disponibili.
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setIsManageFatturaModalOpen(false);
+                          setSelectedProformaIdsForExistingFattura([]);
+                          setFatturaProformaSearch("");
+                        }}
+                        className="inline-flex h-11 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        Chiudi
+                      </button>
+                    </div>
+
+                    {/* Top summary */}
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Totale fattura
+                        </div>
+                        <div className="mt-1 text-lg font-bold text-slate-900">
+                          {euro(Number(selectedFatturaDetail.importo || 0))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Già associato
+                        </div>
+                        <div className="mt-1 text-lg font-bold text-emerald-700">
+                          {euro(
+                            filteredAssociatedProformasForExistingFattura.reduce(
+                              (sum, p) => sum + Number(p.importo || 0),
+                              0
+                            )
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Selezionate ora
+                        </div>
+                        <div className="mt-1 text-lg font-bold text-fuchsia-700">
+                          {euro(
+                            filteredAvailableProformasForExistingFattura
+                              .filter((p) => selectedProformaIdsForExistingFattura.includes(p.id))
+                              .reduce((sum, p) => sum + Number(p.importo || 0), 0)
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Numero selezioni
+                        </div>
+                        <div className="mt-1 text-lg font-bold text-slate-900">
+                          {selectedProformaIdsForExistingFattura.length}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Content */}
+                  <div className="min-h-0 flex-1 overflow-hidden p-4 sm:p-6">
+                    <div className="grid h-full gap-6 xl:grid-cols-[1fr_1fr]">
+                      {/* LEFT */}
+                      <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                        <div className="shrink-0 border-b border-slate-200 px-5 py-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="min-w-0">
+                              <h4 className="text-base font-bold text-slate-900">
+                                Proforme già associate
+                              </h4>
+                              <p className="mt-1 text-sm text-slate-500">
+                                Elenco delle proforme già collegate a questa fattura.
+                              </p>
+                            </div>
+
+                            <div className="w-full lg:w-[280px]">
+                              <input
+                                value={fatturaAssociatedProformaSearch}
+                                onChange={(e) => setFatturaAssociatedProformaSearch(e.target.value)}
+                                placeholder="Cerca tra le associate..."
+                                className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 shadow-sm">
+                              <tr>
+                                <th className="px-4 py-3">Numero</th>
+                                <th className="px-4 py-3">Condominio</th>
+                                <th className="px-4 py-3">Descrizione</th>
+                                <th className="px-4 py-3 text-right">Importo</th>
+                                <th className="px-4 py-3">Stato</th>
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {filteredAssociatedProformasForExistingFattura.length === 0 ? (
+                                <tr>
+                                  <td colSpan={5} className="px-4 py-12 text-center text-slate-500">
+                                    Nessuna proforma già associata.
+                                  </td>
+                                </tr>
+                              ) : (
+                                filteredAssociatedProformasForExistingFattura.map((p, idx) => (
+                                  <tr
+                                    key={p.id}
+                                    className={`border-t border-slate-100 transition ${
+                                      idx % 2 === 0 ? "bg-white" : "bg-slate-50/50"
+                                    } hover:bg-slate-50`}
+                                  >
+                                    <td className="px-4 py-3 font-semibold text-slate-800">
+                                      {p.numero}
+                                    </td>
+                                    <td className="px-4 py-3 text-slate-700">
+                                      {p.condominio || "-"}
+                                    </td>
+                                    <td className="px-4 py-3 text-slate-700">
+                                      {p.descrizione || "-"}
+                                    </td>
+                                    <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                                      {euro(Number(p.importo || 0))}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <span
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${
+                                          statusClass[p.stato] ||
+                                          "bg-slate-100 text-slate-700 ring-slate-200"
+                                        }`}
+                                      >
+                                        {String(p.stato || "").replaceAll("_", " ")}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+
+                      {/* RIGHT */}
+                      <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                        <div className="shrink-0 border-b border-slate-200 px-5 py-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="min-w-0">
+                              <h4 className="text-base font-bold text-slate-900">
+                                Proforme disponibili da associare
+                              </h4>
+                              <p className="mt-1 text-sm text-slate-500">
+                                Seleziona solo le proforme ancora non collegate a una fattura.
+                              </p>
+                            </div>
+
+                            <div className="w-full lg:w-[280px]">
+                              <input
+                                value={fatturaProformaSearch}
+                                onChange={(e) => setFatturaProformaSearch(e.target.value)}
+                                placeholder="Cerca tra le disponibili..."
+                                className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 shadow-sm">
+                              <tr>
+                                <th className="w-[72px] px-4 py-3">Sel.</th>
+                                <th className="px-4 py-3">Numero</th>
+                                <th className="px-4 py-3">Condominio</th>
+                                <th className="px-4 py-3">Descrizione</th>
+                                <th className="px-4 py-3 text-right">Importo</th>
+                                <th className="px-4 py-3">Stato</th>
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {filteredAvailableProformasForExistingFattura.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="px-4 py-12 text-center text-slate-500">
+                                    Nessuna proforma disponibile.
+                                  </td>
+                                </tr>
+                              ) : (
+                                filteredAvailableProformasForExistingFattura.map((p, idx) => {
+                                  const checked = selectedProformaIdsForExistingFattura.includes(p.id);
+
+                                  return (
+                                    <tr
+                                      key={p.id}
+                                      className={`border-t border-slate-100 transition ${
+                                        checked
+                                          ? "bg-fuchsia-50/70"
+                                          : idx % 2 === 0
+                                          ? "bg-white"
+                                          : "bg-slate-50/50"
+                                      } hover:bg-fuchsia-50/40`}
+                                    >
+                                      <td className="px-4 py-3">
+                                        <label className="flex items-center justify-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={(e) => {
+                                              if (e.target.checked) {
+                                                setSelectedProformaIdsForExistingFattura((prev) =>
+                                                  prev.includes(p.id) ? prev : [...prev, p.id]
+                                                );
+                                              } else {
+                                                setSelectedProformaIdsForExistingFattura((prev) =>
+                                                  prev.filter((id) => id !== p.id)
+                                                );
+                                              }
+                                            }}
+                                            className="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500"
+                                          />
+                                        </label>
+                                      </td>
+
+                                      <td className="px-4 py-3 font-semibold text-slate-800">
+                                        {p.numero}
+                                      </td>
+                                      <td className="px-4 py-3 text-slate-700">
+                                        {p.condominio || "-"}
+                                      </td>
+                                      <td className="px-4 py-3 text-slate-700">
+                                        {p.descrizione || "-"}
+                                      </td>
+                                      <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                                        {euro(Number(p.importo || 0))}
+                                      </td>
+                                      <td className="px-4 py-3">
+                                        <span
+                                          className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${
+                                            statusClass[p.stato] ||
+                                            "bg-slate-100 text-slate-700 ring-slate-200"
+                                          }`}
+                                        >
+                                          {String(p.stato || "").replaceAll("_", " ")}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+
+                  {/* Footer */}
+                  <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-sm text-slate-500">
+                        {selectedProformaIdsForExistingFattura.length > 0 ? (
+                          <>
+                            Hai selezionato{" "}
+                            <span className="font-semibold text-slate-900">
+                              {selectedProformaIdsForExistingFattura.length}
+                            </span>{" "}
+                            proforme.
+                          </>
+                        ) : (
+                          "Nessuna proforma selezionata."
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-end gap-3">
+                        <button
+                          onClick={() => {
+                            setIsManageFatturaModalOpen(false);
+                            setSelectedProformaIdsForExistingFattura([]);
+                            setFatturaProformaSearch("");
+                          }}
+                          className="inline-flex h-11 items-center justify-center rounded-2xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Annulla
+                        </button>
+
+                        <button
+                          onClick={collegaProformeAFatturaEsistente}
+                          disabled={
+                            linkingProformasToFattura || !selectedProformaIdsForExistingFattura.length
+                          }
+                          className="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {linkingProformasToFattura ? "Collegamento..." : "Conferma collegamento"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
 
 
       </div>
     </div>
   );
+  
 }

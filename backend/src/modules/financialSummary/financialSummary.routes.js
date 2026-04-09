@@ -26,16 +26,19 @@ router.post("/imported-documents/:fileId/parse", controller.parseImportedDocumen
 router.post("/imported-documents/:fileId/parsef", controller.parseImportedDocumentF);
 router.post("/imported-documents/:fileId/promote", controller.promoteImportedDocumentToProforma);
 router.post("/imported-documents/:fileId/promotef", controller.promoteImportedDocumentToFattura);
-
+router.get("/fatture/:id", controller.getFatturaDetail);
 
 router.get("/search", controller.searchCondomini);
 router.get("/list", controller.listCondominiSimple);
 
 router.post("/:id/collega-fattura", controller.collegaProformaAFattura);
+router.post("/:id/collega-proforme", controller.collegaProformeAFattura);
+
 router.get("/proformas", controller.listProformas);
 router.get("/fatture", controller.listFattureSimple);
 
 router.post("/:id/annulla", controller.annullaProforma);
+router.post("/:id/annullaF", controller.annullaFattura);
 router.delete("/:id", controller.deleteProforma);
 
 module.exports = router;

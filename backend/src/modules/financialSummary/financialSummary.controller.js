@@ -198,6 +198,33 @@ async function collegaProformaAFattura(req, res) {
   }
 }
 
+async function collegaProformeAFattura(req, res) {
+  try {
+    const { id } = req.params;
+    const { proformaIds } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ error: "id fattura mancante" });
+    }
+
+    if (!Array.isArray(proformaIds) || proformaIds.length === 0) {
+      return res.status(400).json({ error: "Seleziona almeno una proforma." });
+    }
+
+    const result = await service.collegaProformeAFatturaEsistente(
+      id,
+      proformaIds
+    );
+
+    return res.json(result);
+  } catch (err) {
+    console.error("❌ collegaProformeAFattura:", err);
+    return res.status(500).json({
+      error: err.message || "Errore durante il collegamento delle proforme.",
+    });
+  }
+}
+
 async function listFattureSimple(req, res) {
   try {
     const rows = await service.listFattureSimple();
@@ -220,6 +247,26 @@ async function getFatturaDetail(req, res) {
   } catch (err) {
     console.error("getFatturaDetail error:", err);
     return res.status(500).json({ error: "Errore nel caricamento della fattura." });
+  }
+}
+
+async function annullaFattura(req, res) {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ error: "id fattura mancante" });
+    }
+
+    const result = await service.annullaFattura(id, reason || "", null);
+
+    return res.json(result);
+  } catch (err) {
+    console.error("annullaFattura error:", err);
+    return res.status(500).json({
+      error: err.message || "Errore durante l'annullamento della fattura.",
+    });
   }
 }
 
@@ -288,11 +335,14 @@ module.exports = {
   deleteProforma,
   listProformas,
   collegaProformaAFattura,
+  collegaProformeAFattura,
   listFattureSimple,
   promoteImportedDocumentToFattura,
   listFattureWithProforme,
   getFatturaProforme,
   uploadImportedDocumentsF,
-  parseImportedDocumentF
+  parseImportedDocumentF,
+  annullaFattura,
+  getFatturaDetail
 
 };

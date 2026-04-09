@@ -448,14 +448,36 @@ async function getFatturaDetail(id) {
       p.data_documento,
       p.importo,
       p.stato,
+      p.condominio_id,
       c.indirizzo AS condominio
     FROM proformas p
     LEFT JOIN condomini_v2 c
       ON c.id = p.condominio_id
     WHERE p.fattura_id = ?
+      AND p.stato <> 'ANNULLATA'
     ORDER BY p.data_documento DESC, p.created_at DESC
     `,
     [id]
+  );
+
+  const [availableProformas] = await db.query(
+    `
+    SELECT
+      p.id,
+      p.numero,
+      p.descrizione,
+      p.data_documento,
+      p.importo,
+      p.stato,
+      p.condominio_id,
+      c.indirizzo AS condominio
+    FROM proformas p
+    LEFT JOIN condomini_v2 c
+      ON c.id = p.condominio_id
+    WHERE p.fattura_id IS NULL
+      AND p.stato <> 'ANNULLATA'
+    ORDER BY p.data_documento DESC, p.created_at DESC
+    `
   );
 
   const importoFattura = Number(fattura.importo || 0);
@@ -473,7 +495,6 @@ async function getFatturaDetail(id) {
     created_at: fattura.created_at,
     updated_at: fattura.updated_at,
     condominio: fattura.condominio || "-",
-
     totale_proforme_collegate: totaleProforme,
     residuo_da_associare: Math.max(importoFattura - totaleProforme, 0),
     eccedenza_proforme: Math.max(totaleProforme - importoFattura, 0),
@@ -486,11 +507,22 @@ async function getFatturaDetail(id) {
       data_documento: p.data_documento,
       importo: Number(p.importo || 0),
       stato: p.stato,
+      condominio_id: p.condominio_id,
+      condominio: p.condominio || "-",
+    })),
+
+    available_proformas: availableProformas.map((p) => ({
+      id: p.id,
+      numero: p.numero,
+      descrizione: p.descrizione,
+      data_documento: p.data_documento,
+      importo: Number(p.importo || 0),
+      stato: p.stato,
+      condominio_id: p.condominio_id,
       condominio: p.condominio || "-",
     })),
   };
 }
-
 async function listFattureSimple() {
   const [rows] = await db.query(
     `
@@ -576,7 +608,9 @@ async function collegaSingolaProformaAFattura(proformaId, fatturaId) {
       throw new Error("Seleziona una fattura.");
     }
 
+   
     const result = await collegaProformaAFattura(conn, fatturaId, [proformaId]);
+
 
     if (!result.updatedCount) {
       throw new Error("Nessuna proforma aggiornata.");
@@ -596,8 +630,111 @@ async function collegaSingolaProformaAFattura(proformaId, fatturaId) {
   }
 }
 
+async function collegaProformeAFattura(conn, fatturaId, proformaIds = []) {
+  const cleanIds = [
+    ...new Set((Array.isArray(proformaIds) ? proformaIds : []).map(String).filter(Boolean)),
+  ];
+
+  if (!fatturaId) {
+    throw new Error("fatturaId mancante.");
+  }
+
+  if (!cleanIds.length) {
+    return { updatedCount: 0 };
+  }
+
+  const placeholders = cleanIds.map(() => "?").join(",");
+
+  const [[fattura]] = await conn.query(
+    `
+    SELECT id, stato
+    FROM fatture
+    WHERE id = ?
+    LIMIT 1
+    FOR UPDATE
+    `,
+    [fatturaId]
+  );
+
+  if (!fattura) {
+    throw new Error("Fattura non trovata.");
+  }
+
+  if (fattura.stato === "ANNULLATA") {
+    throw new Error("La fattura è annullata e non può ricevere proforme.");
+  }
+
+  const [proformas] = await conn.query(
+    `
+    SELECT id, stato, fattura_id
+    FROM proformas
+    WHERE id IN (${placeholders})
+    FOR UPDATE
+    `,
+    cleanIds
+  );
+
+  if (proformas.length !== cleanIds.length) {
+    throw new Error("Una o più proforme selezionate non esistono.");
+  }
+
+  for (const p of proformas) {
+    if (p.stato === "ANNULLATA") {
+      throw new Error("Una proforma selezionata è annullata e non può essere associata.");
+    }
+
+    if (p.fattura_id) {
+      throw new Error("Una proforma selezionata è già collegata a una fattura.");
+    }
+  }
+
+  const [updateResult] = await conn.query(
+    `
+    UPDATE proformas
+    SET
+      fattura_id = ?,
+      stato = 'COLLEGATA',
+      updated_at = NOW()
+    WHERE id IN (${placeholders})
+    `,
+    [fatturaId, ...cleanIds]
+  );
+
+  return {
+    updatedCount: updateResult.affectedRows || 0,
+  };
+}
+
+async function collegaProformeAFatturaEsistente(fatturaId, proformaIds = []) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const result = await collegaProformeAFattura(conn, fatturaId, proformaIds);
+
+    if (!result.updatedCount) {
+      throw new Error("Nessuna proforma aggiornata.");
+    }
+
+    await conn.commit();
+
+    return {
+      success: true,
+      fatturaId,
+      updatedCount: result.updatedCount,
+      linkedProformaIds: [...new Set((Array.isArray(proformaIds) ? proformaIds : []).map(String).filter(Boolean))],
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
 
 async function collegaProformaAFattura(conn, fatturaId, proformaIds = []) {
+   console.log("Collegamento fattura", { fatturaId });
   const cleanIds = [...new Set((Array.isArray(proformaIds) ? proformaIds : []).map(String).filter(Boolean))];
 
   console.log("collegaProformaAFattura called with:", { fatturaId, proformaIds, cleanIds });
@@ -1264,6 +1401,24 @@ async function parseImportedDocumentF(fileId) {
 }
 
 async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = null) {
+  if (!conn) {
+    throw new Error("Connessione database mancante.");
+  }
+
+  if (!documentType) {
+    throw new Error("documentType mancante.");
+  }
+
+  if (!anno || Number.isNaN(Number(anno))) {
+    throw new Error("anno non valido.");
+  }
+
+  const normalizedType = String(documentType).trim().toUpperCase();
+
+  if (!["PROFORMA", "FATTURA"].includes(normalizedType)) {
+    throw new Error(`Tipo documento non supportato: ${normalizedType}`);
+  }
+
   const [rows] = await conn.query(
     `
     SELECT id, current_value
@@ -1271,7 +1426,7 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     WHERE document_type = ? AND anno = ?
     FOR UPDATE
     `,
-    [documentType, anno]
+    [normalizedType, Number(anno)]
   );
 
   let nextValue = 1;
@@ -1291,7 +1446,7 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
       )
       VALUES (?, ?, ?, 1, NOW(), NOW())
       `,
-      [counterId, documentType, anno]
+      [counterId, normalizedType, Number(anno)]
     );
 
     nextValue = 1;
@@ -1301,7 +1456,9 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     await conn.query(
       `
       UPDATE document_number_counters
-      SET current_value = ?, updated_at = NOW()
+      SET
+        current_value = ?,
+        updated_at = NOW()
       WHERE id = ?
       `,
       [nextValue, rows[0].id]
@@ -1318,14 +1475,18 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
         .replace(/^-+|-+$/g, "")
     : null;
 
-  if (documentType === "FATTURA") {
-    return {
-      progressivo: nextValue,
-      numero: slug ? `FT-${padded}-${slug}` : `FT-${padded}`,
-    };
-  }
+  const prefixMap = {
+    PROFORMA: "PF",
+    FATTURA: "FT",
+  };
 
-  throw new Error("Tipo documento non supportato per la numerazione.");
+  const prefix = prefixMap[normalizedType];
+
+  return {
+    documentType: normalizedType,
+    progressivo: nextValue,
+    numero: slug ? `${prefix}-${padded}-${slug}` : `${prefix}-${padded}`,
+  };
 }
 
 async function annullaProforma(id, reason, userId = null) {
@@ -2007,12 +2168,77 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     conn.release();
   }
 }
+
+async function annullaFattura(id, reason, userId = null) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const [[fattura]] = await conn.query(
+      `
+      SELECT id, stato
+      FROM fatture
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [id]
+    );
+
+    if (!fattura) {
+      throw new Error("Fattura non trovata.");
+    }
+
+    if (fattura.stato === "ANNULLATA") {
+      throw new Error("La fattura è già annullata.");
+    }
+
+    await conn.query(
+      `
+      UPDATE fatture
+      SET
+        stato = 'ANNULLATA',
+        cancellation_reason = ?,
+        cancellation_date = NOW(),
+        cancellation_user_id = ?,
+        updated_at = NOW()
+      WHERE id = ?
+      `,
+      [reason || "Annullata manualmente", userId, id]
+    );
+
+    await conn.query(
+      `
+      UPDATE proformas
+      SET
+        fattura_id = NULL,
+        stato = CASE
+          WHEN stato = 'COLLEGATA' THEN 'EMESSA'
+          ELSE stato
+        END,
+        updated_at = NOW()
+      WHERE fattura_id = ?
+      `,
+      [id]
+    );
+
+    await conn.commit();
+
+    return { success: true };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
  module.exports = {
   listImportedDocuments,
   getImportedDocumentDetail,
   uploadImportedDocuments,
   parseImportedDocument,
-    getSummary,
+  getSummary,
   getRecentRows,
   getNextDocumentNumber,
   promoteImportedDocumentToProforma,
@@ -2021,7 +2247,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
   annullaProforma,
   deleteProforma,
   listProformas,
-  collegaProformaAFattura,
+  collegaProformeAFatturaEsistente,
   listFattureSimple,
   listFattureWithProforme,
   getFatturaProforme,
@@ -2029,6 +2255,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
   parseImportedDocumentF,
   collegaSingolaProformaAFattura,
   promoteImportedDocumentToFattura,
-  getFatturaDetail
+  getFatturaDetail,
+  annullaFattura,
 
 };
