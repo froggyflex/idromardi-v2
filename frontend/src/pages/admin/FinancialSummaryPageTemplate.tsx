@@ -335,22 +335,26 @@ export default function FinancialSummaryPageTemplate() {
     },
   ];
 
-const formatAmount = (value:any) => {
+const formatAmount = (value: any) => {
+  if (!value) return "";
 
-  console.log("Formatting value:", value);
   const num = Number(
     String(value)
+      .replace("EUR", "")
+      .replace("€", "")
+      .replace(/\s/g, "")
       .replace(/\./g, "")
       .replace(",", ".")
   );
 
-  if (isNaN(num)) return value;
+  if (Number.isNaN(num)) return value;
 
-  return new Intl.NumberFormat('de-DE', {
+  return new Intl.NumberFormat("de-DE", {
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(num);
+    maximumFractionDigits: 2,
+  }).format(num) + " €";
 };
+
 
   const quickActions = [
     {
@@ -1249,7 +1253,7 @@ async function uploadFatturaFiles() {
                         Totale
                       </div>
                       <div className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-                        {loadingSummary ? "..." : formatAmount((card.amount))}
+                        {loadingSummary ? "..." : formatAmount(card.amount)}
                       </div>
                     </div>
 
