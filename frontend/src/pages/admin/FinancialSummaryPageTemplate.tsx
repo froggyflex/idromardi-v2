@@ -335,6 +335,14 @@ export default function FinancialSummaryPageTemplate() {
     },
   ];
 
+const formatAmount = (value: any) => {
+  const num = Number(value);
+  if (isNaN(num)) return value; // fail gracefully
+
+  return new Intl.NumberFormat('it-IT').format(num);
+};
+
+
   const quickActions = [
     {
       key: "new-proforma",
@@ -1197,7 +1205,7 @@ async function uploadFatturaFiles() {
                         Totale
                       </div>
                       <div className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-                        {loadingSummary ? "..." : card.amount}
+                        {loadingSummary ? "..." : formatAmount(card.amount)}
                       </div>
                     </div>
 
