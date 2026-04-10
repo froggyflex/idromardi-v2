@@ -2145,7 +2145,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
 
     await conn.query(
         `
-        UPDATE import_bach_files
+        UPDATE import_batch_files
         SET
           parse_status = 'COMPLETATO_PROMOSSO',
           updated_at = NOW()
