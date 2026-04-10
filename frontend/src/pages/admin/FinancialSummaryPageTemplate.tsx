@@ -335,12 +335,20 @@ export default function FinancialSummaryPageTemplate() {
     },
   ];
 
-const formatAmount = (value:string) =>
-  new Intl.NumberFormat('de-DE', { // safer for dot thousands
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 2
-  }).format((Number(value)));
+const formatAmount = (value:any) => {
+  const num = Number(
+    String(value)
+      .replace(/\./g, "")
+      .replace(",", ".")
+  );
 
+  if (isNaN(num)) return value;
+
+  return new Intl.NumberFormat('de-DE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(num);
+};
 
   const quickActions = [
     {
@@ -494,10 +502,10 @@ const formatAmount = (value:string) =>
     const filtered = !q
       ? importedDocs
       : importedDocs.filter((doc) => {
-          const numero = String(doc.numero || "").toLowerCase();
-          const filename = String(doc.original_filename || "").toLowerCase();
-          const parseStatus = String(doc.parse_status || "").toLowerCase();
-          const reviewStatus = String(doc.review_status || "").toLowerCase();
+          const numero = String(doc.numero ?? "").toLowerCase();
+          const filename = String(doc.original_filename ?? "").toLowerCase();
+          const parseStatus = String(doc.parse_status ?? "").toLowerCase();
+          const reviewStatus = String(doc.review_status ?? "").toLowerCase();
 
           return (
             numero.includes(q) ||
@@ -507,14 +515,28 @@ const formatAmount = (value:string) =>
           );
         });
 
-     
     return [...filtered].sort((a, b) => {
-      const na = extractNumeroValue(a.numero);
-      const nb = extractNumeroValue(b.numero);
+      const aNum = getSortableNumero(a.numero);
+      const bNum = getSortableNumero(b.numero);
 
-      return nb - na; // DESC (latest first)
+      return bNum - aNum; // DESC
     });
   }, [importedDocs, importedDocsSearch]);
+
+  function getSortableNumero(value: unknown): number {
+    const str = String(value ?? "").trim();
+
+    if (!str) return -1;
+
+    // if purely numeric like "37" or "000011"
+    if (/^\d+$/.test(str)) {
+      return parseInt(str, 10);
+    }
+
+    // fallback: extract first numeric block from things like "001/2025" or "PF-00012"
+    const match = str.match(/\d+/);
+    return match ? parseInt(match[0], 10) : -1;
+  }
 
   function extractNumeroValue(numero: any): number {
     if (!numero) return 0;
@@ -1225,7 +1247,7 @@ async function uploadFatturaFiles() {
                         Totale
                       </div>
                       <div className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-                        {loadingSummary ? "..." : formatAmount('2254')}
+                        {loadingSummary ? "..." : formatAmount((card.amount))}
                       </div>
                     </div>
 
