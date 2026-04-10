@@ -336,6 +336,8 @@ export default function FinancialSummaryPageTemplate() {
   ];
 
 const formatAmount = (value:any) => {
+
+  console.log("Formatting value:", value);
   const num = Number(
     String(value)
       .replace(/\./g, "")
