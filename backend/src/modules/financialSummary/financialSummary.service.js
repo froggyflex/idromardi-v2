@@ -4,6 +4,7 @@ const crypto = require("crypto");
 //const { PDFParse } = require("pdf-parse");
 const pdf = require("pdf-parse");
 const db = require("../../config/db");
+const { parse } = require("path");
 
 function safeJsonParse(value, fallback = null) {
   try {
@@ -22,12 +23,12 @@ function extractFirst(text, regex) {
   return m?.[1] ? String(m[1]).trim() : null;
 }
 
-function parseItalianAmount(raw) {
-  if (!raw) return null;
-  const normalized = String(raw).replace(/\./g, "").replace(",", ".").trim();
-  const num = Number(normalized);
-  return Number.isFinite(num) ? num : null;
-}
+// function parseItalianAmount(raw) {
+//   if (!raw) return null;
+//   const normalized = String(raw).replace(/\./g, "").replace(",", ".").trim();
+//   const num = Number(normalized);
+//   return Number.isFinite(num) ? num : null;
+// }
 function getLines(text) {
   return text
     .split("\n")
@@ -91,28 +92,25 @@ function extractSupplierInfo(lines) {
 function extractDocumentHeader(text) {
   const normalized = normalizePdfText(text);
 
-  const patterns = [
-    /Proforma\s+di\s+fattura\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
-    /Proforma\s+di\s+fattura\s+([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
-    /Proforma\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
-    /Fattura\s*(?:n\.|nr\.|n°|num\.?)\s*([A-Z0-9/-]+)\s+del\s+([^\n]+)/i,
-  ];
+  const pattern =
+    /(?:Proforma\s+di\s+fattura|Proforma|Fattura)\s*(?:n\.|nr\.|n°|num\.?)?\s*([A-Z0-9/-]+)\s+d(?:el|ell['’])\s*([^\n]+)/i;
 
-  for (const pattern of patterns) {
-    const m = normalized.match(pattern);
-    if (m) {
-      return {
-        documentType: "proforma_invoice",
-        invoiceNumber: cleanValue(m[1]) || null,
-        invoiceDate: parseItalianLongDate(m[2]) || null
-      };
-    }
+  const m = normalized.match(pattern);
+
+  if (!m) {
+    return {
+      documentType: null,
+      invoiceNumber: null,
+      invoiceDate: null,
+    };
   }
 
+  const headerText = m[0];
+
   return {
-    documentType: null,
-    invoiceNumber: null,
-    invoiceDate: null
+    documentType: /proforma/i.test(headerText) ? "proforma_invoice" : "invoice",
+    invoiceNumber: cleanValue(m[1]) || null,
+    invoiceDate: parseItalianLongDate(cleanValue(m[2])) || null,
   };
 }
 
@@ -262,6 +260,7 @@ function extractTotalAmount(text) {
   if (!candidates.length) return null;
 
   candidates.sort((a, b) => b.score - a.score);
+  console.log("Total amount candidates:", candidates);
   return candidates[0].amount;
 }
 
@@ -801,7 +800,8 @@ async function listImportedDocuments() {
       i.extracted_number,
       i.extracted_date,
       i.extracted_amount,
-      i.extracted_description
+      i.extracted_description,
+      i.document_type
     FROM import_batch_files f
     LEFT JOIN import_items i
       ON i.batch_id = f.batch_id
@@ -821,7 +821,9 @@ async function listImportedDocuments() {
     data_documento: r.extracted_date || null,
     importo: r.extracted_amount != null ? Number(r.extracted_amount) : null,
     uploaded_at: r.created_at,
+    type: r.document_type || null,
   }));
+
 }
 
 async function getImportedDocumentDetail(fileId) {
@@ -944,6 +946,9 @@ async function uploadImportedDocuments(files) {
     [batchId]
   );
 
+ 
+  uploadedFiles.forEach(async f => await parseImportedDocument(f.id));
+
   return {
     batch_id: batchId,
     files: uploadedFiles,
@@ -1009,6 +1014,7 @@ async function uploadImportedDocumentsF(files, documentType = "FATTURA") {
     [batchId]
   );
 
+  uploadedFiles.forEach(async f => await parseImportedDocumentF(f.id));
   return {
     batch_id: batchId,
     files: uploadedFiles,
@@ -1718,7 +1724,7 @@ async function promoteImportedDocumentToProforma(fileId, condominioIds = []) {
       `
       UPDATE import_items
       SET
-        review_status = 'COMPLETATO_PROMOSSO',
+        review_status = 'PROMOSSO',
         reviewed_at = NOW(),
         updated_at = NOW()
       WHERE id = ?
@@ -2154,7 +2160,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
           updated_at = NOW()
         WHERE id = ?
         `,
-        [imported.id]
+        [fileId]
       );
 
     await conn.commit();

@@ -72,6 +72,7 @@ type ImportedProformaItem = {
   data_documento: string | null;
   importo: number | null;
   uploaded_at: string;
+  type: string;
 };
 
 type ImportedProformaDetail = {
@@ -336,23 +337,34 @@ export default function FinancialSummaryPageTemplate() {
   ];
 
 const formatAmount = (value: any) => {
-  if (!value) return "";
+  if (value == null || value === "") return "";
 
-  const num = Number(
-    String(value)
-      .replace("EUR", "")
-      .replace("€", "")
-      .replace(/\s/g, "")
-      .replace(/\./g, "")
-      .replace(",", ".")
-  );
+  let str = String(value)
+    .replace("EUR", "")
+    .replace("€", "")
+    .replace(/\s/g, "");
+
+  // If it contains BOTH '.' and ',' → assume European format (1.234,56)
+  if (str.includes(".") && str.includes(",")) {
+    str = str.replace(/\./g, "").replace(",", ".");
+  }
+  // If it contains ONLY ',' → decimal comma (92,42)
+  else if (str.includes(",")) {
+    str = str.replace(",", ".");
+  }
+  // If it contains ONLY '.' → assume decimal dot (92.42)
+  // → do nothing
+
+  const num = Number(str);
 
   if (Number.isNaN(num)) return value;
 
-  return new Intl.NumberFormat("de-DE", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(num) + " €";
+  return (
+    new Intl.NumberFormat("it-IT", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(num) + " €"
+  );
 };
 
 
@@ -482,6 +494,7 @@ const formatAmount = (value: any) => {
   }, [selectedFatturaDetail, fatturaProformaSearch]);
 
   const [fatturaAssociatedProformaSearch, setFatturaAssociatedProformaSearch] = useState("");
+
   const filteredAssociatedProformasForExistingFattura = useMemo(() => {
     const q = fatturaAssociatedProformaSearch.trim().toLowerCase();
     const list = selectedFatturaDetail?.proformas || [];
@@ -502,47 +515,69 @@ const formatAmount = (value: any) => {
     );
   }, [selectedFatturaDetail, fatturaAssociatedProformaSearch]);
 
-  const filteredImportedDocs = useMemo(() => {
-    const q = importedDocsSearch.trim().toLowerCase();
+  const normalizeDocType = (doc: any) => String(doc.type || "").trim().toUpperCase();
 
-    const filtered = !q
-      ? importedDocs
-      : importedDocs.filter((doc) => {
-          const numero = String(doc.numero ?? "").toLowerCase();
-          const filename = String(doc.original_filename ?? "").toLowerCase();
-          const parseStatus = String(doc.parse_status ?? "").toLowerCase();
-          const reviewStatus = String(doc.review_status ?? "").toLowerCase();
+ 
+ 
+const filteredImportedDocs = useMemo(() => {
+  const q = importedDocsSearch.trim().toLowerCase();
 
-          return (
-            numero.includes(q) ||
-            filename.includes(q) ||
-            parseStatus.includes(q) ||
-            reviewStatus.includes(q)
-          );
-        });
+  if (!q) return importedDocs;
 
-    return [...filtered].sort((a, b) => {
-      const aNum = getSortableNumero(a.numero);
-      const bNum = getSortableNumero(b.numero);
+  return importedDocs.filter((doc) => {
+    const numero = String(doc.numero ?? "").toLowerCase();
+    const filename = String(doc.original_filename ?? "").toLowerCase();
+    const parseStatus = String(doc.parse_status ?? "").toLowerCase();
+    const reviewStatus = String(doc.review_status ?? "").toLowerCase();
+    const type = String(doc.type ?? "").toLowerCase();
 
-      return bNum - aNum; // DESC
-    });
-  }, [importedDocs, importedDocsSearch]);
+    return (
+      numero.includes(q) ||
+      filename.includes(q) ||
+      parseStatus.includes(q) ||
+      reviewStatus.includes(q) ||
+      type.includes(q)
+    );
+  });
+}, [importedDocs, importedDocsSearch]);
 
-  function getSortableNumero(value: unknown): number {
-    const str = String(value ?? "").trim();
+const getDocTimestamp = (doc: any) =>
+  new Date(doc.created_at || doc.uploaded_at || doc.data_documento || doc.updated_at || 0).getTime();
 
-    if (!str) return -1;
+const getSortableNumero = (numero: any) => {
+  const str = String(numero ?? "").trim();
+  const parts = str.match(/\d+/g);
 
-    // if purely numeric like "37" or "000011"
-    if (/^\d+$/.test(str)) {
-      return parseInt(str, 10);
+  if (!parts) return -1;
+
+  return Number(parts.join(""));
+};
+
+const sortImportedDocs = (docs: any[]) => {
+  return [...docs].sort((a, b) => {
+    const aNum = getSortableNumero(a.numero);
+    const bNum = getSortableNumero(b.numero);
+
+    if (aNum !== bNum) {
+      return bNum - aNum;
     }
 
-    // fallback: extract first numeric block from things like "001/2025" or "PF-00012"
-    const match = str.match(/\d+/);
-    return match ? parseInt(match[0], 10) : -1;
-  }
+    return getDocTimestamp(b) - getDocTimestamp(a);
+  });
+};
+
+const proformaDocs = useMemo(() => {
+  return sortImportedDocs(
+    filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "PROFORMA")
+  );
+}, [filteredImportedDocs]);
+
+const fatturaDocs = useMemo(() => {
+  return sortImportedDocs(
+    filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "FATTURA")
+  );
+}, [filteredImportedDocs]);
+ 
 
   function extractNumeroValue(numero: any): number {
     if (!numero) return 0;
@@ -871,7 +906,10 @@ async function collegaProformeAFatturaEsistente() {
     try {
       setLoadingImportedDocs(true);
       const { data } = await api.get("/financial-summary/imported-documents");
+
       setImportedDocs(Array.isArray(data) ? data : []);
+
+      console.log("Documenti importati caricati:", data);
       
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore caricando i documenti proforma importati.");
@@ -999,8 +1037,10 @@ async function uploadFatturaFiles() {
     });
 
     setSelectedUploadFiles([]);
-    
-    await loadImportedDocuments();
+     
+      setTimeout(() => {
+            loadImportedDocuments();
+      }, 800);
 
   } catch (err: any) {
     setError(err?.response?.data?.error || "Errore nel caricamento dei file fattura.");
@@ -1009,7 +1049,7 @@ async function uploadFatturaFiles() {
   }
 }
  
-    async function promoteImportedFattura() {
+async function promoteImportedFattura() {
 
       if (!selectedImportedDoc?.id) {
         setError("Documento fattura non selezionato.");
@@ -1045,9 +1085,9 @@ async function uploadFatturaFiles() {
       } finally {
         setPromotingFattura(false);
       }
-    }
+}
 
-  async function uploadProformaFiles() {
+async function uploadProformaFiles() {
     if (!selectedUploadFiles.length) {
       setError("Seleziona almeno un file PDF.");
       return;
@@ -1062,27 +1102,24 @@ async function uploadFatturaFiles() {
         formData.append("files", file);
       });
 
+      console.log(selectedUploadFiles);
+      console.log(formData.getAll("files"));
+     
       await api.post("/financial-summary/imported-documents/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
       setSelectedUploadFiles([]);
-      await loadImportedDocuments();
-
-      // if (selectedImportedDoc) {
-      //   if (activeImportTab === "PROFORMA") {
-      //     parseImportedProforma(selectedImportedDoc.id);
-      //   } else {
-      //     parseImportedFattura(selectedImportedDoc.id);
-      //   }
-      // }
-
+        setTimeout(() => {
+            loadImportedDocuments();
+      }, 800);
+  
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore nel caricamento dei file proforma.");
     } finally {
       setUploading(false);
     }
-  }
+}
 
   async function parseImportedFattura(id: string) {
     try {
@@ -1189,7 +1226,299 @@ async function uploadFatturaFiles() {
     };
   }, [isManageFatturaModalOpen]);
 
+    const renderImportedTableSection = (title: string, subtitle: string, docs: any[]) => {
+      return (
+        <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm rounded-[28px] bg-blue-50/40 p-3" >
+          <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">{title}</h3>
+              <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+            </div>
 
+            <div className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {docs.length} document{docs.length === 1 ? "o" : "i"}
+            </div>
+          </div>
+
+          {docs.length === 0 ? (
+            <div className="px-5 py-10 text-center">
+              <div className="mx-auto max-w-md">
+                <div className="text-sm font-semibold text-slate-700">
+                  Nessun documento presente
+                </div>
+                <p className="mt-2 text-sm text-slate-500">
+                  In questa sezione non ci sono ancora documenti caricati.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="max-h-[620px] overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-100/95 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 backdrop-blur">
+                  <tr className="border-b border-slate-200">
+                    <th className="w-[56px] px-4 py-3"></th>
+                    <th className="px-4 py-3">Numero</th>
+                    <th className="px-4 py-3">File</th>
+                    <th className="px-4 py-3">Tipo</th>
+                    <th className="px-4 py-3">Data</th>
+                    <th className="px-4 py-3">Parse</th>
+                    <th className="px-4 py-3">Importo</th>
+                    <th className="px-4 py-3">Stato</th>
+                    <th className="px-4 py-3 text-right">Azioni</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {docs.map((doc, index) => {
+                    const isSelected = selectedImportedDoc?.id === doc.id;
+                    const isExpanded = !!expandedImportedRows[doc.id];
+
+                    const creationStatusLabel = doc.review_status
+
+                    const hasNumero = !!String(doc.numero ?? "").trim();
+
+                    return (
+                      <Fragment key={doc.id}>
+                        <tr
+                          className={[
+                            "border-b border-slate-200 transition-all duration-150",
+                            isSelected
+                              ? "bg-blue-50"
+                              : index % 2 === 0
+                              ? "bg-white hover:bg-slate-50"
+                              : "bg-slate-50/60 hover:bg-slate-100/70",
+                          ].join(" ")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleImportedRow(doc.id);
+                          }}
+                        >
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                              title={isExpanded ? "Comprimi" : "Espandi"}
+                            >
+                              <span
+                                className={`text-sm transition-transform duration-200 ${
+                                  isExpanded ? "rotate-90" : ""
+                                }`}
+                              >
+                                ›
+                              </span>
+                            </button>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-800">
+                                {doc.numero || "-"}
+                              </span>
+
+                              {!hasNumero && (
+                                <span className="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                                  Da parsare
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div
+                              className="max-w-[260px] truncate text-slate-600"
+                              title={doc.original_filename || ""}
+                            >
+                              {doc.original_filename || "-"}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">{doc.type || "-"}</td>
+
+                          <td className="px-4 py-3">
+                            {doc.data_documento
+                              ? new Date(doc.data_documento).toLocaleDateString("it-IT")
+                              : "-"}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${getParseStatusClasses(
+                                doc.parse_status
+                              )}`}
+                            >
+                              {doc.parse_status || "-"}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3 font-medium text-slate-700">
+                            {formatAmount(doc.importo)}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                creationStatusLabel === "PROMOSSO"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {creationStatusLabel}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-end gap-2">
+                              {(doc.parse_status === "CARICATO" ||
+                                doc.parse_status === "COMPLETATO" ||
+                                doc.parse_status === "COMPLETATO_CON_ERRORI") && (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (title === "PROFORMA IMPORTATI") {
+                                      parseImportedProforma(doc.id);
+                                    } else {
+                                      parseImportedFattura(doc.id);
+                                    }
+                                  }}
+                                  disabled={parsingImportId === doc.id}
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  title="Esegui parser"
+                                >
+                                  {parsingImportId === doc.id ? (
+                                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                                  ) : (
+                                    <span className="text-sm">✦</span>
+                                  )}
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  loadImportedDocumentDetail(doc.id);
+                                  toggleImportedRow(doc.id);
+                                }}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                                title={isExpanded ? "Chiudi dettaglio" : "Apri dettaglio"}
+                              >
+                                <span className="text-sm">≡</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {isExpanded ? (
+                          <tr className="border-b border-slate-200 bg-slate-50/70">
+                            <td colSpan={9} className="px-4 pb-4 pt-0">
+                              <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-sm">
+                                <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
+                                  <div className="space-y-4">
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                          Numero
+                                        </div>
+                                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                                          {doc.numero || "-"}
+                                        </div>
+                                      </div>
+
+                                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                          Importo
+                                        </div>
+                                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                                          {formatAmount(doc.importo)}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                        Descrizione / dettaglio
+                                      </div>
+                                      <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
+                                        {doc.descrizione || "Nessun dettaglio disponibile."}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-4">
+                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                        Validazione
+                                      </div>
+
+                                      <div className="mt-3">
+                                        {doc.validation_errors?.length ? (
+                                          <ul className="space-y-2 text-sm text-rose-700">
+                                            {doc.validation_errors.map((err: string, idx: number) => (
+                                              <li key={`${err}-${idx}`}>• {err}</li>
+                                            ))}
+                                          </ul>
+                                        ) : (
+                                          <div className="text-sm font-medium text-emerald-700">
+                                            Nessun errore bloccante rilevato.
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-3">
+                                    {doc.parse_status === "COMPLETATO_PROMOSSO" ? (
+                                      <span className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-500">
+                                        Documento già elaborato
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          loadImportedDocumentDetail(doc.id);
+
+                                          if (normalizeDocType(doc) === "PROFORMA") {
+                                            setSelectedCondomini([]);
+                                            setCondominiSearch("");
+                                            setCondomini([]);
+                                            setIsAssociateModalOpen(true);
+                                            void loadCondomini();
+                                          } else if (normalizeDocType(doc) === "FATTURA") {
+                                            setSelectedFatturaCondominioId("");
+                                            setSelectedProformaIdsForFattura([]);
+                                            setCondominiSearch("");
+                                            setCondomini([]);
+                                            setIsCreateFatturaModalOpen(true);
+                                            void loadCondomini();
+                                            void loadProformasRows();
+                                          }
+                                        }}
+                                         
+                                        className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        {normalizeDocType(doc) === "PROFORMA"
+                                          ? "Approva e crea proforma"
+                                          : normalizeDocType(doc) === "FATTURA"
+                                          ? "Approva e crea fattura"
+                                          : "Azione non disponibile"}
+                                      </button>
+                                    )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      );
+    };
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 quick-sand">
       <div className="mx-auto max-w-8xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
@@ -1475,253 +1804,253 @@ async function uploadFatturaFiles() {
                 ) : null}
               </section>
             ) : null}
-{activeDetailSection === "FATTURA" ? (
-  <section className="space-y-6">
-    <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h3 className="text-xl font-bold">Dettaglio fatture</h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Elenco completo delle fatture con copertura da proforme collegate.
-          </p>
-        </div>
+            {activeDetailSection === "FATTURA" ? (
+              <section className="space-y-6">
+                <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h3 className="text-xl font-bold">Dettaglio fatture</h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Elenco completo delle fatture con copertura da proforme collegate.
+                      </p>
+                    </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <input
-            value={fatturaSearch}
-            onChange={(e) => setFatturaSearch(e.target.value)}
-            placeholder="Cerca numero, condominio, descrizione..."
-            className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-          />
+                    <div className="flex flex-col gap-3 sm:flex-row">
+                      <input
+                        value={fatturaSearch}
+                        onChange={(e) => setFatturaSearch(e.target.value)}
+                        placeholder="Cerca numero, condominio, descrizione..."
+                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                      />
 
-          <select
-            value={fatturaStatusFilter}
-            onChange={(e) => setFatturaStatusFilter(e.target.value)}
-            className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-          >
-            <option value="TUTTI">Tutti gli stati</option>
-            <option value="BOZZA">Bozza</option>
-            <option value="EMESSA">Emessa</option>
-            <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
-            <option value="PAGATA">Pagata</option>
-            <option value="ANNULLATA">Annullata</option>
-          </select>
-
-          <button
-            onClick={() => setActiveDetailSection(null)}
-            className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
-          >
-            Chiudi sezione
-          </button>
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-            <tr>
-              <th className="px-6 py-4">Numero</th>
-              <th className="px-6 py-4">Condominio</th>
-              <th className="px-6 py-4">Descrizione</th>
-              <th className="px-6 py-4">Data</th>
-              <th className="px-6 py-4 text-right">Importo fattura</th>
-              <th className="px-6 py-4 text-right">Credito associato</th>
-              <th className="px-6 py-4 text-right">Residuo</th>
-              <th className="px-6 py-4 text-right">Eccedenza</th>
-              <th className="px-6 py-4">Stato</th>
-              <th className="px-6 py-4 text-right">Azioni</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loadingFatture ? (
-              <tr>
-                <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
-                  Caricamento fatture...
-                </td>
-              </tr>
-            ) : filteredFattureRows.length === 0 ? (
-              <tr>
-                <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
-                  Nessuna fattura trovata.
-                </td>
-              </tr>
-            ) : (
-              filteredFattureRows.map((row: any) => (
-                <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                  <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
-                  <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
-                  <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
-                  <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>
-                  <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                    {euro(Number(row.importo || 0))}
-                  </td>
-                  <td className="px-6 py-4 text-right font-semibold text-fuchsia-700">
-                    {euro(Number(row.totale_proforme_collegate || 0))}
-                  </td>
-                  <td className="px-6 py-4 text-right font-semibold text-amber-700">
-                    {euro(Number(row.residuo_da_associare || 0))}
-                  </td>
-                  <td className="px-6 py-4 text-right font-semibold text-rose-700">
-                    {euro(Number(row.eccedenza_proforme || 0))}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span
-                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                        statusClass[row.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
-                      }`}
-                    >
-                      {String(row.stato || "").replaceAll("_", " ")}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => void loadFatturaDetail(row.id)}
-                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                      <select
+                        value={fatturaStatusFilter}
+                        onChange={(e) => setFatturaStatusFilter(e.target.value)}
+                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
                       >
-                        Apri dettaglio
-                      </button>
+                        <option value="TUTTI">Tutti gli stati</option>
+                        <option value="BOZZA">Bozza</option>
+                        <option value="EMESSA">Emessa</option>
+                        <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
+                        <option value="PAGATA">Pagata</option>
+                        <option value="ANNULLATA">Annullata</option>
+                      </select>
 
                       <button
-                        onClick={() => void annullaFattura(row.id)}
-                        disabled={annullingFatturaId === row.id}
-                        className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 disabled:opacity-60"
+                        onClick={() => setActiveDetailSection(null)}
+                        className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
                       >
-                        {annullingFatturaId === row.id ? "..." : "Annulla"}
+                        Chiudi sezione
                       </button>
                     </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
+                  </div>
 
-    {selectedFatturaDetail ? (
-      <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h3 className="text-xl font-bold">Dettaglio fattura {selectedFatturaDetail.numero}</h3>
-            <p className="mt-1 text-sm text-slate-500">
-              Vista delle proforme collegate e del credito residuo da associare.
-            </p>
-          </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        <tr>
+                          <th className="px-6 py-4">Numero</th>
+                          <th className="px-6 py-4">Condominio</th>
+                          <th className="px-6 py-4">Descrizione</th>
+                          <th className="px-6 py-4">Data</th>
+                          <th className="px-6 py-4 text-right">Importo fattura</th>
+                          <th className="px-6 py-4 text-right">Credito associato</th>
+                          <th className="px-6 py-4 text-right">Residuo</th>
+                          <th className="px-6 py-4 text-right">Eccedenza</th>
+                          <th className="px-6 py-4">Stato</th>
+                          <th className="px-6 py-4 text-right">Azioni</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {loadingFatture ? (
+                          <tr>
+                            <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
+                              Caricamento fatture...
+                            </td>
+                          </tr>
+                        ) : filteredFattureRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
+                              Nessuna fattura trovata.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredFattureRows.map((row: any) => (
+                            <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
+                              <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
+                              <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
+                              <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
+                              <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>
+                              <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                                {euro(Number(row.importo || 0))}
+                              </td>
+                              <td className="px-6 py-4 text-right font-semibold text-fuchsia-700">
+                                {euro(Number(row.totale_proforme_collegate || 0))}
+                              </td>
+                              <td className="px-6 py-4 text-right font-semibold text-amber-700">
+                                {euro(Number(row.residuo_da_associare || 0))}
+                              </td>
+                              <td className="px-6 py-4 text-right font-semibold text-rose-700">
+                                {euro(Number(row.eccedenza_proforme || 0))}
+                              </td>
+                              <td className="px-6 py-4">
+                                <span
+                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                                    statusClass[row.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                                  }`}
+                                >
+                                  {String(row.stato || "").replaceAll("_", " ")}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    onClick={() => void loadFatturaDetail(row.id)}
+                                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                                  >
+                                    Apri dettaglio
+                                  </button>
 
-          <div className="flex gap-3">
-            <button
-              onClick={() => {
-                setSelectedProformaIdsForExistingFattura([]);
-                setFatturaProformaSearch("");
-                setIsManageFatturaModalOpen(true);
-              }}
-              className="rounded-2xl border border-fuchsia-300 bg-fuchsia-50 px-4 py-3 text-sm font-semibold text-fuchsia-700"
-            >
-              Associa proforme
-            </button>
+                                  <button
+                                    onClick={() => void annullaFattura(row.id)}
+                                    disabled={annullingFatturaId === row.id}
+                                    className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 disabled:opacity-60"
+                                  >
+                                    {annullingFatturaId === row.id ? "..." : "Annulla"}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
 
-            <button
-              onClick={() => setSelectedFatturaDetail(null)}
-              className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
-            >
-              Chiudi dettaglio
-            </button>
-          </div>
-        </div>
+                {selectedFatturaDetail ? (
+                  <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <h3 className="text-xl font-bold">Dettaglio fattura {selectedFatturaDetail.numero}</h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Vista delle proforme collegate e del credito residuo da associare.
+                        </p>
+                      </div>
 
-        <div className="grid gap-4 p-6 lg:grid-cols-4">
-          <div className="rounded-2xl bg-slate-50 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-              Importo fattura
-            </div>
-            <div className="mt-2 text-xl font-bold text-slate-900">
-              {euro(selectedFatturaDetail.importo)}
-            </div>
-          </div>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setSelectedProformaIdsForExistingFattura([]);
+                            setFatturaProformaSearch("");
+                            setIsManageFatturaModalOpen(true);
+                          }}
+                          className="rounded-2xl border border-fuchsia-300 bg-fuchsia-50 px-4 py-3 text-sm font-semibold text-fuchsia-700"
+                        >
+                          Associa proforme
+                        </button>
 
-          <div className="rounded-2xl bg-fuchsia-50 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
-              Credito associato
-            </div>
-            <div className="mt-2 text-xl font-bold text-fuchsia-800">
-              {euro(selectedFatturaDetail.totale_proforme_collegate)}
-            </div>
-          </div>
+                        <button
+                          onClick={() => setSelectedFatturaDetail(null)}
+                          className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                        >
+                          Chiudi dettaglio
+                        </button>
+                      </div>
+                    </div>
 
-          <div className="rounded-2xl bg-amber-50 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
-              Residuo da coprire
-            </div>
-            <div className="mt-2 text-xl font-bold text-amber-800">
-              {euro(selectedFatturaDetail.residuo_da_associare)}
-            </div>
-          </div>
+                    <div className="grid gap-4 p-6 lg:grid-cols-4">
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Importo fattura
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-slate-900">
+                          {euro(selectedFatturaDetail.importo)}
+                        </div>
+                      </div>
 
-          <div className="rounded-2xl bg-rose-50 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">
-              Eccedenza
-            </div>
-            <div className="mt-2 text-xl font-bold text-rose-800">
-              {euro(selectedFatturaDetail.eccedenza_proforme)}
-            </div>
-          </div>
-        </div>
+                      <div className="rounded-2xl bg-fuchsia-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+                          Credito associato
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-fuchsia-800">
+                          {euro(selectedFatturaDetail.totale_proforme_collegate)}
+                        </div>
+                      </div>
 
-        <div className="overflow-x-auto border-t border-slate-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-              <tr>
-                <th className="px-6 py-4">Numero proforma</th>
-                <th className="px-6 py-4">Condominio</th>
-                <th className="px-6 py-4">Descrizione</th>
-                <th className="px-6 py-4">Data</th>
-                <th className="px-6 py-4 text-right">Importo</th>
-                <th className="px-6 py-4">Stato</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loadingFatturaDetail ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
-                    Caricamento dettaglio...
-                  </td>
-                </tr>
-              ) : selectedFatturaDetail.proformas.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
-                    Nessuna proforma collegata.
-                  </td>
-                </tr>
-              ) : (
-                selectedFatturaDetail.proformas.map((p) => (
-                  <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
-                    <td className="px-6 py-4 font-semibold text-slate-800">{p.numero}</td>
-                    <td className="px-6 py-4 text-slate-700">{p.condominio || "-"}</td>
-                    <td className="px-6 py-4 text-slate-700">{p.descrizione || "-"}</td>
-                    <td className="px-6 py-4 text-slate-500">{formatDate(p.data_documento)}</td>
-                    <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                      {euro(p.importo)}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
-                          statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
-                        }`}
-                      >
-                        {String(p.stato || "").replaceAll("_", " ")}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    ) : null}
-  </section>
-) : null}
+                      <div className="rounded-2xl bg-amber-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
+                          Residuo da coprire
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-amber-800">
+                          {euro(selectedFatturaDetail.residuo_da_associare)}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-rose-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-700">
+                          Eccedenza
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-rose-800">
+                          {euro(selectedFatturaDetail.eccedenza_proforme)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto border-t border-slate-200">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          <tr>
+                            <th className="px-6 py-4">Numero proforma</th>
+                            <th className="px-6 py-4">Condominio</th>
+                            <th className="px-6 py-4">Descrizione</th>
+                            <th className="px-6 py-4">Data</th>
+                            <th className="px-6 py-4 text-right">Importo</th>
+                            <th className="px-6 py-4">Stato</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {loadingFatturaDetail ? (
+                            <tr>
+                              <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                                Caricamento dettaglio...
+                              </td>
+                            </tr>
+                          ) : selectedFatturaDetail.proformas.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                                Nessuna proforma collegata.
+                              </td>
+                            </tr>
+                          ) : (
+                            selectedFatturaDetail.proformas.map((p) => (
+                              <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
+                                <td className="px-6 py-4 font-semibold text-slate-800">{p.numero}</td>
+                                <td className="px-6 py-4 text-slate-700">{p.condominio || "-"}</td>
+                                <td className="px-6 py-4 text-slate-700">{p.descrizione || "-"}</td>
+                                <td className="px-6 py-4 text-slate-500">{formatDate(p.data_documento)}</td>
+                                <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                                  {euro(p.importo)}
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span
+                                    className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                                      statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                                    }`}
+                                  >
+                                    {String(p.stato || "").replaceAll("_", " ")}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+              </section>
+            ) : null}
 
           {/* Main command center */}
           <section className="overflow-hidden rounded-[34px] border border-slate-300/70 bg-white shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
@@ -2286,12 +2615,12 @@ async function uploadFatturaFiles() {
               ========================================================= */}
               <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                  <div>
+                  {/* <div>
                     <h3 className="text-sm font-semibold text-slate-900">Documenti importati</h3>
                     <p className="mt-1 text-xs text-slate-500">
                       Le funzioni principali sono caricamento, parser e dettaglio espandibile.
                     </p>
-                  </div>
+                  </div> */}
 
                   <div className="w-full md:w-80">
                     <input
@@ -2317,273 +2646,18 @@ async function uploadFatturaFiles() {
                     </div>
                   ) : (
                     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                      <div className="max-h-[620px] overflow-auto">
-                        <table className="min-w-full text-sm">
-                          <thead className="sticky top-0 z-10 bg-slate-100/95 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 backdrop-blur">
-                            <tr className="border-b border-slate-200">
-                              <th className="w-[56px] px-4 py-3"></th>
-                              <th className="px-4 py-3">Numero</th>
-                              <th className="px-4 py-3">File</th>
-                              <th className="px-4 py-3">Parse</th>
-                              <th className="px-4 py-3">Importo</th>
-                              <th className="px-4 py-3">Stato</th>
-                              <th className="px-4 py-3 text-right">Azioni</th>
-                            </tr>
-                          </thead>
+                      <div className="space-y-8">
+                        {renderImportedTableSection(
+                          "PROFORMA IMPORTATI",
+                          "In alto trovi i documenti ancora senza numero assegnato. Dopo il parsing scendono automaticamente sotto quelli da lavorare.",
+                          proformaDocs
+                        )}
 
-                          <tbody>
-                            {filteredImportedDocs.map((doc, index) => {
-                              const isSelected = selectedImportedDoc?.id === doc.id;
-                              const isExpanded = !!expandedImportedRows[doc.id];
-
-                              const creationStatusLabel =
-                                doc.review_status === "APPROVATO" || doc.review_status === "CREATO"
-                                  ? "Creata"
-                                  : "Da approvare";
-
-                              return (
-                                <Fragment key={doc.id}>
-                                  <tr
-                                    className={[
-                                      "border-b border-slate-200 transition-all duration-150",
-                                      isSelected
-                                        ? "bg-blue-50"
-                                        : index % 2 === 0
-                                        ? "bg-white hover:bg-slate-50"
-                                        : "bg-slate-50/60 hover:bg-slate-100/70",
-                                    ].join(" ")}
-                                  >
-                                    <td className="px-4 py-3">
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          toggleImportedRow(doc.id);
-                                        }}
-                                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
-                                        title={isExpanded ? "Comprimi" : "Espandi"}
-                                      >
-                                        <span
-                                          className={`text-sm transition-transform duration-200 ${
-                                            isExpanded ? "rotate-90" : ""
-                                          }`}
-                                        >
-                                          ›
-                                        </span>
-                                      </button>
-                                    </td>
-
-                                    <td
-                                      className="cursor-pointer px-4 py-3 font-semibold text-slate-800"
-                                      onClick={() => loadImportedDocumentDetail(doc.id)}
-                                    >
-                                      {doc.numero || "-"}
-                                    </td>
-
-                                    <td
-                                      className="cursor-pointer px-4 py-3"
-                                      onClick={() => loadImportedDocumentDetail(doc.id)}
-                                    >
-                                      <div
-                                        className="max-w-[260px] truncate text-slate-600"
-                                        title={doc.original_filename || ""}
-                                      >
-                                        {doc.original_filename || "-"}
-                                      </div>
-                                    </td>
-
-                                    <td
-                                      className="cursor-pointer px-4 py-3"
-                                      onClick={() => loadImportedDocumentDetail(doc.id)}
-                                    >
-                                      <span
-                                        className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${getParseStatusClasses(
-                                          doc.parse_status
-                                        )}`}
-                                      >
-                                        {doc.parse_status || "-"}
-                                      </span>
-                                    </td>
-
-                                    <td
-                                      className="cursor-pointer px-4 py-3 font-medium text-slate-700"
-                                      onClick={() => loadImportedDocumentDetail(doc.id)}
-                                    >
-                                      {doc.importo !== null ? `${doc.importo.toFixed(2)} €` : "-"}
-                                    </td>
-
-                                    <td
-                                      className="cursor-pointer px-4 py-3"
-                                      onClick={() => loadImportedDocumentDetail(doc.id)}
-                                    >
-                                      <span
-                                        className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                                          creationStatusLabel === "Creata"
-                                            ? "bg-emerald-100 text-emerald-700"
-                                            : "bg-amber-100 text-amber-700"
-                                        }`}
-                                      >
-                                        {creationStatusLabel}
-                                      </span>
-                                    </td>
-
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center justify-end gap-2">
-                                        {(doc.parse_status === "CARICATO" ||
-                                          doc.parse_status === "COMPLETATO" ||
-                                          doc.parse_status === "COMPLETATO_CON_ERRORI") && (
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              if (activeImportTab === "PROFORMA") {
-                                                parseImportedProforma(doc.id);
-                                              } else {
-                                                parseImportedFattura(doc.id);
-                                              }
-                                            }}
-                                            disabled={parsingImportId === doc.id}
-                                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                            title="Esegui parser"
-                                          >
-                                            {parsingImportId === doc.id ? (
-                                              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-                                            ) : (
-                                              <span className="text-sm">✦</span>
-                                            )}
-                                          </button>
-                                        )}
-
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            loadImportedDocumentDetail(doc.id);
-                                            toggleImportedRow(doc.id);
-                                          }}
-                                          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                                          title={isExpanded ? "Chiudi dettaglio" : "Apri dettaglio"}
-                                        >
-                                          <span className="text-sm">≡</span>
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </tr>
-
-                                  {isExpanded ? (
-                                    <tr className="border-b border-slate-200 bg-slate-50/70">
-                                      <td colSpan={7} className="px-4 pb-4 pt-0">
-                                        <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-sm">
-                                          <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
-                                            <div className="space-y-4">
-                                              <div className="grid gap-3 sm:grid-cols-2">
-                                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                                    Numero
-                                                  </div>
-                                                  <div className="mt-1 text-sm font-semibold text-slate-900">
-                                                    {doc.numero || doc?.numero || "-"}
-                                                  </div>
-                                                </div>
-
-                                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                                    Importo
-                                                  </div>
-                                                  <div className="mt-1 text-sm font-semibold text-slate-900">
-                                                    {doc.importo !== null
-                                                      ? `${doc.importo.toFixed(2)} €`
-                                                      : doc?.importo != null
-                                                      ? euro(doc.importo)
-                                                      : "-"}
-                                                  </div>
-                                                </div>
-                                              </div>
-
-                                              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                                  Descrizione / dettaglio
-                                                </div>
-                                                <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
-                                                  {doc.descrizione ||
-                                                    doc?.descrizione ||
-                                                    "Nessun dettaglio disponibile."}
-                                                </div>
-                                              </div>
-                                            </div>
-
-                                            <div className="space-y-4">
-                                              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                                  Validazione
-                                                </div>
-
-                                                <div className="mt-3">
-                                                  {doc.validation_errors?.length ? (
-                                                    <ul className="space-y-2 text-sm text-rose-700">
-                                                      {doc.validation_errors.map((err: string, idx: number) => (
-                                                        <li key={`${err}-${idx}`}>• {err}</li>
-                                                      ))}
-                                                    </ul>
-                                                  ) : (
-                                                    <div className="text-sm font-medium text-emerald-700">
-                                                      Nessun errore bloccante rilevato.
-                                                    </div>
-                                                  )}
-                                                </div>
-                                              </div>
-
-                                              <div className="flex flex-wrap gap-3">
-                                                {/* <button
-                                                  type="button"
-                                                  onClick={() => loadImportedDocumentDetail(doc.id)}
-                                                  className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-                                                >
-                                                  Apri nel pannello
-                                                </button> */}
-
-                                                <button
-                                                  type="button"
-                                                  onClick={() => {
-                                                    loadImportedDocumentDetail(doc.id);
-
-                                                    if (activeImportTab === "PROFORMA") {
-                                                      setSelectedCondomini([]);
-                                                      setCondominiSearch("");
-                                                      setCondomini([]);
-                                                      setIsAssociateModalOpen(true);
-                                                      void loadCondomini();
-                                                      return;
-                                                    }
-
-                                                    if (activeImportTab === "FATTURA") {
-                                                      setSelectedFatturaCondominioId("");
-                                                      setSelectedProformaIdsForFattura([]);
-                                                      setCondominiSearch("");
-                                                      setCondomini([]);
-                                                      setIsCreateFatturaModalOpen(true);
-                                                      void loadCondomini();
-                                                      void loadProformasRows();
-                                                    }
-                                                  }}
-                                                  disabled={isLocked}
-                                                  className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                                >
-                                                  {activeImportTab === "PROFORMA"
-                                                    ? "Approva e crea proforma"
-                                                    : "Approva e crea fattura"}
-                                                </button>
-                                              </div>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  ) : null}
-                                </Fragment>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                        {renderImportedTableSection(
+                          "FATTURE IMPORTATE",
+                          "Le fatture senza numero restano in cima fino al parsing. Quelle già numerate rimangono sotto come elementi già avanzati nel flusso.",
+                          fatturaDocs
+                        )}
                       </div>
                     </div>
                   )}
