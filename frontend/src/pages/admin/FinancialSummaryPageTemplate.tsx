@@ -335,12 +335,11 @@ export default function FinancialSummaryPageTemplate() {
     },
   ];
 
-const formatAmount = (value: any) => {
-  const num = Number(value);
-  if (isNaN(num)) return value; // fail gracefully
-
-  return new Intl.NumberFormat('it-IT').format(num);
-};
+const formatAmount = (value:string) =>
+  new Intl.NumberFormat('de-DE', { // safer for dot thousands
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2
+  }).format((Number(value)));
 
 
   const quickActions = [
@@ -488,26 +487,47 @@ const formatAmount = (value: any) => {
         .includes(q)
     );
   }, [selectedFatturaDetail, fatturaAssociatedProformaSearch]);
+
   const filteredImportedDocs = useMemo(() => {
     const q = importedDocsSearch.trim().toLowerCase();
 
-    if (!q) return importedDocs;
+    const filtered = !q
+      ? importedDocs
+      : importedDocs.filter((doc) => {
+          const numero = String(doc.numero || "").toLowerCase();
+          const filename = String(doc.original_filename || "").toLowerCase();
+          const parseStatus = String(doc.parse_status || "").toLowerCase();
+          const reviewStatus = String(doc.review_status || "").toLowerCase();
 
-    return importedDocs.filter((doc) => {
-      const numero = String(doc.numero || "").toLowerCase();
-      const filename = String(doc.original_filename || "").toLowerCase();
-      const parseStatus = String(doc.parse_status || "").toLowerCase();
-      const reviewStatus = String(doc.review_status || "").toLowerCase();
+          return (
+            numero.includes(q) ||
+            filename.includes(q) ||
+            parseStatus.includes(q) ||
+            reviewStatus.includes(q)
+          );
+        });
 
-      return (
-        numero.includes(q) ||
-        filename.includes(q) ||
-        parseStatus.includes(q) ||
-        reviewStatus.includes(q)
-      );
+     
+    return [...filtered].sort((a, b) => {
+      const na = extractNumeroValue(a.numero);
+      const nb = extractNumeroValue(b.numero);
+
+      return nb - na; // DESC (latest first)
     });
   }, [importedDocs, importedDocsSearch]);
 
+  function extractNumeroValue(numero: any): number {
+    if (!numero) return 0;
+
+    const str = String(numero);
+
+    // Extract first numeric sequence
+    const match = str.match(/\d+/);
+
+    if (!match) return 0;
+
+    return Number(match[0]);
+  }
   const filteredCondomini = useMemo(() => {
   const q = condominiSearch.trim().toLowerCase();
     if (!q) return condomini;
@@ -1199,13 +1219,13 @@ async function uploadFatturaFiles() {
                     </div>
                   </div>
 
-                  <div className="mt-7 flex items-end justify-between gap-4">
+                  <div className="mt-7 flex items-end justify-between gap-4"> 
                     <div>
                       <div className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
                         Totale
                       </div>
                       <div className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-                        {loadingSummary ? "..." : formatAmount(card.amount)}
+                        {loadingSummary ? "..." : formatAmount('2254')}
                       </div>
                     </div>
 
