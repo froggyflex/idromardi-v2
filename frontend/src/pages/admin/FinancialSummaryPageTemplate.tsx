@@ -360,7 +360,7 @@ const formatAmount = (value: any) => {
   if (Number.isNaN(num)) return value;
 
   return (
-    new Intl.NumberFormat("it-IT", {
+    new Intl.NumberFormat("de-DE", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(num) + " €"
