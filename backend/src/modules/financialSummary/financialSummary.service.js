@@ -1419,16 +1419,19 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     throw new Error(`Tipo documento non supportato: ${normalizedType}`);
   }
 
+  
+
   const [rows] = await conn.query(
     `
     SELECT id, current_value
     FROM document_number_counters
-    WHERE document_type = ? AND anno = ?
+    WHERE document_type = ?  
     FOR UPDATE
     `,
-    [normalizedType, Number(anno)]
+    [normalizedType]
   );
 
+    
   let nextValue = 1;
 
   if (!rows.length) {
