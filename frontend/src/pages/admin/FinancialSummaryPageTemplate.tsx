@@ -668,6 +668,32 @@ const fatturaDocs = useMemo(() => {
     }
   }
 
+  async function handleDeleteImportedDoc(fileId: string) {
+  const ok = window.confirm("Eliminare questo documento importato?");
+  if (!ok) return;
+
+  try {
+    setError("");
+
+    if (selectedImportedDoc?.id === fileId) {
+      setSelectedImportedDoc(null);
+    }
+
+    if (activeImportTab === "PROFORMA") {
+      await api.delete(`/financial-summary/imported-documents/proforma/${fileId}`);
+    } else {
+      await api.delete(`/financial-summary/imported-documents/fattura/${fileId}`);
+    }
+
+    await loadImportedDocuments();
+  } catch (err: any) {
+    console.error("deleteImportedDocument error:", err?.response?.data || err);
+    setError(
+      err?.response?.data?.error ||
+        "Errore durante l'eliminazione del documento importato."
+    );
+  }
+} 
   async function loadFattureRows() {
     try {
       setLoadingFatture(true);
@@ -1368,6 +1394,7 @@ async function uploadProformaFiles() {
 
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-end gap-2">
+
                               {(doc.parse_status === "CARICATO" ||
                                 doc.parse_status === "COMPLETATO" ||
                                 doc.parse_status === "COMPLETATO_CON_ERRORI") && (
@@ -1392,6 +1419,18 @@ async function uploadProformaFiles() {
                                 </button>
                               )}
 
+                              {/* NEW DELETE BUTTON */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteImportedDoc(doc.id);
+                                }}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
+                                title="Elimina documento"
+                              >
+                                <span className="text-sm">✕</span>
+                              </button>
+
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -1404,6 +1443,7 @@ async function uploadProformaFiles() {
                               >
                                 <span className="text-sm">≡</span>
                               </button>
+
                             </div>
                           </td>
                         </tr>

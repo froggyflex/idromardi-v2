@@ -164,6 +164,27 @@ async function deleteProforma(req, res) {
   }
 }
 
+async function deleteImportedDocument(req, res) {
+  try {
+    const result = await service.deleteImportedDocument(req.params.id, "proforma");
+    return res.json(result);
+  } catch (err) {
+    console.error("deleteImportedDocument error:", err);
+    return res.status(500).json({ error: err.message || "Errore durante l'eliminazione del documento importato." });
+  }
+}
+
+async function deleteImportedDocumentF(req, res) {
+  try {
+    const result = await service.deleteImportedDocumentF(req.params.id, "fattura");
+    return res.json(result);
+  } catch (err) {
+    console.error("deleteImportedDocument error:", err);
+    return res.status(500).json({ error: err.message || "Errore durante l'eliminazione del documento importato." });
+  }
+}
+
+
 async function listProformas(req, res) {
   try {
     const rows = await service.listProformas();
@@ -333,6 +354,8 @@ module.exports = {
   listCondominiSimple,
   annullaProforma,
   deleteProforma,
+  deleteImportedDocument,
+  deleteImportedDocumentF,
   listProformas,
   collegaProformaAFattura,
   collegaProformeAFattura,

@@ -10,6 +10,9 @@ router.get("/recent", controller.getRecentRows);
 
 router.get("/imported-documents", controller.listImportedDocuments);
 router.get("/imported-documents/:id", controller.getImportedDocumentDetail);
+router.delete("/imported-documents/fattura/:id", controller.deleteImportedDocumentF);
+router.delete("/imported-documents/proforma/:id", controller.deleteImportedDocument);
+
 router.post(
   "/imported-documents/upload",
   uploadPdf.array("files", 20),
@@ -23,6 +26,7 @@ router.post(
   controller.uploadImportedDocumentsF
 );
 router.post("/imported-documents/:fileId/parse", controller.parseImportedDocument);
+
 router.post("/imported-documents/:fileId/parsef", controller.parseImportedDocumentF);
 router.post("/imported-documents/:fileId/promote", controller.promoteImportedDocumentToProforma);
 router.post("/imported-documents/:fileId/promotef", controller.promoteImportedDocumentToFattura);

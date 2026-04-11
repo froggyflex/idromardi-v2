@@ -1534,6 +1534,241 @@ async function annullaProforma(id, reason, userId = null) {
   return { success: true };
 }
 
+async function deleteImportedDocument(fileId, documentType) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const normalizedType = String(documentType || "").trim().toUpperCase();
+
+    if (!["PROFORMA", "FATTURA"].includes(normalizedType)) {
+      throw new Error("Tipo documento non supportato.");
+    }
+
+    const [[fileRow]] = await conn.query(
+      `
+      SELECT
+        id,
+        batch_id,
+        file_path,
+        original_filename,
+        stored_filename
+      FROM import_batch_files
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [fileId]
+    );
+
+    if (!fileRow) {
+      throw new Error("Documento importato non trovato.");
+    }
+
+    const [items] = await conn.query(
+      `
+      SELECT
+        id,
+        review_status
+      FROM import_items
+      WHERE document_type = ?
+        AND promoted_entity_id = ?
+      FOR UPDATE
+      `,
+      [normalizedType, fileId]
+    );
+
+    const hasPromoted = items.some((i) => i.review_status === "PROMOSSO");
+
+    if (hasPromoted) {
+      throw new Error(
+        "Il documento importato è già stato promosso. Non può essere eliminato dallo staging."
+      );
+    }
+
+    await conn.query(
+      `
+      DELETE FROM import_items
+      WHERE document_type = ?
+        AND promoted_entity_id = ?
+      `,
+      [normalizedType, fileId]
+    );
+
+    await conn.query(
+      `
+      DELETE FROM import_batch_files
+      WHERE id = ?
+      `,
+      [fileId]
+    );
+
+    const [[batchCount]] = await conn.query(
+      `
+      SELECT COUNT(*) AS cnt
+      FROM import_batch_files
+      WHERE batch_id = ?
+      `,
+      [fileRow.batch_id]
+    );
+
+    let deletedBatchId = null;
+
+    if (Number(batchCount?.cnt || 0) === 0) {
+      await conn.query(
+        `
+        DELETE FROM import_batches
+        WHERE id = ?
+        `,
+        [fileRow.batch_id]
+      );
+
+      deletedBatchId = fileRow.batch_id;
+    }
+
+    await conn.commit();
+
+    if (fileRow.file_path && fs.existsSync(fileRow.file_path)) {
+      try {
+        fs.unlinkSync(fileRow.file_path);
+      } catch (fileErr) {
+        console.error("Errore eliminazione file fisico:", fileErr);
+      }
+    }
+
+    return {
+      success: true,
+      deletedFileId: fileId,
+      deletedBatchId,
+      deletedImportItemsCount: items.length,
+      originalFilename: fileRow.original_filename,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function deleteImportedDocumentF(fileId, documentType) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const normalizedType = String(documentType || "").trim().toUpperCase();
+
+    if (!["PROFORMA", "FATTURA"].includes(normalizedType)) {
+      throw new Error("Tipo documento non supportato.");
+    }
+
+    const [[fileRow]] = await conn.query(
+      `
+      SELECT
+        id,
+        batch_id,
+        file_path,
+        original_filename,
+        stored_filename
+      FROM import_batch_files
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [fileId]
+    );
+
+    if (!fileRow) {
+      throw new Error("Documento importato non trovato.");
+    }
+
+    const [items] = await conn.query(
+      `
+      SELECT
+        id,
+        review_status
+      FROM import_items
+      WHERE document_type = ?
+        AND promoted_entity_id = ?
+      FOR UPDATE
+      `,
+      [normalizedType, fileId]
+    );
+
+    const hasPromoted = items.some((i) => i.review_status === "PROMOSSO");
+
+    if (hasPromoted) {
+      throw new Error(
+        "Il documento importato è già stato promosso. Non può essere eliminato dallo staging."
+      );
+    }
+
+    await conn.query(
+      `
+      DELETE FROM import_items
+      WHERE document_type = ?
+        AND promoted_entity_id = ?
+      `,
+      [normalizedType, fileId]
+    );
+
+    await conn.query(
+      `
+      DELETE FROM import_batch_files
+      WHERE id = ?
+      `,
+      [fileId]
+    );
+
+    const [[batchCount]] = await conn.query(
+      `
+      SELECT COUNT(*) AS cnt
+      FROM import_batch_files
+      WHERE batch_id = ?
+      `,
+      [fileRow.batch_id]
+    );
+
+    let deletedBatchId = null;
+
+    if (Number(batchCount?.cnt || 0) === 0) {
+      await conn.query(
+        `
+        DELETE FROM import_batches
+        WHERE id = ?
+        `,
+        [fileRow.batch_id]
+      );
+
+      deletedBatchId = fileRow.batch_id;
+    }
+
+    await conn.commit();
+
+    if (fileRow.file_path && fs.existsSync(fileRow.file_path)) {
+      try {
+        fs.unlinkSync(fileRow.file_path);
+      } catch (fileErr) {
+        console.error("Errore eliminazione file fisico:", fileErr);
+      }
+    }
+
+    return {
+      success: true,
+      deletedFileId: fileId,
+      deletedBatchId,
+      deletedImportItemsCount: items.length,
+      originalFilename: fileRow.original_filename,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
 async function deleteProforma(id) {
   const [rows] = await db.query(
     `
@@ -2255,6 +2490,8 @@ async function annullaFattura(id, reason, userId = null) {
   listCondominiSimple,
   annullaProforma,
   deleteProforma,
+  deleteImportedDocument,
+    deleteImportedDocumentF,
   listProformas,
   collegaProformeAFatturaEsistente,
   listFattureSimple,
