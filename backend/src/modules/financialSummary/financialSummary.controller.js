@@ -340,7 +340,59 @@ async function getFatturaProforme(req, res) {
     return res.status(500).json({ error: "Errore nel caricamento delle proforme associate." });
   }
 }
+async function registraPagamentoFattura(req, res) {
+  try {
+    const { id } = req.params;
+    const {
+      importo,
+      paymentMethod,
+      dataPagamento,
+      descrizione,
+    } = req.body;
 
+    if (!id) {
+      return res.status(400).json({ error: "id fattura mancante" });
+    }
+
+    const result = await service.registraPagamentoFattura(id, {
+      importo,
+      paymentMethod,
+      dataPagamento,
+      descrizione,
+    });
+
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("registraPagamentoFattura error:", err);
+    return res.status(500).json({
+      error: err.message || "Errore durante la registrazione del pagamento.",
+    });
+  }
+}
+async function listPayments(req, res) {
+  try {
+    const rows = await service.listPayments();
+    return res.json(rows);
+  } catch (err) {
+    console.error("listPayments error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento dei pagamenti." });
+  }
+}
+
+async function getPaymentDetail(req, res) {
+  try {
+    const row = await service.getPaymentDetail(req.params.id);
+
+    if (!row) {
+      return res.status(404).json({ error: "Pagamento non trovato." });
+    }
+
+    return res.json(row);
+  } catch (err) {
+    console.error("getPaymentDetail error:", err);
+    return res.status(500).json({ error: "Errore nel caricamento del dettaglio pagamento." });
+  }
+}
 module.exports = {
   getSummary,
   getRecentRows,
@@ -366,6 +418,9 @@ module.exports = {
   uploadImportedDocumentsF,
   parseImportedDocumentF,
   annullaFattura,
-  getFatturaDetail
+  getFatturaDetail,
+  registraPagamentoFattura,
+  listPayments,
+  getPaymentDetail,
 
 };

@@ -1421,8 +1421,8 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
 
   const normalizedType = String(documentType).trim().toUpperCase();
 
-  if (!["PROFORMA", "FATTURA"].includes(normalizedType)) {
-    throw new Error(`Tipo documento non supportato: ${normalizedType}`);
+  if (!["PROFORMA", "FATTURA", "PAGAMENTO"].includes(normalizedType)) {
+      throw new Error(`Tipo documento non supportato: ${normalizedType}`);
   }
 
   
@@ -1480,13 +1480,16 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     ? String(buildingLabel)
         .trim()
         .toUpperCase()
-        .replace(/[^A-Z0-9]+/g, "-")
+        .replace(/[^A-Z0-9, ]+/g, "")
+        .replace(/\s+/g, "-")
+        .replace(/-+/g, "-")
         .replace(/^-+|-+$/g, "")
     : null;
 
   const prefixMap = {
     PROFORMA: "PF",
     FATTURA: "FT",
+    PAGAMENTO: "PG",
   };
 
   const prefix = prefixMap[normalizedType];
@@ -1532,6 +1535,251 @@ async function annullaProforma(id, reason, userId = null) {
   );
 
   return { success: true };
+}
+
+async function recalculateFatturaStatus(conn, fatturaId) {
+  const [[fattura]] = await conn.query(
+    `
+    SELECT id, importo, stato
+    FROM fatture
+    WHERE id = ?
+    LIMIT 1
+    FOR UPDATE
+    `,
+    [fatturaId]
+  );
+
+  if (!fattura) {
+    throw new Error("Fattura non trovata.");
+  }
+
+  if (fattura.stato === "ANNULLATA") {
+    return {
+      fatturaId,
+      stato: "ANNULLATA",
+      totaleAllocato: 0,
+      residuo: Number(fattura.importo || 0),
+    };
+  }
+
+  const [[allocRow]] = await conn.query(
+    `
+    SELECT COALESCE(SUM(importo_allocato), 0) AS totale_allocato
+    FROM payment_allocations
+    WHERE fattura_id = ?
+    `,
+    [fatturaId]
+  );
+
+  const importo = Number(fattura.importo || 0);
+  const totaleAllocato = Number(allocRow?.totale_allocato || 0);
+  const residuo = Math.max(importo - totaleAllocato, 0);
+
+  let nuovoStato = "EMESSA";
+
+  if (totaleAllocato <= 0) {
+    nuovoStato = "EMESSA";
+  } else if (totaleAllocato < importo) {
+    nuovoStato = "PARZIALMENTE_PAGATA";
+  } else {
+    nuovoStato = "PAGATA";
+  }
+
+  await conn.query(
+    `
+    UPDATE fatture
+    SET
+      stato = ?,
+      updated_at = NOW()
+    WHERE id = ?
+    `,
+    [nuovoStato, fatturaId]
+  );
+
+  return {
+    fatturaId,
+    stato: nuovoStato,
+    totaleAllocato,
+    residuo,
+  };
+}
+
+
+async function registraPagamentoFattura(fatturaId, payload) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const cleanImporto = Number(payload.importo);
+
+    if (!fatturaId) {
+      throw new Error("fatturaId mancante.");
+    }
+
+    if (!Number.isFinite(cleanImporto) || cleanImporto <= 0) {
+      throw new Error("Importo pagamento non valido.");
+    }
+
+    if (!payload.paymentMethod) {
+      throw new Error("Metodo di pagamento mancante.");
+    }
+
+    if (!payload.dataPagamento) {
+      throw new Error("Data pagamento mancante.");
+    }
+
+    const [[fattura]] = await conn.query(
+      `
+      SELECT
+        f.id,
+        f.condominio_id,
+        f.importo,
+        f.stato,
+        c.indirizzo AS condominio
+      FROM fatture f
+      LEFT JOIN condomini_v2 c
+        ON c.id = f.condominio_id
+      WHERE f.id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [fatturaId]
+    );
+
+    if (!fattura) {
+      throw new Error("Fattura non trovata.");
+    }
+
+    if (fattura.stato === "ANNULLATA") {
+      throw new Error("La fattura è annullata e non può ricevere pagamenti.");
+    }
+
+    const [[allocRow]] = await conn.query(
+      `
+      SELECT COALESCE(SUM(importo_allocato), 0) AS totale_allocato
+      FROM payment_allocations
+      WHERE fattura_id = ?
+      `,
+      [fatturaId]
+    );
+
+    const importoFattura = Number(fattura.importo || 0);
+    const totaleAllocatoPrecedente = Number(allocRow?.totale_allocato || 0);
+    const residuoPrecedente = Math.max(importoFattura - totaleAllocatoPrecedente, 0);
+
+    if (cleanImporto > residuoPrecedente) {
+      throw new Error(
+        `L'importo supera il residuo disponibile della fattura (${residuoPrecedente.toFixed(2)}).`
+      );
+    }
+
+    const anno = new Date(payload.dataPagamento).getFullYear();
+
+    if (!anno || Number.isNaN(anno)) {
+      throw new Error("Anno pagamento non valido.");
+    }
+
+    const numbering = await getNextDocumentNumber(
+      conn,
+      "PAGAMENTO",
+      anno,
+      fattura.condominio || null
+    );
+
+    const paymentId = crypto.randomUUID();
+
+    await conn.query(
+      `
+      INSERT INTO payments (
+        id,
+        numero_progressivo,
+        numero,
+        payment_method,
+        stato,
+        data_pagamento,
+        importo,
+        descrizione,
+        cancellation_reason,
+        cancellation_date,
+        cancellation_user_id,
+        replacement_payment_id,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, 'ALLOCATO', ?, ?, ?, NULL, NULL, NULL, NULL, NOW(), NOW())
+      `,
+      [
+        paymentId,
+        numbering.progressivo,
+        numbering.numero,
+        payload.paymentMethod,
+        payload.dataPagamento,
+        cleanImporto,
+        payload.descrizione || null,
+      ]
+    );
+
+    const allocationId = crypto.randomUUID();
+
+    await conn.query(
+      `
+      INSERT INTO payment_allocations (
+        id,
+        payment_id,
+        fattura_id,
+        importo_allocato,
+        data_allocazione,
+        descrizione,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
+      `,
+      [
+        allocationId,
+        paymentId,
+        fatturaId,
+        cleanImporto,
+        payload.dataPagamento,
+        payload.descrizione || null,
+      ]
+    );
+
+    const statusInfo = await recalculateFatturaStatus(conn, fatturaId);
+
+    await conn.commit();
+
+    return {
+      success: true,
+      payment: {
+        id: paymentId,
+        numero: numbering.numero,
+        numero_progressivo: numbering.progressivo,
+        payment_method: payload.paymentMethod,
+        stato: "ALLOCATO",
+        data_pagamento: payload.dataPagamento,
+        importo: cleanImporto,
+        descrizione: payload.descrizione || null,
+      },
+      allocation: {
+        id: allocationId,
+        payment_id: paymentId,
+        fattura_id: fatturaId,
+        importo_allocato: cleanImporto,
+        data_allocazione: payload.dataPagamento,
+        descrizione: payload.descrizione || null,
+      },
+      fatturaStatus: statusInfo.stato,
+      totaleAllocato: statusInfo.totaleAllocato,
+      residuo: statusInfo.residuo,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 async function deleteImportedDocument(fileId, documentType) {
@@ -1846,7 +2094,9 @@ async function promoteImportedDocumentToProforma(fileId, condominioIds = []) {
 
     const validationErrors = safeJsonParse(row.validation_errors, []);
     if (Array.isArray(validationErrors) && validationErrors.length > 0) {
+      console.error("Validation errors:", validationErrors);
       throw new Error("Il documento ha errori di validazione. Correggilo prima della promozione.");
+      
     }
 
     const extractedDate = row.extracted_date;
@@ -2477,6 +2727,129 @@ async function annullaFattura(id, reason, userId = null) {
     conn.release();
   }
 }
+
+
+async function listPayments() {
+  const [rows] = await db.query(
+    `
+    SELECT
+      p.id,
+      p.numero_progressivo,
+      p.numero,
+      p.payment_method,
+      p.stato,
+      p.data_pagamento,
+      p.importo,
+      p.descrizione,
+      p.created_at,
+      p.updated_at,
+      COUNT(pa.id) AS numero_allocazioni,
+      COALESCE(SUM(pa.importo_allocato), 0) AS totale_allocato
+    FROM payments p
+    LEFT JOIN payment_allocations pa
+      ON pa.payment_id = p.id
+    GROUP BY
+      p.id,
+      p.numero_progressivo,
+      p.numero,
+      p.payment_method,
+      p.stato,
+      p.data_pagamento,
+      p.importo,
+      p.descrizione,
+      p.created_at,
+      p.updated_at
+    ORDER BY p.created_at DESC
+    `
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    numero_progressivo: row.numero_progressivo,
+    numero: row.numero,
+    payment_method: row.payment_method,
+    stato: row.stato,
+    data_pagamento: row.data_pagamento,
+    importo: Number(row.importo || 0),
+    descrizione: row.descrizione || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    numero_allocazioni: Number(row.numero_allocazioni || 0),
+    totale_allocato: Number(row.totale_allocato || 0),
+  }));
+}
+
+async function getPaymentDetail(id) {
+  const [[payment]] = await db.query(
+    `
+    SELECT
+      id,
+      numero_progressivo,
+      numero,
+      payment_method,
+      stato,
+      data_pagamento,
+      importo,
+      descrizione,
+      created_at,
+      updated_at
+    FROM payments
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  if (!payment) return null;
+
+  const [allocations] = await db.query(
+    `
+    SELECT
+      pa.id,
+      pa.payment_id,
+      pa.fattura_id,
+      pa.importo_allocato,
+      pa.data_allocazione,
+      pa.descrizione,
+      f.numero AS fattura_numero,
+      f.importo AS fattura_importo,
+      c.indirizzo AS condominio
+    FROM payment_allocations pa
+    LEFT JOIN fatture f
+      ON f.id = pa.fattura_id
+    LEFT JOIN condomini_v2 c
+      ON c.id = f.condominio_id
+    WHERE pa.payment_id = ?
+    ORDER BY pa.data_allocazione DESC, pa.created_at DESC
+    `,
+    [id]
+  );
+
+  return {
+    id: payment.id,
+    numero_progressivo: payment.numero_progressivo,
+    numero: payment.numero,
+    payment_method: payment.payment_method,
+    stato: payment.stato,
+    data_pagamento: payment.data_pagamento,
+    importo: Number(payment.importo || 0),
+    descrizione: payment.descrizione || null,
+    created_at: payment.created_at,
+    updated_at: payment.updated_at,
+    allocations: allocations.map((a) => ({
+      id: a.id,
+      payment_id: a.payment_id,
+      fattura_id: a.fattura_id,
+      fattura_numero: a.fattura_numero,
+      fattura_importo: Number(a.fattura_importo || 0),
+      condominio: a.condominio || "-",
+      importo_allocato: Number(a.importo_allocato || 0),
+      data_allocazione: a.data_allocazione,
+      descrizione: a.descrizione || null,
+    })),
+  };
+}
+
  module.exports = {
   listImportedDocuments,
   getImportedDocumentDetail,
@@ -2503,5 +2876,8 @@ async function annullaFattura(id, reason, userId = null) {
   promoteImportedDocumentToFattura,
   getFatturaDetail,
   annullaFattura,
+  registraPagamentoFattura,
+  listPayments,
+  getPaymentDetail,
 
 };

@@ -10,7 +10,40 @@ type SummaryResponse = {
     totaleIncassato: number;
   };
 };
+type PaymentRow = {
+  id: string;
+  numero_progressivo: number;
+  numero: string;
+  payment_method: string;
+  stato: string;
+  data_pagamento: string;
+  importo: number;
+  descrizione: string | null;
+  numero_allocazioni: number;
+  totale_allocato: number;
+};
 
+type PaymentDetail = {
+  id: string;
+  numero_progressivo: number;
+  numero: string;
+  payment_method: string;
+  stato: string;
+  data_pagamento: string;
+  importo: number;
+  descrizione: string | null;
+  allocations: Array<{
+    id: string;
+    payment_id: string;
+    fattura_id: string;
+    fattura_numero: string;
+    fattura_importo: number;
+    condominio: string;
+    importo_allocato: number;
+    data_allocazione: string;
+    descrizione: string | null;
+  }>;
+};
 type FatturaDetail = {
   id: string;
   condominio_id: string;
@@ -278,7 +311,117 @@ export default function FinancialSummaryPageTemplate() {
   const [isManageFatturaModalOpen, setIsManageFatturaModalOpen] = useState(false);
   const [selectedProformaIdsForExistingFattura, setSelectedProformaIdsForExistingFattura] = useState<string[]>([]);
   const [linkingProformasToFattura, setLinkingProformasToFattura] = useState(false);
-  
+  const [isRegisterPaymentModalOpen, setIsRegisterPaymentModalOpen] = useState(false);
+  const [registerPaymentTargetFattura, setRegisterPaymentTargetFattura] = useState<any | null>(null);
+  const [paymentForm, setPaymentForm] = useState({
+    importo: "",
+    paymentMethod: "BONIFICO",
+    dataPagamento: new Date().toISOString().slice(0, 10),
+    descrizione: "",
+  });
+  const [registeringPayment, setRegisteringPayment] = useState(false);
+
+
+  const [paymentsRows, setPaymentsRows] = useState<PaymentRow[]>([]);
+  const [loadingPayments, setLoadingPayments] = useState(false);
+
+  const [selectedPaymentDetail, setSelectedPaymentDetail] = useState<PaymentDetail | null>(null);
+  const [loadingPaymentDetail, setLoadingPaymentDetail] = useState(false);
+
+  const [paymentSearch, setPaymentSearch] = useState("");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState("TUTTI");
+
+  async function registraPagamentoFattura() {
+    if (!registerPaymentTargetFattura?.id) {
+      setError("Fattura non valida.");
+      return;
+    }
+
+    const importo = Number(paymentForm.importo);
+
+    if (!Number.isFinite(importo) || importo <= 0) {
+      setError("Importo pagamento non valido.");
+      return;
+    }
+
+    if (!paymentForm.paymentMethod) {
+      setError("Metodo di pagamento mancante.");
+      return;
+    }
+
+    if (!paymentForm.dataPagamento) {
+      setError("Data pagamento mancante.");
+      return;
+    }
+
+    try {
+      setRegisteringPayment(true);
+      setError("");
+
+      await api.post(`/financial-summary/${registerPaymentTargetFattura.id}/registra-pagamento`, {
+        importo,
+        paymentMethod: paymentForm.paymentMethod,
+        dataPagamento: paymentForm.dataPagamento,
+        descrizione: paymentForm.descrizione,
+      });
+
+      const currentFatturaId = registerPaymentTargetFattura.id;
+
+      setIsRegisterPaymentModalOpen(false);
+      setRegisterPaymentTargetFattura(null);
+
+      await Promise.all([
+        loadSummary(),
+        loadRecentRows(),
+        loadFattureRows(),
+        selectedFatturaDetail?.id === currentFatturaId
+          ? loadFatturaDetail(currentFatturaId)
+          : Promise.resolve(),
+      ]);
+    } catch (err: any) {
+      console.error("registraPagamentoFattura error:", err?.response?.data || err);
+      setError(
+        err?.response?.data?.error || "Errore durante la registrazione del pagamento."
+      );
+    } finally {
+      setRegisteringPayment(false);
+    }
+  }
+
+  async function loadPaymentsRows() {
+  try {
+    setLoadingPayments(true);
+    const { data } = await api.get("/financial-summary/payments");
+    setPaymentsRows(Array.isArray(data) ? data : []);
+  } catch (err: any) {
+    setError(err?.response?.data?.error || "Errore nel caricamento dei pagamenti.");
+  } finally {
+    setLoadingPayments(false);
+  }
+}
+
+async function loadPaymentDetail(id: string) {
+  try {
+    setLoadingPaymentDetail(true);
+    const { data } = await api.get(`/financial-summary/payments/${id}`);
+    setSelectedPaymentDetail(data);
+  } catch (err: any) {
+    setError(err?.response?.data?.error || "Errore nel caricamento del dettaglio pagamento.");
+  } finally {
+    setLoadingPaymentDetail(false);
+  }
+}
+
+  function openRegisterPaymentModal(fattura: any) {
+    setRegisterPaymentTargetFattura(fattura);
+    setPaymentForm({
+      importo: String(Number(fattura.residuo_da_associare || 0) || ""),
+      paymentMethod: "BONIFICO",
+      dataPagamento: new Date().toISOString().slice(0, 10),
+      descrizione: "",
+    });
+    setIsRegisterPaymentModalOpen(true);
+  }
   const filteredFattureRows = useMemo(() => {
     return fattureRows.filter((row: any) => {
       const q = fatturaSearch.trim().toLowerCase();
@@ -1349,6 +1492,34 @@ async function uploadProformaFiles() {
     };
   }, [isManageFatturaModalOpen]);
 
+  useEffect(() => {
+  if (activeDetailSection === "PAGAMENTO") {
+    void loadPaymentsRows();
+  }
+  }, [activeDetailSection]);
+  const filteredPaymentsRows = useMemo(() => {
+  return paymentsRows.filter((row) => {
+    const q = paymentSearch.trim().toLowerCase();
+
+    const matchesSearch =
+      !q ||
+      [
+        row.numero,
+        row.payment_method || "",
+        row.descrizione || "",
+        String(row.importo || ""),
+        String(row.totale_allocato || ""),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+
+    const matchesStatus =
+      paymentStatusFilter === "TUTTI" || row.stato === paymentStatusFilter;
+
+    return matchesSearch && matchesStatus;
+  });
+}, [paymentsRows, paymentSearch, paymentStatusFilter]);
     const renderImportedTableSection = (title: string, subtitle: string, docs: any[]) => {
       return (
         <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm rounded-[28px] bg-blue-50/40 p-3" >
@@ -2063,21 +2234,73 @@ async function uploadProformaFiles() {
                                 </span>
                               </td>
                               <td className="px-6 py-4 text-right">
-                                <div className="flex justify-end gap-2">
-                                  <button
-                                    onClick={() => void loadFatturaDetail(row.id)}
-                                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
-                                  >
-                                    Apri dettaglio
-                                  </button>
+                                <div className=" ">
+                                  <div className="flex items-center gap-2">
 
-                                  <button
-                                    onClick={() => void annullaFattura(row.id)}
-                                    disabled={annullingFatturaId === row.id}
-                                    className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 disabled:opacity-60"
-                                  >
-                                    {annullingFatturaId === row.id ? "..." : "Annulla"}
-                                  </button>
+                                    {/* VIEW */}
+                                    <button
+                                      onClick={() => void loadFatturaDetail(row.id)}
+                                      title="Apri dettaglio"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-100 hover:text-slate-900"
+                                    >
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="h-4 w-4"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                      >
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6z" />
+                                        <circle cx="12" cy="12" r="3" />
+                                      </svg>
+                                    </button>
+
+                                    {/* PAYMENT */}
+                                    <button
+                                      onClick={() => openRegisterPaymentModal(row)}
+                                      disabled={row.stato === "ANNULLATA" || row.stato === "PAGATA"}
+                                      title="Registra pagamento"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-600 shadow-sm transition hover:bg-emerald-100 hover:text-emerald-700 disabled:opacity-40"
+                                    >
+                                      <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="h-4 w-4"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                      >
+                                        <rect x="2" y="5" width="20" height="14" rx="2" />
+                                        <path d="M2 10h20" />
+                                      </svg>
+                                    </button>
+
+                                    {/* CANCEL */}
+                                    <button
+                                      onClick={() => void annullaFattura(row.id)}
+                                      disabled={annullingFatturaId === row.id}
+                                      title="Annulla fattura"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-600 shadow-sm transition hover:bg-amber-100 hover:text-amber-700 disabled:opacity-40"
+                                    >
+                                      {annullingFatturaId === row.id ? (
+                                        <span className="text-xs">...</span>
+                                      ) : (
+                                        <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          className="h-4 w-4"
+                                          fill="none"
+                                          viewBox="0 0 24 24"
+                                          stroke="currentColor"
+                                          strokeWidth="2"
+                                        >
+                                          <path strokeLinecap="round" strokeLinejoin="round" d="M18 6L6 18M6 6l12 12" />
+                                        </svg>
+                                      )}
+                                    </button>
+
+                                  </div>
+
                                 </div>
                               </td>
                             </tr>
@@ -2211,7 +2434,224 @@ async function uploadProformaFiles() {
                 ) : null}
               </section>
             ) : null}
+            {activeDetailSection === "PAGAMENTO" ? (
+              <section className="space-y-6">
+                <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h3 className="text-xl font-bold">Dettaglio incassato</h3>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Elenco completo dei pagamenti registrati e delle allocazioni sulle fatture.
+                      </p>
+                    </div>
 
+                    <div className="flex flex-col gap-3 sm:flex-row">
+                      <input
+                        value={paymentSearch}
+                        onChange={(e) => setPaymentSearch(e.target.value)}
+                        placeholder="Cerca numero, metodo, descrizione..."
+                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                      />
+
+                      <select
+                        value={paymentStatusFilter}
+                        onChange={(e) => setPaymentStatusFilter(e.target.value)}
+                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                      >
+                        <option value="TUTTI">Tutti gli stati</option>
+                        <option value="REGISTRATO">Registrato</option>
+                        <option value="PARZIALMENTE_ALLOCATO">Parzialmente allocato</option>
+                        <option value="ALLOCATO">Allocato</option>
+                        <option value="ANNULLATO">Annullato</option>
+                      </select>
+
+                      <button
+                        onClick={() => setActiveDetailSection(null)}
+                        className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                      >
+                        Chiudi sezione
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        <tr>
+                          <th className="px-6 py-4">Numero</th>
+                          <th className="px-6 py-4">Metodo</th>
+                          <th className="px-6 py-4">Data</th>
+                          <th className="px-6 py-4 text-right">Importo</th>
+                          <th className="px-6 py-4 text-right">Totale allocato</th>
+                          <th className="px-6 py-4">Stato</th>
+                          <th className="px-6 py-4">Descrizione</th>
+                          <th className="px-6 py-4 text-right">Azioni</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {loadingPayments ? (
+                          <tr>
+                            <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
+                              Caricamento pagamenti...
+                            </td>
+                          </tr>
+                        ) : filteredPaymentsRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-6 py-8 text-center text-slate-500">
+                              Nessun pagamento trovato.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredPaymentsRows.map((row) => (
+                            <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
+                              <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
+                              <td className="px-6 py-4 text-slate-700">{row.payment_method || "-"}</td>
+                              <td className="px-6 py-4 text-slate-500">{formatDate(row.data_pagamento)}</td>
+                              <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                                {euro(row.importo)}
+                              </td>
+                              <td className="px-6 py-4 text-right font-semibold text-emerald-700">
+                                {euro(row.totale_allocato)}
+                              </td>
+                              <td className="px-6 py-4">
+                                <span
+                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                                    statusClass[row.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                                  }`}
+                                >
+                                  {String(row.stato || "").replaceAll("_", " ")}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
+                              <td className="px-6 py-4 text-right">
+                                <button
+                                  onClick={() => void loadPaymentDetail(row.id)}
+                                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                                >
+                                  Apri dettaglio
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                {selectedPaymentDetail ? (
+                  <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <h3 className="text-xl font-bold">Dettaglio pagamento {selectedPaymentDetail.numero}</h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Allocazioni del pagamento sulle fatture collegate.
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => setSelectedPaymentDetail(null)}
+                        className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+                      >
+                        Chiudi dettaglio
+                      </button>
+                    </div>
+
+                    <div className="grid gap-4 p-6 lg:grid-cols-4">
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Importo pagamento
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-slate-900">
+                          {euro(selectedPaymentDetail.importo)}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-emerald-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">
+                          Metodo
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-emerald-800">
+                          {selectedPaymentDetail.payment_method || "-"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-sky-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
+                          Data pagamento
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-sky-800">
+                          {formatDate(selectedPaymentDetail.data_pagamento)}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Stato
+                        </div>
+                        <div className="mt-2">
+                          <span
+                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
+                              statusClass[selectedPaymentDetail.stato] ||
+                              "bg-slate-100 text-slate-700 ring-slate-200"
+                            }`}
+                          >
+                            {String(selectedPaymentDetail.stato || "").replaceAll("_", " ")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto border-t border-slate-200">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          <tr>
+                            <th className="px-6 py-4">Fattura</th>
+                            <th className="px-6 py-4">Condominio</th>
+                            <th className="px-6 py-4 text-right">Importo fattura</th>
+                            <th className="px-6 py-4 text-right">Importo allocato</th>
+                            <th className="px-6 py-4">Data allocazione</th>
+                            <th className="px-6 py-4">Descrizione</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {loadingPaymentDetail ? (
+                            <tr>
+                              <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                                Caricamento dettaglio...
+                              </td>
+                            </tr>
+                          ) : selectedPaymentDetail.allocations.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                                Nessuna allocazione trovata.
+                              </td>
+                            </tr>
+                          ) : (
+                            selectedPaymentDetail.allocations.map((a) => (
+                              <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50">
+                                <td className="px-6 py-4 font-semibold text-slate-800">{a.fattura_numero}</td>
+                                <td className="px-6 py-4 text-slate-700">{a.condominio || "-"}</td>
+                                <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                                  {euro(a.fattura_importo)}
+                                </td>
+                                <td className="px-6 py-4 text-right font-semibold text-emerald-700">
+                                  {euro(a.importo_allocato)}
+                                </td>
+                                <td className="px-6 py-4 text-slate-500">
+                                  {formatDate(a.data_allocazione)}
+                                </td>
+                                <td className="px-6 py-4 text-slate-700">{a.descrizione || "-"}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+              </section>
+            ) : null}
           {/* Main command center */}
           <section className="overflow-hidden rounded-[34px] border border-slate-300/70 bg-white shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
             {/* Header */}
@@ -3693,6 +4133,220 @@ async function uploadProformaFiles() {
               </div>
             </div>
           ) : null}
+
+          {isRegisterPaymentModalOpen && registerPaymentTargetFattura ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-[2px]">
+              <div className="relative w-full max-w-4xl overflow-hidden rounded-[32px] border border-slate-200/80 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
+                {/* top accent */}
+                <div className="h-1.5 w-full bg-gradient-to-r from-emerald-400 via-sky-400 to-blue-500" />
+
+                {/* header */}
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 sm:px-7">
+                  <div className="min-w-0">
+                    <div className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                      Registrazione pagamento
+                    </div>
+
+                    <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">
+                      Registra pagamento fattura
+                    </h3>
+
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+                      Il pagamento verrà registrato e allocato interamente sulla fattura selezionata.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsRegisterPaymentModalOpen(false);
+                      setRegisterPaymentTargetFattura(null);
+                    }}
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+                    title="Chiudi"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* body */}
+                <div className="grid gap-6 px-6 py-6 sm:px-7 lg:grid-cols-[360px_minmax(0,1fr)]">
+                  {/* left summary */}
+                  <aside className="space-y-4">
+                    <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-slate-50/80">
+                      <div className="border-b border-slate-200 bg-white/80 px-5 py-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                          Fattura selezionata
+                        </div>
+                        <div className="mt-2 text-lg font-bold text-slate-900">
+                          {registerPaymentTargetFattura.numero || "-"}
+                        </div>
+                      </div>
+
+                      <div className="space-y-4 px-5 py-5">
+                        <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200/70">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Condominio
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-800">
+                            {registerPaymentTargetFattura.condominio || "-"}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                          <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200/70">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              Importo fattura
+                            </div>
+                            <div className="mt-1 text-base font-bold text-slate-900">
+                              {euro(Number(registerPaymentTargetFattura.importo || 0))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200/70">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              Credito associato
+                            </div>
+                            <div className="mt-1 text-base font-bold text-slate-900">
+                              {euro(Number(registerPaymentTargetFattura.totale_proforme_collegate || 0))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-sm sm:col-span-2 lg:col-span-1 xl:col-span-2">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
+                              Residuo da pagare
+                            </div>
+                            <div className="mt-1 text-lg font-extrabold text-emerald-800">
+                              {euro(Number(registerPaymentTargetFattura.residuo_da_associare || 0))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </aside>
+
+                  {/* right form */}
+                  <section className="space-y-5">
+                    <div className="grid gap-5 md:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-700">
+                          Importo pagamento
+                        </label>
+                        <div className="relative">
+                          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
+                            €
+                          </span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={paymentForm.importo}
+                            onChange={(e) =>
+                              setPaymentForm((prev) => ({ ...prev, importo: euro(Number(registerPaymentTargetFattura.importo || 0)) }))
+                            }
+                            className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-9 pr-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                            placeholder="0.00"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-700">
+                          Metodo di pagamento
+                        </label>
+                        <select
+                          value={paymentForm.paymentMethod}
+                          onChange={(e) =>
+                            setPaymentForm((prev) => ({ ...prev, paymentMethod: e.target.value }))
+                          }
+                          className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                        >
+                          <option value="BONIFICO">Bonifico</option>
+                          <option value="CONTANTI">Contanti</option>
+                          <option value="CARTA">Carta</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-5 md:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-700">
+                          Data pagamento
+                        </label>
+                        <input
+                          type="date"
+                          value={paymentForm.dataPagamento}
+                          onChange={(e) =>
+                            setPaymentForm((prev) => ({ ...prev, dataPagamento: e.target.value }))
+                          }
+                          className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                        />
+                      </div>
+
+                      <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                          Allocazione
+                        </div>
+                        <div className="mt-2 text-sm leading-6 text-slate-600">
+                          Questo pagamento sarà registrato direttamente sulla fattura corrente senza ripartizione multipla.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold text-slate-700">
+                        Descrizione
+                      </label>
+                      <textarea
+                        value={paymentForm.descrizione}
+                        onChange={(e) =>
+                          setPaymentForm((prev) => ({ ...prev, descrizione: e.target.value }))
+                        }
+                        rows={5}
+                        placeholder="Es. saldo fattura tramite bonifico bancario"
+                        className="w-full rounded-[24px] border border-slate-300 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      />
+                    </div>
+                  </section>
+                </div>
+
+                {/* footer */}
+                <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-6 py-4 sm:flex-row sm:items-center sm:px-7">
+                  <div className="text-xs text-slate-500">
+                    Verifica importo e data prima della conferma.
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        setIsRegisterPaymentModalOpen(false);
+                        setRegisterPaymentTargetFattura(null);
+                      }}
+                      className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                    >
+                      Annulla
+                    </button>
+
+                    <button
+                      onClick={registraPagamentoFattura}
+                      disabled={registeringPayment}
+                      className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {registeringPayment ? "Registrazione..." : "Conferma pagamento"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
         </section>
 
 

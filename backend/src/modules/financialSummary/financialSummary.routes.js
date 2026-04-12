@@ -41,8 +41,15 @@ router.post("/:id/collega-proforme", controller.collegaProformeAFattura);
 router.get("/proformas", controller.listProformas);
 router.get("/fatture", controller.listFattureSimple);
 
+
 router.post("/:id/annulla", controller.annullaProforma);
 router.post("/:id/annullaF", controller.annullaFattura);
 router.delete("/:id", controller.deleteProforma);
+
+ 
+router.post("/:id/registra-pagamento", controller.registraPagamentoFattura);
+router.get("/payments", controller.listPayments);
+router.get("/payments/:id", controller.getPaymentDetail);
+
 
 module.exports = router;
