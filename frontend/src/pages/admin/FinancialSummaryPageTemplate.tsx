@@ -1480,9 +1480,9 @@ async function uploadProformaFiles() {
                                 type="button"
                                         onClick={() => {
                                           loadImportedDocumentDetail(doc.id);
-
+                                          toggleImportedRow(doc.id);
                                           if (normalizeDocType(doc) === "PROFORMA") {
-                                            toggleImportedRow(doc.id);
+                                            
                                             setSelectedCondomini([]);
                                             setCondominiSearch("");
                                             setCondomini([]);
