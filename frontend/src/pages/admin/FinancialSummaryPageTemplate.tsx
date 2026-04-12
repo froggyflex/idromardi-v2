@@ -519,64 +519,82 @@ const formatAmount = (value: any) => {
 
  
  
-const filteredImportedDocs = useMemo(() => {
-  const q = importedDocsSearch.trim().toLowerCase();
+  const filteredImportedDocs = useMemo(() => {
+    const q = importedDocsSearch.trim().toLowerCase();
 
-  if (!q) return importedDocs;
+    if (!q) return importedDocs;
 
-  return importedDocs.filter((doc) => {
-    const numero = String(doc.numero ?? "").toLowerCase();
-    const filename = String(doc.original_filename ?? "").toLowerCase();
-    const parseStatus = String(doc.parse_status ?? "").toLowerCase();
-    const reviewStatus = String(doc.review_status ?? "").toLowerCase();
-    const type = String(doc.type ?? "").toLowerCase();
+    return importedDocs.filter((doc) => {
+      const numero = String(doc.numero ?? "").toLowerCase();
+      const filename = String(doc.original_filename ?? "").toLowerCase();
+      const parseStatus = String(doc.parse_status ?? "").toLowerCase();
+      const reviewStatus = String(doc.review_status ?? "").toLowerCase();
+      const type = String(doc.type ?? "").toLowerCase();
 
-    return (
-      numero.includes(q) ||
-      filename.includes(q) ||
-      parseStatus.includes(q) ||
-      reviewStatus.includes(q) ||
-      type.includes(q)
+      return (
+        numero.includes(q) ||
+        filename.includes(q) ||
+        parseStatus.includes(q) ||
+        reviewStatus.includes(q) ||
+        type.includes(q)
+      );
+    });
+  }, [importedDocs, importedDocsSearch]);
+
+  const getDocTimestamp = (doc: any) =>
+    new Date(
+      doc.created_at || doc.uploaded_at || doc.data_documento || doc.updated_at || 0
+    ).getTime();
+
+  const getSortableNumero = (numero: any) => {
+    const str = String(numero ?? "").trim();
+    const parts = str.match(/\d+/g);
+
+    if (!parts) return -1;
+
+    return Number(parts.join(""));
+  };
+
+  const getParsePriority = (doc: any) => {
+    const status = String(doc.parse_status ?? "").trim().toUpperCase();
+
+    if (status === "DA_REVISIONARE") return 0;
+    if (status === "COMPLETATO_CON_ERRORI") return 1;
+
+    return 2;
+  };
+
+  const sortImportedDocs = (docs: any[]) => {
+    return [...docs].sort((a, b) => {
+      const aPriority = getParsePriority(a);
+      const bPriority = getParsePriority(b);
+
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+
+      const aNum = getSortableNumero(a.numero);
+      const bNum = getSortableNumero(b.numero);
+
+      if (aNum !== bNum) {
+        return bNum - aNum;
+      }
+
+      return getDocTimestamp(b) - getDocTimestamp(a);
+    });
+  };
+
+  const proformaDocs = useMemo(() => {
+    return sortImportedDocs(
+      filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "PROFORMA")
     );
-  });
-}, [importedDocs, importedDocsSearch]);
+  }, [filteredImportedDocs]);
 
-const getDocTimestamp = (doc: any) =>
-  new Date(doc.created_at || doc.uploaded_at || doc.data_documento || doc.updated_at || 0).getTime();
-
-const getSortableNumero = (numero: any) => {
-  const str = String(numero ?? "").trim();
-  const parts = str.match(/\d+/g);
-
-  if (!parts) return -1;
-
-  return Number(parts.join(""));
-};
-
-const sortImportedDocs = (docs: any[]) => {
-  return [...docs].sort((a, b) => {
-    const aNum = getSortableNumero(a.numero);
-    const bNum = getSortableNumero(b.numero);
-
-    if (aNum !== bNum) {
-      return bNum - aNum;
-    }
-
-    return getDocTimestamp(b) - getDocTimestamp(a);
-  });
-};
-
-const proformaDocs = useMemo(() => {
-  return sortImportedDocs(
-    filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "PROFORMA")
-  );
-}, [filteredImportedDocs]);
-
-const fatturaDocs = useMemo(() => {
-  return sortImportedDocs(
-    filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "FATTURA")
-  );
-}, [filteredImportedDocs]);
+  const fatturaDocs = useMemo(() => {
+    return sortImportedDocs(
+      filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "FATTURA")
+    );
+  }, [filteredImportedDocs]);
  
 
   function extractNumeroValue(numero: any): number {
@@ -1287,7 +1305,7 @@ async function uploadProformaFiles() {
                     <th className="px-4 py-3">File</th>
                     <th className="px-4 py-3">Tipo</th>
                     <th className="px-4 py-3">Data</th>
-                    <th className="px-4 py-3">Parse</th>
+                    {/* <th className="px-4 py-3">Parse</th> */}
                     <th className="px-4 py-3">Importo</th>
                     <th className="px-4 py-3">Stato</th>
                     <th className="px-4 py-3 text-right">Azioni</th>
@@ -1365,7 +1383,7 @@ async function uploadProformaFiles() {
                               ? new Date(doc.data_documento).toLocaleDateString("it-IT")
                               : "-"}
                           </td>
-
+{/* 
                           <td className="px-4 py-3">
                             <span
                               className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${getParseStatusClasses(
@@ -1374,7 +1392,7 @@ async function uploadProformaFiles() {
                             >
                               {doc.parse_status || "-"}
                             </span>
-                          </td>
+                          </td> */}
 
                           <td className="px-4 py-3 font-medium text-slate-700">
                             {formatAmount(doc.importo)}
@@ -1433,15 +1451,37 @@ async function uploadProformaFiles() {
 
                               <button
                                 type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  loadImportedDocumentDetail(doc.id);
-                                  toggleImportedRow(doc.id);
-                                }}
+                                        onClick={() => {
+                                          loadImportedDocumentDetail(doc.id);
+
+                                          if (normalizeDocType(doc) === "PROFORMA") {
+                                            setSelectedCondomini([]);
+                                            setCondominiSearch("");
+                                            setCondomini([]);
+                                            setIsAssociateModalOpen(true);
+                                            void loadCondomini();
+                                          } else if (normalizeDocType(doc) === "FATTURA") {
+                                            setSelectedFatturaCondominioId("");
+                                            setSelectedProformaIdsForFattura([]);
+                                            setCondominiSearch("");
+                                            setCondomini([]);
+                                            setIsCreateFatturaModalOpen(true);
+                                            void loadCondomini();
+                                            void loadProformasRows();
+                                          }
+                                        }}
                                 className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                                title={isExpanded ? "Chiudi dettaglio" : "Apri dettaglio"}
+                                title={isExpanded ? "Conferma" : "Conferma"}
                               >
-                                <span className="text-sm">≡</span>
+                                <span className="h-4 w-4">
+                                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                                    <path
+                                      fillRule="evenodd"
+                                      d="M16.704 5.29a1 1 0 010 1.42l-7.2 7.2a1 1 0 01-1.42 0l-3.2-3.2a1 1 0 111.42-1.42l2.49 2.49 6.49-6.49a1 1 0 011.42 0z"
+                                      clipRule="evenodd"
+                                    />
+                                  </svg>
+                                </span>
                               </button>
 
                             </div>
@@ -2202,34 +2242,34 @@ async function uploadProformaFiles() {
 
           {/* Associate modal */}
           {isAssociateModalOpen && selectedImportedDoc ? (
-            <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/70 backdrop-blur-md">
+            <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/65 backdrop-blur-[10px]">
               <div className="flex min-h-full items-center justify-center p-3 sm:p-6">
-                <div className="relative flex w-full max-w-6xl flex-col overflow-hidden rounded-[32px] border border-white/20 bg-white shadow-[0_40px_120px_rgba(15,23,42,0.45)]">
-                  {/* Ambient background */}
-                  <div className="pointer-events-none absolute inset-0">
-                    <div className="absolute inset-x-0 top-0 h-44 bg-gradient-to-r from-sky-100 via-cyan-50 to-emerald-100" />
-                    <div className="absolute -left-16 top-12 h-40 w-40 rounded-full bg-sky-200/40 blur-3xl" />
-                    <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-emerald-200/30 blur-3xl" />
-                    <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-violet-200/20 blur-3xl" />
+                <div className="relative flex w-full max-w-7xl flex-col overflow-hidden rounded-[34px] border border-white/20 bg-white shadow-[0_35px_120px_rgba(15,23,42,0.30)]">
+                  {/* Soft ambient */}
+                  <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                    <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-r from-sky-50 via-cyan-50 to-emerald-50" />
+                    <div className="absolute -left-12 top-8 h-40 w-40 rounded-full bg-sky-200/30 blur-3xl" />
+                    <div className="absolute right-0 top-0 h-44 w-44 rounded-full bg-emerald-200/25 blur-3xl" />
+                    <div className="absolute bottom-0 left-1/3 h-36 w-36 rounded-full bg-violet-200/15 blur-3xl" />
                   </div>
 
                   <div className="relative flex max-h-[calc(100vh-24px)] flex-col sm:max-h-[calc(100vh-48px)]">
                     {/* Header */}
-                    <div className="shrink-0 border-b border-slate-200/70 bg-white/80 px-4 py-4 backdrop-blur-xl sm:px-8 sm:py-6">
+                    <div className="shrink-0 border-b border-slate-200/80 bg-white/80 px-4 py-4 backdrop-blur-xl sm:px-8 sm:py-6">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
-                          <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/90 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700 shadow-sm">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700 shadow-sm">
                             <span className="h-2 w-2 rounded-full bg-sky-500" />
                             Associazione documento
                           </div>
 
-                          <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
+                          <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-950 sm:text-[32px]">
                             Associa il documento ai condomini
                           </h3>
 
                           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 sm:text-[15px]">
-                            Seleziona uno o più condomini e crea automaticamente una nuova
-                            proforma per ciascuno, partendo dal documento importato.
+                            Seleziona uno o più condomini e genera automaticamente una nuova
+                            proforma per ciascuno usando i dati del documento importato.
                           </p>
                         </div>
 
@@ -2244,28 +2284,28 @@ async function uploadProformaFiles() {
 
                     {/* Body */}
                     <div className="min-h-0 flex-1 overflow-y-auto">
-                      <div className="grid gap-6 p-4 sm:p-6 lg:grid-cols-[1.25fr_0.75fr] lg:p-8">
+                      <div className="grid gap-6 p-4 sm:p-6 xl:grid-cols-[1.35fr_0.75fr] xl:p-8">
                         {/* Left column */}
                         <div className="space-y-6">
-                          {/* Document preview */}
-                          <section className="overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/90 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
-                            <div className="flex items-center justify-between gap-3 border-b border-slate-200/80 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-5 py-4">
+                          {/* Document hero */}
+                          <section className="overflow-hidden rounded-[30px] border border-slate-200/80 bg-white/90 shadow-[0_12px_35px_rgba(15,23,42,0.06)]">
+                            <div className="flex items-center justify-between gap-3 border-b border-slate-200/80 bg-gradient-to-r from-white via-slate-50 to-sky-50 px-5 py-4">
                               <div>
-                                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                                   Documento importato
                                 </div>
                                 <div className="mt-1 text-sm font-medium text-slate-700">
-                                  Anteprima dei dati che verranno usati per la creazione
+                                  Dati estratti usati per la generazione
                                 </div>
                               </div>
 
-                              <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
-                                Ready
+                              <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                Pronto
                               </div>
                             </div>
 
                             <div className="grid gap-4 p-5 sm:grid-cols-2">
-                              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                              <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                                   Numero
                                 </div>
@@ -2274,7 +2314,7 @@ async function uploadProformaFiles() {
                                 </div>
                               </div>
 
-                              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                              <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                                   Data
                                 </div>
@@ -2283,7 +2323,7 @@ async function uploadProformaFiles() {
                                 </div>
                               </div>
 
-                              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 sm:col-span-2">
+                              <div className="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4 sm:col-span-2">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                                   Descrizione
                                 </div>
@@ -2292,7 +2332,7 @@ async function uploadProformaFiles() {
                                 </div>
                               </div>
 
-                              <div className="rounded-[24px] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-5 text-white shadow-[0_20px_50px_rgba(15,23,42,0.25)] sm:col-span-2">
+                              <div className="rounded-[26px] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-5 text-white shadow-[0_20px_50px_rgba(15,23,42,0.20)] sm:col-span-2">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300">
                                   Importo documento
                                 </div>
@@ -2306,13 +2346,13 @@ async function uploadProformaFiles() {
                           </section>
 
                           {/* Search */}
-                          <section className="rounded-[28px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+                          <section className="rounded-[30px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
                             <div className="mb-4">
                               <div className="text-sm font-semibold text-slate-900">
                                 Cerca condominio
                               </div>
                               <div className="mt-1 text-sm text-slate-500">
-                                Filtra per indirizzo, nome o riferimento utile.
+                                Filtra per indirizzo, amministratore o riferimento utile.
                               </div>
                             </div>
 
@@ -2327,14 +2367,14 @@ async function uploadProformaFiles() {
                           </section>
 
                           {/* Condomini list */}
-                          <section className="rounded-[28px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
+                          <section className="rounded-[30px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">
                             <div className="mb-4 flex items-center justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="text-base font-semibold text-slate-950">
                                   Condomini disponibili
                                 </div>
                                 <div className="mt-1 text-sm text-slate-500">
-                                  Tocca un elemento per selezionarlo o deselezionarlo.
+                                  Seleziona uno o più condomini da associare.
                                 </div>
                               </div>
 
@@ -2343,7 +2383,7 @@ async function uploadProformaFiles() {
                               </div>
                             </div>
 
-                            <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                            <div className="max-h-[380px] space-y-3 overflow-y-auto pr-1">
                               {loadingCondomini ? (
                                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                                   Caricamento condomini...
@@ -2361,10 +2401,10 @@ async function uploadProformaFiles() {
                                       key={c.id}
                                       type="button"
                                       onClick={() => toggleCondominio(c)}
-                                      className={`group w-full rounded-[22px] border p-4 text-left transition-all ${
+                                      className={`group w-full rounded-[24px] border p-4 text-left transition-all ${
                                         isSelected
-                                          ? "border-emerald-300 bg-gradient-to-r from-emerald-50 to-teal-50 shadow-[0_10px_25px_rgba(16,185,129,0.10)]"
-                                          : "border-slate-200 bg-slate-50/70 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
+                                          ? "border-emerald-300 bg-gradient-to-r from-emerald-50 to-teal-50 shadow-[0_12px_28px_rgba(16,185,129,0.10)]"
+                                          : "border-slate-200 bg-slate-50/80 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-[0_10px_24px_rgba(15,23,42,0.06)]"
                                       }`}
                                     >
                                       <div className="flex items-start justify-between gap-3">
@@ -2389,7 +2429,7 @@ async function uploadProformaFiles() {
                                         </div>
 
                                         <div
-                                          className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition ${
+                                          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition ${
                                             isSelected
                                               ? "border-emerald-500 bg-emerald-500 text-white"
                                               : "border-slate-300 bg-white text-slate-400 group-hover:border-slate-400"
@@ -2408,105 +2448,109 @@ async function uploadProformaFiles() {
 
                         {/* Right column */}
                         <div className="space-y-6">
-                          <section className="rounded-[30px] border border-slate-200/80 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-800 p-5 text-white shadow-[0_25px_60px_rgba(15,23,42,0.28)] lg:sticky lg:top-0">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <div className="text-sm font-semibold text-white">
-                                  Riepilogo selezione
+                          <section className="overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_14px_40px_rgba(15,23,42,0.08)] xl:sticky xl:top-0">
+                            <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-5 text-white">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-white">
+                                    Riepilogo selezione
+                                  </div>
+                                  <div className="mt-1 text-sm text-slate-300">
+                                    Controlla cosa stai per generare.
+                                  </div>
                                 </div>
-                                <div className="mt-1 text-sm text-slate-300">
-                                  Controlla cosa stai per generare.
-                                </div>
-                              </div>
 
-                              <div className="rounded-2xl bg-white/10 px-3 py-2 text-lg font-bold text-white ring-1 ring-white/15">
-                                {selectedCondomini.length}
+                                <div className="rounded-2xl bg-white/10 px-3 py-2 text-lg font-bold text-white ring-1 ring-white/15">
+                                  {selectedCondomini.length}
+                                </div>
                               </div>
                             </div>
 
-                            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                            <div className="space-y-5 p-5">
+                              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
+                                <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-4">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                    Condomini selezionati
+                                  </div>
+                                  <div className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+                                    {selectedCondomini.length}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-[22px] border border-slate-200 bg-slate-50 p-4">
+                                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                    Proforme da creare
+                                  </div>
+                                  <div className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+                                    {selectedCondomini.length}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="rounded-[22px] border border-slate-200 bg-sky-50/70 p-4">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                  Azione prevista
+                                </div>
+                                <p className="mt-2 text-sm leading-6 text-slate-700">
+                                  Verrà generata una proforma distinta per ogni condominio
+                                  selezionato, usando i dati del documento importato come base.
+                                </p>
+                              </div>
+
+                              <div>
+                                <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                                   Condomini selezionati
                                 </div>
-                                <div className="mt-2 text-3xl font-bold tracking-tight text-white">
-                                  {selectedCondomini.length}
-                                </div>
-                              </div>
 
-                              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                  Proforme da creare
-                                </div>
-                                <div className="mt-2 text-3xl font-bold tracking-tight text-white">
-                                  {selectedCondomini.length}
-                                </div>
-                              </div>
-                            </div>
+                                {selectedCondomini.length === 0 ? (
+                                  <div className="rounded-[22px] border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                                    Nessun condominio selezionato.
+                                  </div>
+                                ) : (
+                                  <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                                    {selectedCondomini.map((c, index) => (
+                                      <div
+                                        key={c.id}
+                                        className="flex items-center justify-between gap-3 rounded-[22px] border border-emerald-200 bg-emerald-50 px-4 py-3"
+                                      >
+                                        <div className="flex min-w-0 items-center gap-3">
+                                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-white">
+                                            {index + 1}
+                                          </div>
 
-                            <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
-                              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                Azione prevista
-                              </div>
-                              <p className="mt-2 text-sm leading-6 text-slate-200">
-                                Verrà generata una proforma distinta per ogni condominio
-                                selezionato, utilizzando i dati del documento importato come base.
-                              </p>
-                            </div>
-
-                            <div className="mt-5">
-                              <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                Condomini selezionati
-                              </div>
-
-                              {selectedCondomini.length === 0 ? (
-                                <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-8 text-center text-sm text-slate-300">
-                                  Nessun condominio selezionato.
-                                </div>
-                              ) : (
-                                <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
-                                  {selectedCondomini.map((c, index) => (
-                                    <div
-                                      key={c.id}
-                                      className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3"
-                                    >
-                                      <div className="flex min-w-0 items-center gap-3">
-                                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-white">
-                                          {index + 1}
-                                        </div>
-
-                                        <div className="min-w-0">
-                                          <div className="truncate text-sm font-semibold text-white">
-                                            {c.indirizzo}
+                                          <div className="min-w-0">
+                                            <div className="truncate text-sm font-semibold text-slate-900">
+                                              {c.indirizzo}
+                                            </div>
                                           </div>
                                         </div>
-                                      </div>
 
-                                      <button
-                                        type="button"
-                                        onClick={() => toggleCondominio(c)}
-                                        className="shrink-0 rounded-xl px-2.5 py-1.5 text-sm font-semibold text-emerald-200 transition hover:bg-white/10 hover:text-white"
-                                      >
-                                        Rimuovi
-                                      </button>
-                                    </div>
-                                  ))}
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleCondominio(c)}
+                                          className="shrink-0 rounded-xl px-2.5 py-1.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                        >
+                                          Rimuovi
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {error ? (
+                                <div className="rounded-[22px] border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700">
+                                  {error}
                                 </div>
-                              )}
+                              ) : null}
                             </div>
                           </section>
-
-                          {error ? (
-                            <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700 shadow-sm">
-                              {error}
-                            </div>
-                          ) : null}
                         </div>
                       </div>
                     </div>
 
                     {/* Footer */}
-                    <div className="shrink-0 border-t border-slate-200/80 bg-white/85 px-4 py-4 backdrop-blur sm:px-8">
+                    <div className="shrink-0 border-t border-slate-200/80 bg-white/90 px-4 py-4 backdrop-blur sm:px-8">
                       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-sm text-slate-600">
                           {selectedCondomini.length === 0 ? (
@@ -2535,7 +2579,7 @@ async function uploadProformaFiles() {
                               promoteImportedProformaWithCondomini(selectedImportedDoc.id)
                             }
                             disabled={promoting || selectedCondomini.length === 0}
-                            className="rounded-2xl bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-3 text-sm font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.24)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="rounded-2xl bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-3 text-sm font-semibold text-white shadow-[0_16px_30px_rgba(15,23,42,0.18)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {promoting ? "Creazione..." : "Conferma e crea proforme"}
                           </button>
@@ -2950,7 +2994,7 @@ async function uploadProformaFiles() {
 
           {isCreateFatturaModalOpen && selectedImportedDoc && activeImportTab === "FATTURA" ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-              <div className="w-full max-w-6xl rounded-3xl bg-white shadow-2xl">
+              <div className="w-full max-w-7xl rounded-3xl bg-white shadow-2xl">
                 <div className="border-b border-slate-200 px-6 py-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
