@@ -973,21 +973,61 @@ async function collegaProformeAFatturaEsistente() {
       setLoadingSummary(false);
     }
   }
-  async function loadImportedDocuments() {
-    try {
-      setLoadingImportedDocs(true);
-      const { data } = await api.get("/financial-summary/imported-documents");
+const sleep = (ms: number) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
-      setImportedDocs(Array.isArray(data) ? data : []);
 
-      console.log("Documenti importati caricati:", data);
-      
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Errore caricando i documenti proforma importati.");
-    } finally {
-      setLoadingImportedDocs(false);
-    }
+async function waitForImportedFilesCompletion(
+  uploadedIds: string[],
+  maxAttempts = 12,
+  delayMs = 700
+) {
+  if (!uploadedIds.length) {
+    await loadImportedDocuments();
+    return true;
   }
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const rows = await loadImportedDocuments();
+
+    const uploadedRows = rows.filter((row: any) => uploadedIds.includes(row.id));
+
+    const allReady =
+      uploadedRows.length === uploadedIds.length &&
+      uploadedRows.every((row: any) => String(row.numero ?? "").trim() !== "");
+
+    if (allReady) {
+      return true;
+    }
+
+    await sleep(delayMs);
+  }
+
+  return false;
+}
+
+async function loadImportedDocuments() {
+  try {
+    setLoadingImportedDocs(true);
+
+    const { data } = await api.get("/financial-summary/imported-documents");
+    const rows = Array.isArray(data) ? data : [];
+
+    setImportedDocs(rows);
+
+    console.log("Documenti importati caricati:", rows);
+
+    return rows;
+  } catch (err: any) {
+    setError(
+      err?.response?.data?.error ||
+        "Errore caricando i documenti proforma importati."
+    );
+    return [];
+  } finally {
+    setLoadingImportedDocs(false);
+  }
+}
  
   async function loadImportedDocumentDetail(id: string) {
     
@@ -1159,39 +1199,51 @@ async function promoteImportedFattura() {
 }
 
 async function uploadProformaFiles() {
-    if (!selectedUploadFiles.length) {
-      setError("Seleziona almeno un file PDF.");
-      return;
-    }
+  if (!selectedUploadFiles.length) {
+    setError("Seleziona almeno un file PDF.");
+    return;
+  }
 
-    try {
-      setUploading(true);
-      setError("");
+  try {
+    setUploading(true);
+    setError("");
 
-      const formData = new FormData();
-      selectedUploadFiles.forEach((file) => {
-        formData.append("files", file);
-      });
+    const formData = new FormData();
+    selectedUploadFiles.forEach((file) => {
+      formData.append("files", file);
+    });
 
-      console.log(selectedUploadFiles);
-      console.log(formData.getAll("files"));
-     
-      await api.post("/financial-summary/imported-documents/upload", formData, {
+    const { data } = await api.post(
+      "/financial-summary/imported-documents/upload",
+      formData,
+      {
         headers: { "Content-Type": "multipart/form-data" },
-      });
+      }
+    );
 
-      setSelectedUploadFiles([]);
-        setTimeout(() => {
-            loadImportedDocuments();
-      }, 800);
-  
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Errore nel caricamento dei file proforma.");
-    } finally {
-      setUploading(false);
+    setSelectedUploadFiles([]);
+
+    const uploadedIds = Array.isArray(data?.files)
+      ? data.files.map((f: any) => f.id).filter(Boolean)
+      : [];
+
+    const completed = await waitForImportedFilesCompletion(uploadedIds);
+
+    if (!completed) {
+      console.warn(
+        "Non tutti i documenti risultano completati entro il tempo previsto. Ricarico comunque la lista."
+      );
+      await loadImportedDocuments();
     }
+  } catch (err: any) {
+    setError(
+      err?.response?.data?.error ||
+        "Errore nel caricamento dei file proforma."
+    );
+  } finally {
+    setUploading(false);
+  }
 }
-
   async function parseImportedFattura(id: string) {
     try {
       setParsingImportId(id);
