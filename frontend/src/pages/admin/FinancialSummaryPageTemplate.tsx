@@ -336,97 +336,117 @@ export default function FinancialSummaryPageTemplate() {
     },
   ];
 
-const formatAmount = (value: any) => {
-  if (value == null || value === "") return "";
+  const formatAmount = (value: any) => {
+    if (value == null || value === "") return "";
 
-  let str = String(value)
-    .replace("EUR", "")
-    .replace("€", "")
-    .replace(/\s/g, "");
+    let str = String(value)
+      .replace("EUR", "")
+      .replace("€", "")
+      .replace(/\s/g, "");
 
-  // If it contains BOTH '.' and ',' → assume European format (1.234,56)
-  if (str.includes(".") && str.includes(",")) {
-    str = str.replace(/\./g, "").replace(",", ".");
-  }
-  // If it contains ONLY ',' → decimal comma (92,42)
-  else if (str.includes(",")) {
-    str = str.replace(",", ".");
-  }
-  // If it contains ONLY '.' → assume decimal dot (92.42)
-  // → do nothing
+    // If it contains BOTH '.' and ',' → assume European format (1.234,56)
+    if (str.includes(".") && str.includes(",")) {
+      str = str.replace(/\./g, "").replace(",", ".");
+    }
+    // If it contains ONLY ',' → decimal comma (92,42)
+    else if (str.includes(",")) {
+      str = str.replace(",", ".");
+    }
+    // If it contains ONLY '.' → assume decimal dot (92.42)
+    // → do nothing
 
-  const num = Number(str);
+    const num = Number(str);
 
-  if (Number.isNaN(num)) return value;
+    if (Number.isNaN(num)) return value;
 
-  return (
-    new Intl.NumberFormat("de-DE", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(num) + " €"
-  );
-};
+    return (
+      new Intl.NumberFormat("de-DE", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(num) + " €"
+    );
+  };
 
 
-  const quickActions = [
-    {
-      key: "new-proforma",
-      title: "Nuova proforma",
-      description: "Inserimento manuale di una proforma singola.",
-      badge: "Manuale",
+    const quickActions = [
+      {
+        key: "new-proforma",
+        title: "Nuova proforma",
+        description: "Inserimento manuale di una proforma singola.",
+        badge: "Manuale",
+      },
+      {
+        key: "new-fattura",
+        title: "Nuova fattura",
+        description: "Inserimento manuale di una fattura singola.",
+        badge: "Manuale",
+      },
+      {
+        key: "upload-proforme",
+        title: "Carica batch proforme",
+        description: "Upload multiplo file per parser proforma.",
+        badge: "Batch upload",
+      },
+      {
+        key: "upload-fatture",
+        title: "Carica batch fatture",
+        description: "Upload multiplo file per parser fatture.",
+        badge: "Batch upload",
+      },
+    ];
+
+    const importAreaConfig = {
+      PROFORMA: {
+        title: "Area parser proforma",
+        description:
+          "Carica un PDF, lancialo nel parser e visualizza il risultato estratto prima di decidere cosa fare.",
+        uploadTitle: "Upload PDF proforma",
+        uploadDescription:
+          "Per ora supporta il flusso PDF → parser → revisione risultato.",
+        uploadButtonLabel: "Carica PDF proforma",
+        parseButtonLabel: "Esegui parser",
+        createButtonLabel: "Approva e crea proforma",
+        createdButtonLabel: "Proforma già creata",
+      },
+      FATTURA: {
+        title: "Area parser fattura",
+        description:
+          "Carica una fattura PDF, avvia il parser e verifica i dati estratti prima della registrazione.",
+        uploadTitle: "Upload PDF fattura",
+        uploadDescription:
+          "Flusso PDF → parser → revisione risultato → creazione fattura.",
+        uploadButtonLabel: "Carica PDF fattura",
+        parseButtonLabel: "Esegui parser",
+        createButtonLabel: "Approva e crea fattura",
+        createdButtonLabel: "Fattura già creata",
     },
-    {
-      key: "new-fattura",
-      title: "Nuova fattura",
-      description: "Inserimento manuale di una fattura singola.",
-      badge: "Manuale",
-    },
-    {
-      key: "upload-proforme",
-      title: "Carica batch proforme",
-      description: "Upload multiplo file per parser proforma.",
-      badge: "Batch upload",
-    },
-    {
-      key: "upload-fatture",
-      title: "Carica batch fatture",
-      description: "Upload multiplo file per parser fatture.",
-      badge: "Batch upload",
-    },
-  ];
-
-  const importAreaConfig = {
-    PROFORMA: {
-      title: "Area parser proforma",
-      description:
-        "Carica un PDF, lancialo nel parser e visualizza il risultato estratto prima di decidere cosa fare.",
-      uploadTitle: "Upload PDF proforma",
-      uploadDescription:
-        "Per ora supporta il flusso PDF → parser → revisione risultato.",
-      uploadButtonLabel: "Carica PDF proforma",
-      parseButtonLabel: "Esegui parser",
-      createButtonLabel: "Approva e crea proforma",
-      createdButtonLabel: "Proforma già creata",
-    },
-    FATTURA: {
-      title: "Area parser fattura",
-      description:
-        "Carica una fattura PDF, avvia il parser e verifica i dati estratti prima della registrazione.",
-      uploadTitle: "Upload PDF fattura",
-      uploadDescription:
-        "Flusso PDF → parser → revisione risultato → creazione fattura.",
-      uploadButtonLabel: "Carica PDF fattura",
-      parseButtonLabel: "Esegui parser",
-      createButtonLabel: "Approva e crea fattura",
-      createdButtonLabel: "Fattura già creata",
-  },
-} as const;
+  } as const;
 
   const area = importAreaConfig[activeImportTab];
   
 
   const [importedDocsSearch, setImportedDocsSearch] = useState("");
 
+  const extractSearchFromDescription = (description: any) => {
+    const text = String(description ?? "").trim();
+    if (!text) return "";
+
+    const normalized = text.replace(/\s+/g, " ").trim();
+
+    const match =
+      normalized.match(/consumi\s+idrici\s+(.*?)(?:\s+periodo\b|$)/i) ||
+      normalized.match(/(via|viale|corso|piazza)\s+.*?(?:\s+periodo\b|$)/i);
+
+    let extracted = match?.[1] || match?.[0] || "";
+    if (!extracted) return "";
+
+    return extracted
+      .replace(/,\s*\d{5}\s*-\s*[A-Za-zÀ-ÿ' ]+$/i, "") // remove CAP + city
+      .replace(/\b\d{5}\b\s*-\s*[A-Za-zÀ-ÿ' ]+$/i, "")
+      .replace(/\s+/g, " ")
+      .replace(/,\s*$/, "") // ✅ remove trailing comma
+      .trim();
+  };
   
     async function annullaFattura(id: string) {
     const reason = window.prompt("Motivo annullamento fattura:");
@@ -466,6 +486,7 @@ const formatAmount = (value: any) => {
       setLoadingFatturaDetail(false);
     }
   }
+
   function toggleImportedRow(id: string) {
     setExpandedImportedRows((prev) => ({
       ...prev,
@@ -646,11 +667,17 @@ const formatAmount = (value: any) => {
     void loadImportedFattureDocuments();
   }, []);
 
-  // useEffect(() => {
-  //   if (importedFattureDocs.length > 0 && !selectedImportedFatturaDoc) {
-  //     void loadImportedFatturaDocumentDetail(importedFattureDocs[0].id);
-  //   }
-  // }, [importedFattureDocs, selectedImportedFatturaDoc]);
+  useEffect(() => {
+    if (!isAssociateModalOpen || !selectedImportedDoc) return;
+
+    const description = selectedImportedDoc.extracted?.descrizione;
+
+    const extracted = extractSearchFromDescription(description);
+
+    if (extracted) {
+      setCondominiSearch(extracted);
+    }
+  }, [isAssociateModalOpen, selectedImportedDoc]);
 
   useEffect(() => {
     void loadDashboard();
@@ -1455,6 +1482,7 @@ async function uploadProformaFiles() {
                                           loadImportedDocumentDetail(doc.id);
 
                                           if (normalizeDocType(doc) === "PROFORMA") {
+                                            toggleImportedRow(doc.id);
                                             setSelectedCondomini([]);
                                             setCondominiSearch("");
                                             setCondomini([]);
