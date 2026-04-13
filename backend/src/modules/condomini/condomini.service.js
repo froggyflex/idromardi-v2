@@ -267,14 +267,14 @@ exports.update = async (id, data) => {
   } = data;
 
 
-  let latitude = data.latitude;
-  let longitude = data.longitude;
+  // let latitude = data.latitude;
+  // let longitude = data.longitude;
 
-  if (data.indirizzo || data.citta) {
-    const geo = await geocodeAddress(data.indirizzo, data.citta);
-    latitude = geo?.latitude || null;
-    longitude = geo?.longitude || null;
-  }
+  // if (data.indirizzo || data.citta) {
+  //   const geo = await geocodeAddress(data.indirizzo, data.citta);
+  //   latitude = geo?.latitude || null;
+  //   longitude = geo?.longitude || null;
+  // }
 
   await pool.query(
     `

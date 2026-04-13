@@ -152,15 +152,15 @@ export default function Dashboard() {
           zoom={25}
           className="h-[650px] w-full rounded-xl"
         >
-          {/* <TileLayer
+          <TileLayer
             attribution='&copy; OpenStreetMap contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          /> */}
+          />
 
           {/* Fit bounds only on valid data */}
           <FitBounds data={validMapData} />
 
-          {/* <MarkerClusterGroup
+          <MarkerClusterGroup
             iconCreateFunction={(cluster: { getChildCount: () => any; }) => {
                 const count = cluster.getChildCount();
 
@@ -192,8 +192,8 @@ export default function Dashboard() {
             </Marker>
             ))}
 
-          </MarkerClusterGroup> */}
-
+          </MarkerClusterGroup>
+          
         </MapContainer>
       </div>
     </div>
