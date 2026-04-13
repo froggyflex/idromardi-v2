@@ -34,7 +34,7 @@ export default function CondominioEdit() {
     if (!form) return;
 
     await api.put(`/condomini/${id}`, form);
-    navigate(`/condomini/${id}`);
+    //navigate(`/condomini/${id}`);
   };
 
   if (!form) return <div>Loading...</div>;
