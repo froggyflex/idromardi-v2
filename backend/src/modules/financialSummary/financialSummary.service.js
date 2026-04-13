@@ -784,8 +784,7 @@ async function collegaProformaAFattura(conn, fatturaId, proformaIds = []) {
     updatedCount: updateResult.affectedRows || 0,
   };
 }
-
-
+ 
 function normalizePage(value, fallback = 1) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -829,18 +828,6 @@ async function listImportedDocuments({
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-  // IMPORTANT:
-  // parse_priority replicates your old getParsePriority(...) idea.
-  // Adjust the CASE if your real priority logic differs.
-  //
-  // Lower number = higher priority, because frontend used aPriority - bPriority
-  //
-  // Example logic:
-  // 0 -> no extracted number yet / not fully parsed
-  // 1 -> parsed but still review
-  // 2 -> everything else
-  //
-  // If you have a stricter old rule, replace this CASE accordingly.
   const baseFromSql = `
     FROM import_batch_files f
     LEFT JOIN import_items i
@@ -866,20 +853,20 @@ async function listImportedDocuments({
       i.document_type,
 
       CASE
-        WHEN i.extracted_number IS NULL OR TRIM(i.extracted_number) = '' THEN 0
-        WHEN COALESCE(f.parse_status, '') IN ('PARSED', 'COMPLETED') THEN 1
+        WHEN COALESCE(i.review_status, 'DA_REVISIONARE') = 'DA_REVISIONARE' THEN 0
+        WHEN COALESCE(i.review_status, '') = 'COMPLETATO_CON_ERRORI' THEN 1
         ELSE 2
-      END AS parse_priority,
+      END AS review_priority,
 
       CAST(
-        NULLIF(
-          REGEXP_SUBSTR(COALESCE(i.extracted_number, ''), '[0-9]+'),
-          ''
+        COALESCE(
+          NULLIF(REGEXP_SUBSTR(COALESCE(i.extracted_number, ''), '[0-9]+'), ''),
+          '0'
         ) AS UNSIGNED
       ) AS sortable_numero
     ${baseFromSql}
     ORDER BY
-      parse_priority ASC,
+      review_priority ASC,
       sortable_numero DESC,
       f.created_at DESC
     LIMIT ? OFFSET ?
@@ -903,7 +890,7 @@ async function listImportedDocuments({
       batch_id: r.batch_id,
       original_filename: r.original_filename,
       parse_status: r.parse_status,
-      review_status: r.review_status || "DA REVISIONARE",
+      review_status: r.review_status || "DA_REVISIONARE",
       descrizione: r.extracted_description || null,
       numero: r.extracted_number || null,
       data_documento: r.extracted_date || null,
@@ -918,7 +905,6 @@ async function listImportedDocuments({
     totalPages: Math.max(1, Math.ceil(total / safePageSize)),
   };
 }
-
 async function getImportedDocumentDetail(fileId) {
   const [rows] = await db.query(
     `

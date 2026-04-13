@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../../api/client";
 import { th } from "date-fns/locale/th";
 import { Fragment } from "react";
@@ -352,6 +352,14 @@ export default function FinancialSummaryPageTemplate() {
   const [importedDocsTotal, setImportedDocsTotal] = useState(0);
   const [importedDocsTotalPages, setImportedDocsTotalPages] = useState(1);
  
+  const importedTableScrollRef = useRef<HTMLDivElement | null>(null);
+  const importedTableScrollTopRef = useRef(0);
+
+  function rememberImportedTableScroll() {
+    if (importedTableScrollRef.current) {
+      importedTableScrollTopRef.current = importedTableScrollRef.current.scrollTop;
+    }
+  }
 
   async function registraPagamentoFattura() {
     if (!registerPaymentTargetFattura?.id) {
@@ -1433,7 +1441,8 @@ async function uploadProformaFiles() {
       console.warn(
         "Non tutti i documenti risultano completati entro il tempo previsto. Ricarico comunque la lista."
       );
-      await loadImportedDocuments();
+      setImportedDocsPage(1);
+      await loadImportedDocuments(1, activeImportTab, importedDocsSearch);
     }
   } catch (err: any) {
     setError(
@@ -1451,7 +1460,8 @@ async function uploadProformaFiles() {
 
       await api.post(`/financial-summary/imported-documents/${id}/parsef`);
 
-      await loadImportedDocuments();
+      setImportedDocsPage(1);
+      await loadImportedDocuments(1, activeImportTab, importedDocsSearch);
       await loadImportedDocumentDetail(id);
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore parsing fattura.");
@@ -1625,7 +1635,7 @@ async function uploadProformaFiles() {
           </div>
         ) : (
           <>
-            <div className="max-h-[620px] overflow-auto">
+            <div ref={importedTableScrollRef} className="max-h-[620px] overflow-auto">
               <table className="min-w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-100/95 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 backdrop-blur">
                   <tr className="border-b border-slate-200">
@@ -2020,6 +2030,8 @@ async function uploadProformaFiles() {
                     <button
                       className={`inline-flex items-center rounded-2xl border px-4 py-2.5 text-sm font-semibold transition ${card.border} ${card.text} bg-white/90 shadow-sm hover:bg-white`}
                         onClick={() =>
+                        {
+                          rememberImportedTableScroll();
                           setActiveDetailSection(
                             card.key === "proforma"
                               ? "PROFORMA"
@@ -2028,6 +2040,7 @@ async function uploadProformaFiles() {
                               : "PAGAMENTO"
                           )
                         }
+                      }
                     >
                       Dettagli
                     </button>
