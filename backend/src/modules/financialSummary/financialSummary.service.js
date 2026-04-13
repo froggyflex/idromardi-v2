@@ -786,7 +786,69 @@ async function collegaProformaAFattura(conn, fatturaId, proformaIds = []) {
 }
 
 
-async function listImportedDocuments() {
+function normalizePage(value, fallback = 1) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function normalizePageSize(value, fallback = 25) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.floor(n), 1), 100);
+}
+
+async function listImportedDocuments({
+  page = 1,
+  pageSize = 25,
+  documentType = null,
+  search = "",
+}) {
+  const safePage = normalizePage(page, 1);
+  const safePageSize = normalizePageSize(pageSize, 25);
+  const offset = (safePage - 1) * safePageSize;
+
+  const where = [];
+  const params = [];
+
+  if (documentType) {
+    where.push("COALESCE(i.document_type, '') = ?");
+    params.push(String(documentType).trim().toUpperCase());
+  }
+
+  if (search && String(search).trim()) {
+    const q = `%${String(search).trim()}%`;
+    where.push(`
+      (
+        f.original_filename LIKE ?
+        OR COALESCE(i.extracted_number, '') LIKE ?
+        OR COALESCE(i.extracted_description, '') LIKE ?
+      )
+    `);
+    params.push(q, q, q);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  // IMPORTANT:
+  // parse_priority replicates your old getParsePriority(...) idea.
+  // Adjust the CASE if your real priority logic differs.
+  //
+  // Lower number = higher priority, because frontend used aPriority - bPriority
+  //
+  // Example logic:
+  // 0 -> no extracted number yet / not fully parsed
+  // 1 -> parsed but still review
+  // 2 -> everything else
+  //
+  // If you have a stricter old rule, replace this CASE accordingly.
+  const baseFromSql = `
+    FROM import_batch_files f
+    LEFT JOIN import_items i
+      ON i.batch_id = f.batch_id
+      AND i.promoted_entity_id = f.id
+    ${whereSql}
+  `;
+
   const [rows] = await db.query(
     `
     SELECT
@@ -801,29 +863,60 @@ async function listImportedDocuments() {
       i.extracted_date,
       i.extracted_amount,
       i.extracted_description,
-      i.document_type
-    FROM import_batch_files f
-    LEFT JOIN import_items i
-      ON i.batch_id = f.batch_id
-     AND i.promoted_entity_id = f.id
-    ORDER BY f.created_at DESC
-    `
+      i.document_type,
+
+      CASE
+        WHEN i.extracted_number IS NULL OR TRIM(i.extracted_number) = '' THEN 0
+        WHEN COALESCE(f.parse_status, '') IN ('PARSED', 'COMPLETED') THEN 1
+        ELSE 2
+      END AS parse_priority,
+
+      CAST(
+        NULLIF(
+          REGEXP_SUBSTR(COALESCE(i.extracted_number, ''), '[0-9]+'),
+          ''
+        ) AS UNSIGNED
+      ) AS sortable_numero
+    ${baseFromSql}
+    ORDER BY
+      parse_priority ASC,
+      sortable_numero DESC,
+      f.created_at DESC
+    LIMIT ? OFFSET ?
+    `,
+    [...params, safePageSize, offset]
   );
 
-  return rows.map((r) => ({
-    id: r.id,
-    batch_id: r.batch_id,
-    original_filename: r.original_filename,
-    parse_status: r.parse_status,
-    review_status: r.review_status || "DA_REVISIONARE",
-    descrizione: r.extracted_description || null,
-    numero: r.extracted_number || null,
-    data_documento: r.extracted_date || null,
-    importo: r.extracted_amount != null ? Number(r.extracted_amount) : null,
-    uploaded_at: r.created_at,
-    type: r.document_type || null,
-  }));
+  const [countRows] = await db.query(
+    `
+    SELECT COUNT(*) AS total
+    ${baseFromSql}
+    `,
+    params
+  );
 
+  const total = Number(countRows?.[0]?.total || 0);
+
+  return {
+    items: rows.map((r) => ({
+      id: r.id,
+      batch_id: r.batch_id,
+      original_filename: r.original_filename,
+      parse_status: r.parse_status,
+      review_status: r.review_status || "DA REVISIONARE",
+      descrizione: r.extracted_description || null,
+      numero: r.extracted_number || null,
+      data_documento: r.extracted_date || null,
+      importo: r.extracted_amount != null ? Number(r.extracted_amount) : null,
+      uploadedAt: r.created_at,
+      processedAt: r.processed_at || null,
+      type: r.document_type || null,
+    })),
+    page: safePage,
+    pageSize: safePageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / safePageSize)),
+  };
 }
 
 async function getImportedDocumentDetail(fileId) {

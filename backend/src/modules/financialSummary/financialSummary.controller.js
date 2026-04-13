@@ -393,6 +393,25 @@ async function getPaymentDetail(req, res) {
     return res.status(500).json({ error: "Errore nel caricamento del dettaglio pagamento." });
   }
 }
+
+async function getImportedDocuments(req, res) {
+  try {
+    const result = await service.listImportedDocuments({
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+      documentType: req.query.documentType || null,
+      search: req.query.search || "",
+    });
+
+    return res.json(result);
+  } catch (err) {
+    console.error("Errore caricando i documenti importati:", err);
+    return res.status(500).json({
+      error: "Errore caricando i documenti importati.",
+    });
+  }
+}
+
 module.exports = {
   getSummary,
   getRecentRows,
@@ -422,5 +441,6 @@ module.exports = {
   registraPagamentoFattura,
   listPayments,
   getPaymentDetail,
+  getImportedDocuments
 
 };
