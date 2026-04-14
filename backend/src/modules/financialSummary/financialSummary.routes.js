@@ -12,7 +12,8 @@ router.get("/imported-documents", controller.getImportedDocuments);
 router.get("/imported-documents/:id", controller.getImportedDocumentDetail);
 router.delete("/imported-documents/fattura/:id", controller.deleteImportedDocumentF);
 router.delete("/imported-documents/proforma/:id", controller.deleteImportedDocument);
-
+router.post("/manual-proforma", controller.createManualProforma);
+router.post("/manual-fattura", controller.createManualFattura);
 router.post(
   "/imported-documents/upload",
   uploadPdf.array("files", 20),
@@ -50,6 +51,9 @@ router.delete("/:id", controller.deleteProforma);
 router.post("/:id/registra-pagamento", controller.registraPagamentoFattura);
 router.get("/payments", controller.listPayments);
 router.get("/payments/:id", controller.getPaymentDetail);
+router.get("/proforme/:id/print",controller.printProformaPdf);
+router.get("/fatture/:id/print",controller.printFatturaPdf);
+
 
 
 module.exports = router;

@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const pdf = require("pdf-parse");
 const db = require("../../config/db");
 const { parse } = require("path");
+const puppeteer = require("puppeteer");
 
 function safeJsonParse(value, fallback = null) {
   try {
@@ -2929,6 +2930,1037 @@ async function getPaymentDetail(id) {
   };
 }
 
+async function createManualProforma(payload) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const condominioId = payload?.condominioId;
+    const descrizione = String(payload?.descrizione || "").trim();
+    const dataDocumento = payload?.dataDocumento;
+    const importo = Number(payload?.importo);
+
+    if (!condominioId) {
+      throw new Error("Seleziona un condominio.");
+    }
+
+    if (!descrizione) {
+      throw new Error("Descrizione mancante.");
+    }
+
+    if (!dataDocumento) {
+      throw new Error("Data documento mancante.");
+    }
+
+    if (!Number.isFinite(importo) || importo <= 0) {
+      throw new Error("Importo non valido.");
+    }
+
+    const [[condominio]] = await conn.query(
+      `
+      SELECT id, indirizzo
+      FROM condomini_v2
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [condominioId]
+    );
+
+    if (!condominio) {
+      throw new Error("Condominio non trovato.");
+    }
+
+    const anno = new Date(dataDocumento).getFullYear();
+    if (!anno || Number.isNaN(anno)) {
+      throw new Error("Anno documento non valido.");
+    }
+
+    const numbering = await getNextDocumentNumber(
+      conn,
+      "PROFORMA",
+      anno,
+      condominio.indirizzo || null
+    );
+
+    const proformaId = crypto.randomUUID();
+
+    await conn.query(
+      `
+      INSERT INTO proformas (
+        id,
+        condominio_id,
+        source_import_file_id,
+        fattura_id,
+        numero_progressivo,
+        numero,
+        descrizione,
+        data_documento,
+        importo,
+        stato,
+        cancellation_reason,
+        cancellation_date,
+        cancellation_user_id,
+        replacement_proforma_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 'EMESSA',
+        NULL, NULL, NULL, NULL, NOW(), NOW()
+      )
+      `,
+      [
+        proformaId,
+        condominio.id,
+        numbering.progressivo,
+        numbering.numero,
+        descrizione,
+        dataDocumento,
+        importo,
+      ]
+    );
+
+    await conn.commit();
+
+    return {
+      success: true,
+      proforma: {
+        id: proformaId,
+        condominio_id: condominio.id,
+        condominio: condominio.indirizzo || "-",
+        numero_progressivo: numbering.progressivo,
+        numero: numbering.numero,
+        descrizione,
+        data_documento: dataDocumento,
+        importo,
+        stato: "EMESSA",
+      },
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function createManualFattura(payload) {
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const condominioId = payload?.condominioId;
+    const descrizione = String(payload?.descrizione || "").trim();
+    const dataDocumento = payload?.dataDocumento;
+    const importo = Number(payload?.importo);
+    const proformaIds = Array.isArray(payload?.proformaIds) ? payload.proformaIds : [];
+
+    if (!condominioId) {
+      throw new Error("Seleziona un condominio.");
+    }
+
+    if (!descrizione) {
+      throw new Error("Descrizione mancante.");
+    }
+
+    if (!dataDocumento) {
+      throw new Error("Data documento mancante.");
+    }
+
+    if (!Number.isFinite(importo) || importo <= 0) {
+      throw new Error("Importo non valido.");
+    }
+
+    const [[condominio]] = await conn.query(
+      `
+      SELECT id, indirizzo
+      FROM condomini_v2
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [condominioId]
+    );
+
+    if (!condominio) {
+      throw new Error("Condominio non trovato.");
+    }
+
+    const anno = new Date(dataDocumento).getFullYear();
+    if (!anno || Number.isNaN(anno)) {
+      throw new Error("Anno documento non valido.");
+    }
+
+    const numbering = await getNextDocumentNumber(
+      conn,
+      "FATTURA",
+      anno,
+      condominio.indirizzo || null
+    );
+
+    const fatturaId = crypto.randomUUID();
+
+    await conn.query(
+      `
+      INSERT INTO fatture (
+        id,
+        condominio_id,
+        source_import_file_id,
+        numero_progressivo,
+        numero,
+        descrizione,
+        data_documento,
+        importo,
+        stato,
+        cancellation_reason,
+        cancellation_date,
+        cancellation_user_id,
+        replacement_fattura_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ?, ?, NULL, ?, ?, ?, ?, ?, 'EMESSA',
+        NULL, NULL, NULL, NULL, NOW(), NOW()
+      )
+      `,
+      [
+        fatturaId,
+        condominio.id,
+        numbering.progressivo,
+        numbering.numero,
+        descrizione,
+        dataDocumento,
+        importo,
+      ]
+    );
+
+    let linkedCount = 0;
+
+    if (proformaIds.length > 0) {
+      const linkResult = await collegaProformeAFattura(conn, fatturaId, proformaIds);
+
+      if (!linkResult.updatedCount) {
+        throw new Error("Nessuna proforma collegata alla fattura.");
+      }
+
+      linkedCount = linkResult.updatedCount;
+    }
+
+    await conn.commit();
+
+    return {
+      success: true,
+      fattura: {
+        id: fatturaId,
+        condominio_id: condominio.id,
+        condominio: condominio.indirizzo || "-",
+        numero_progressivo: numbering.progressivo,
+        numero: numbering.numero,
+        descrizione,
+        data_documento: dataDocumento,
+        importo,
+        stato: "EMESSA",
+      },
+      linkedProformasCount: linkedCount,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+function esc(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function n(v) {
+  const num = Number(v ?? 0);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function euro(v) {
+  return n(v).toFixed(2).replace(".", ",");
+}
+
+function formatEuro(v) {
+  return `€ ${euro(v)}`;
+}
+
+function extractCleanNumber(raw) {
+  if (!raw) return "";
+
+  const str = String(raw).trim();
+  const match = str.match(/\d+/);
+
+  if (!match) return str;
+
+  return match[0].padStart(6, "0");
+}
+
+function formatItalianLongDate(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return new Intl.DateTimeFormat("it-IT", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function textLine(label, value, extraClass = "") {
+  return `
+    <div class="meta-line ${extraClass}">
+      <span class="meta-label">${esc(label)}</span>
+      <span class="meta-value">${value}</span>
+    </div>
+  `;
+}
+
+function buildFinancialDocument({
+  documentType,
+  supplierName,
+  supplierVatNumber,
+  supplierSubtitle,
+  documentNumber,
+  documentDate,
+  customerName,
+  customerAddressLine1,
+  customerAddressLine2,
+  customerVatOrCf,
+  description,
+  amount,
+  beneficiary,
+  iban,
+  swift,
+  note,
+  legalAddress,
+  operatingAddress,
+  phone1,
+  phone2,
+  mobile,
+  email,
+  website,
+  logoUrl,
+}) {
+  const isProforma = String(documentType || "").toUpperCase() === "PROFORMA";
+  const cleanNumber = extractCleanNumber(documentNumber);
+  const formattedDate = formatItalianLongDate(documentDate);
+
+  logoUrl = "https://i.postimg.cc/2SDBbptC/idro-logo.jpg"; // TEMP
+  const heading = isProforma
+    ? `Proforma di fattura n. ${cleanNumber}`
+    : `Fattura n. ${cleanNumber}`;
+
+  const badge = isProforma ? "Proforma" : "Fattura";
+
+  return `
+    <section class="page">
+      <article class="invoice-sheet">
+        <div class="top-accent"></div>
+
+        <header class="invoice-header">
+          <div class="brand-block">
+            <div class="brand-kicker">Documento commerciale</div>
+            <h1 class="doc-title">${esc(heading)}</h1>
+            <div class="doc-subtitle">${esc(formattedDate)}</div>
+          </div>
+
+          <div class="brand-logo-block">
+            ${
+              logoUrl
+                ? `<img class="brand-logo" src="${esc(logoUrl)}" alt="Logo aziendale" />`
+                : `<div class="logo-fallback">${esc(supplierName || "DOCUMENTO")}</div>`
+            }
+          </div>
+        </header>
+
+        <section class="summary-band">
+          <div class="summary-left">
+            <div class="summary-caption">Emittente</div>
+            <div class="summary-name">${esc(supplierName || "-")}</div>
+            <div class="summary-meta">
+              ${supplierSubtitle ? `<span>${esc(supplierSubtitle)}</span>` : ""}
+              ${supplierVatNumber ? `<span><strong>P.IVA:</strong> ${esc(supplierVatNumber)}</span>` : ""}
+            </div>
+          </div>
+
+          <div class="summary-right">
+            <div class="summary-total-label">Totale documento</div>
+            <div class="summary-total-value">${formatEuro(amount)}</div>
+            <div class="summary-doc-badge">${esc(badge)}</div>
+          </div>
+        </section>
+
+        <section class="invoice-grid">
+          <div class="main-column">
+            <section class="panel">
+              <div class="panel-title">Intestatario</div>
+              <div class="party-box">
+                <div class="party-name">${esc(customerName || "-")}</div>
+                ${customerAddressLine1 ? `<div class="party-line">${esc(customerAddressLine1)}</div>` : ""}
+                ${customerAddressLine2 ? `<div class="party-line">${esc(customerAddressLine2)}</div>` : ""}
+                ${customerVatOrCf ? `<div class="party-line party-muted">C.F. / P.IVA ${esc(customerVatOrCf)}</div>` : ""}
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-title">Descrizione</div>
+              <div class="description-box">
+                <div class="description-text">${esc(description || "")}</div>
+              </div>
+            </section>
+
+            ${
+              note
+                ? `
+              <section class="panel">
+                <div class="panel-title">Note</div>
+                <div class="note-text">${esc(note)}</div>
+              </section>
+            `
+                : ""
+            }
+          </div>
+
+          <aside class="side-column">
+            <section class="panel total-panel">
+              <div class="panel-title">Dettagli documento</div>
+              <div class="mini-summary">
+                ${textLine("Tipologia", esc(badge))}
+                ${textLine("Numero", esc(cleanNumber))}
+                ${textLine("Data", esc(formattedDate || "-"))}
+                ${textLine("Totale", `<strong>${formatEuro(amount)}</strong>`, "is-strong")}
+              </div>
+            </section>
+
+            ${
+              iban
+                ? `
+              <section class="panel">
+                <div class="panel-title">Pagamento</div>
+                <div class="payment-box">
+                  <div class="payment-line">Bonifico bancario intestato a <strong>${esc(beneficiary || "-")}</strong></div>
+                  <div class="payment-line"><strong>IBAN:</strong> ${esc(iban)}</div>
+                  ${swift ? `<div class="payment-line"><strong>SWIFT:</strong> ${esc(swift)}</div>` : ""}
+                </div>
+              </section>
+            `
+                : ""
+            }
+
+            <section class="panel company-panel">
+              <div class="panel-title">Riferimenti</div>
+              <div class="company-name">${esc(supplierName || "-")}</div>
+              ${legalAddress ? `<div class="company-text"><strong>Sede legale:</strong> ${esc(legalAddress)}</div>` : ""}
+              ${operatingAddress ? `<div class="company-text"><strong>Sede operativa:</strong> ${esc(operatingAddress)}</div>` : ""}
+              ${
+                phone1 || phone2 || mobile
+                  ? `
+                <div class="company-text">
+                  <strong>Contatti:</strong>
+                  ${phone1 ? ` ${esc(phone1)}` : ""}
+                  ${phone2 ? ` · ${esc(phone2)}` : ""}
+                  ${mobile ? ` · ${esc(mobile)}` : ""}
+                </div>
+              `
+                  : ""
+              }
+              ${email ? `<div class="company-text">${esc(email)}</div>` : ""}
+              ${website ? `<div class="company-text">${esc(website)}</div>` : ""}
+            </section>
+          </aside>
+        </section>
+
+        <footer class="invoice-footer">
+          <div>
+            ${
+              isProforma
+                ? "Entro 5 giorni dall’avvenuto pagamento verrà emessa formale fattura."
+                : "Documento emesso a fini amministrativi e contabili."
+            }
+          </div>
+          <div class="footer-right">${esc(heading)}</div>
+        </footer>
+      </article>
+    </section>
+  `;
+}
+
+function buildFinancialDocumentPdfHtml(doc) {
+  return `
+  <!doctype html>
+  <html lang="it">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>${esc(
+        String(doc?.documentType || "").toUpperCase() === "PROFORMA"
+          ? "Proforma di fattura"
+          : "Fattura"
+      )}</title>
+      <style>
+        @page {
+          size: A4 portrait;
+          margin: 8mm;
+        }
+
+        :root {
+          --bg: #f4f7fb;
+          --paper: #ffffff;
+          --ink: #111827;
+          --muted: #64748b;
+          --muted-2: #475569;
+          --line: #dbe5ef;
+          --line-strong: #c5d4e6;
+          --soft: #f8fbff;
+          --soft-2: #f1f6fc;
+          --accent: #1d4ed8;
+          --accent-2: #0f3d91;
+          --accent-soft: #dbeafe;
+          --shadow: rgba(15, 23, 42, 0.08);
+        }
+
+        * {
+          box-sizing: border-box;
+        }
+
+        html, body {
+          margin: 0;
+          padding: 0;
+          background: #ffffff;
+          color: var(--ink);
+          font-family:
+            "Arial",
+            "Baskerville",
+            "Baskerville Old Face",
+            "Times New Roman",
+            serif;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+
+        body {
+          font-size: 11pt;
+        }
+
+        .page {
+          page-break-after: auto;
+        }
+
+        .invoice-sheet {
+          width: 100%;
+          min-height: 279mm;
+          background: var(--paper);
+          border: 1px solid var(--line-strong);
+          border-radius: 14px;
+          overflow: hidden;
+          box-shadow: 0 2mm 6mm var(--shadow);
+          display: flex;
+          flex-direction: column;
+        }
+
+        .top-accent {
+          height: 5mm;
+          background: linear-gradient(90deg, #0f3d91 0%, #1d4ed8 45%, #60a5fa 100%);
+        }
+
+        .invoice-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 10mm;
+          padding: 5mm 6mm 3.5mm 6mm;
+        }
+
+        .brand-block {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .brand-kicker {
+          font-size: 8pt;
+          text-transform: uppercase;
+          letter-spacing: 0.16em;
+          font-weight: 800;
+          color: var(--accent);
+          margin-bottom: 1.8mm;
+        }
+
+        .doc-title {
+          margin: 0;
+          font-size: 18pt;
+          line-height: 1.1;
+          font-weight: 800;
+          color: var(--ink);
+        }
+
+        .doc-subtitle {
+          margin-top: 1.5mm;
+          font-size: 9pt;
+          color: var(--muted);
+        }
+
+        .brand-logo-block {
+          width: 44mm;
+          min-width: 44mm;
+          height: 18mm;
+          display: flex;
+          justify-content: flex-end;
+          align-items: flex-start;
+        }
+
+        .brand-logo {
+          max-width: 100%;
+          max-height: 100%;
+          object-fit: contain;
+          display: block;
+        }
+
+        .logo-fallback {
+          width: 100%;
+          height: 100%;
+          border: 1px dashed #9fb3c8;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 2mm;
+          font-size: 9pt;
+          font-weight: 800;
+          color: var(--muted);
+          background: var(--soft);
+        }
+
+        .summary-band {
+          margin: 0 6mm 4mm 6mm;
+          padding: 4mm 4.8mm;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          background: linear-gradient(180deg, #fbfdff 0%, #f4f8fd 100%);
+          display: grid;
+          grid-template-columns: 1fr 68mm;
+          gap: 6mm;
+          align-items: stretch;
+        }
+
+        .summary-caption {
+          font-size: 7.2pt;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          font-weight: 700;
+          color: var(--muted);
+          margin-bottom: 1.5mm;
+        }
+
+        .summary-name {
+          font-size: 15pt;
+          line-height: 1.1;
+          font-weight: 800;
+          color: var(--ink);
+          margin-bottom: 1.8mm;
+          word-break: break-word;
+        }
+
+        .summary-meta {
+          display: flex;
+          flex-direction: column;
+          gap: 1mm;
+          font-size: 8.5pt;
+          line-height: 1.35;
+          color: var(--muted-2);
+        }
+
+        .summary-right {
+          border-left: 1px solid #d8e4f1;
+          padding-left: 5.5mm;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: flex-end;
+          text-align: right;
+        }
+
+        .summary-total-label {
+          font-size: 8pt;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          font-weight: 700;
+          color: var(--muted);
+          margin-bottom: 1.2mm;
+        }
+
+        .summary-total-value {
+          font-size: 19pt;
+          line-height: 1;
+          font-weight: 800;
+          color: var(--accent-2);
+        }
+
+        .summary-doc-badge {
+          margin-top: 2mm;
+          padding: 1.2mm 3mm;
+          border-radius: 999px;
+          background: var(--accent-soft);
+          color: var(--accent-2);
+          font-size: 7.4pt;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+
+        .invoice-grid {
+          flex: 1;
+          display: grid;
+          grid-template-columns: 1.55fr 0.95fr;
+          gap: 4mm;
+          padding: 0 6mm 4mm 6mm;
+        }
+
+        .main-column,
+        .side-column {
+          display: flex;
+          flex-direction: column;
+          gap: 3mm;
+        }
+
+        .panel {
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          background: #ffffff;
+          overflow: hidden;
+        }
+
+        .panel-title {
+          padding: 2.8mm 3.5mm 2.2mm 3.5mm;
+          border-bottom: 1px solid var(--line);
+          background: var(--soft);
+          font-size: 7pt;
+          text-transform: uppercase;
+          letter-spacing: 0.14em;
+          font-weight: 800;
+          color: var(--muted-2);
+        }
+
+        .party-box {
+          padding: 4mm 4.5mm;
+          min-height: 33mm;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        .party-name {
+          font-size: 13pt;
+          line-height: 1.15;
+          font-weight: 800;
+          color: var(--ink);
+          margin-bottom: 1.6mm;
+          word-break: break-word;
+        }
+
+        .party-line {
+          font-size: 9.2pt;
+          line-height: 1.4;
+          color: var(--muted-2);
+          margin: 0.4mm 0;
+        }
+
+        .party-muted {
+          color: var(--muted);
+        }
+
+        .description-box {
+          padding: 4.5mm;
+          min-height: 40mm;
+          max-height: 54mm;
+          overflow: hidden;
+          display: flex;
+          align-items: flex-start;
+        }
+
+        .description-text {
+          font-size: 10.5pt;
+          line-height: 1.52;
+          color: var(--ink);
+          white-space: pre-line;
+          display: -webkit-box;
+          -webkit-line-clamp: 5;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          min-height: calc(1.52em * 2);
+        }
+
+        .note-text,
+        .payment-box {
+          padding: 4.5mm;
+          font-size: 9pt;
+          line-height: 1.45;
+          color: var(--muted-2);
+        }
+
+        .payment-line {
+          margin-bottom: 1.5mm;
+          word-break: break-word;
+        }
+
+        .payment-line:last-child {
+          margin-bottom: 0;
+        }
+
+        .total-panel {
+          background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        }
+
+        .mini-summary {
+          padding: 4.5mm;
+          display: flex;
+          flex-direction: column;
+          gap: 2.5mm;
+        }
+
+        .meta-line {
+          display: flex;
+          justify-content: space-between;
+          gap: 4mm;
+          align-items: flex-start;
+          padding-bottom: 2mm;
+          border-bottom: 1px dashed #d8e2ee;
+          font-size: 9pt;
+          line-height: 1.3;
+          color: var(--muted-2);
+        }
+
+        .meta-line:last-child {
+          border-bottom: none;
+          padding-bottom: 0;
+        }
+
+        .meta-label {
+          font-weight: 700;
+          color: var(--muted);
+        }
+
+        .meta-value {
+          text-align: right;
+          color: var(--ink);
+        }
+
+        .meta-line.is-strong .meta-value,
+        .meta-line.is-strong strong {
+          font-weight: 800;
+          color: var(--accent-2);
+        }
+
+        .company-panel {
+          flex: 1;
+        }
+
+        .company-name {
+          padding: 4.5mm 4.5mm 0 4.5mm;
+          font-size: 12pt;
+          font-weight: 800;
+          color: var(--ink);
+        }
+
+        .company-text {
+          padding: 2mm 4.5mm 0 4.5mm;
+          font-size: 8.8pt;
+          line-height: 1.4;
+          color: var(--muted-2);
+        }
+
+        .invoice-footer {
+          border-top: 1px solid var(--line);
+          background: #fbfcfe;
+          padding: 4mm 9mm;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 5mm;
+          font-size: 7.8pt;
+          line-height: 1.3;
+          color: var(--muted);
+        }
+
+        .footer-right {
+          font-weight: 700;
+          color: var(--muted-2);
+          text-align: right;
+          white-space: nowrap;
+        }
+      </style>
+    </head>
+    <body>
+      ${buildFinancialDocument(doc || {})}
+    </body>
+  </html>
+  `;
+}
+
+async function htmlToPdfBuffer(html) {
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    return await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: true,
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
+async function getProformaPrintData(id) {
+  const [rows] = await db.query(
+    `
+    SELECT
+      p.id,
+      p.numero,
+      p.data_documento,
+      p.importo,
+      p.descrizione,
+      p.stato,
+      p.condominio_id,
+      c.indirizzo
+       
+    FROM proformas p
+    LEFT JOIN condomini_v2 c
+      ON c.id = p.condominio_id
+    WHERE p.id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  if (!rows.length) {
+    throw new Error("Proforma non trovata.");
+  }
+
+  return rows[0];
+}
+
+async function getFatturaPrintData(id) {
+  const [rows] = await db.query(
+    `
+    SELECT
+      f.id,
+      f.numero,
+      f.data_documento,
+      f.importo,
+      f.descrizione,
+      f.stato,
+      f.condominio_id,
+      c.indirizzo
+      
+    FROM fatture f
+    LEFT JOIN condomini_v2 c
+      ON c.id = f.condominio_id
+    WHERE f.id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  if (!rows.length) {
+    throw new Error("Fattura non trovata.");
+  }
+
+  return rows[0];
+}
+
+async function generateProformaPdf(id) {
+  const doc = await getProformaPrintData(id);
+
+  const html = buildFinancialDocumentPdfHtml({
+    documentType: "PROFORMA",
+    supplierName: "Idromardi l.t.d.",
+    supplierVatNumber: "204524123",
+    supplierSubtitle: "Lettura e contabilità - apparecchi idrici e Manutenzione",
+    documentNumber: doc.numero || doc.id,
+    documentDate: doc.data_documento,
+    customerName: doc.amministratore || "Amministrazione Condominio",
+    customerAddressLine1: doc.indirizzo || "-",
+    customerAddressLine2: "",
+    customerVatOrCf: "",
+    description: doc.descrizione || "Proforma manuale.",
+    amount: doc.importo || 0,
+    beneficiary: "Idromardi ltd",
+    iban: "BG 32 BPBI 7940 1485 3382 01",
+    swift: "BPBI BGSF",
+    note: "Entro 5 giorni dall’avvenuto pagamento verrà emessa formale fattura.",
+    legalAddress: "Шипченски проход (Shipchenski Prohod), 65B blocco 11 - 1574 Sofia (BG)",
+    operatingAddress: "Via Posillipo, 299 - 80123 Napoli (IT)",
+    phone1: "+35 987 689.84.62",
+    phone2: "+39 081 575.02.63",
+    mobile: "+39 328 32.98.115",
+  });
+
+  return await htmlToPdfBuffer(html);
+}
+
+function extractCleanNumber(raw) {
+  if (!raw) return "";
+
+  const str = String(raw);
+
+  // Find first numeric block
+  const match = str.match(/\d+/);
+
+  if (!match) return str;
+
+  // Pad to 6 digits (adjust if needed)
+  return match[0].padStart(6, "0");
+}
+async function generateFatturaPdf(id) {
+  const doc = await getFatturaPrintData(id);
+
+  const html = buildFinancialDocumentPdfHtml({
+    documentType: "FATTURA",
+    supplierName: "Idromardi l.t.d.",
+    supplierVatNumber: "204524123",
+    supplierSubtitle: "Lettura e contabilità - apparecchi idrici e Manutenzione",
+    documentNumber: doc.numero || doc.id,
+    documentDate: doc.data_documento,
+    customerName: doc.amministratore || "Amministrazione Condominio",
+    customerAddressLine1: doc.indirizzo || "-",
+    customerAddressLine2: "",
+    customerVatOrCf: "",
+    description: doc.descrizione || "Proforma manuale.",
+    amount: doc.importo || 0,
+    beneficiary: "Idromardi ltd",
+    iban: "BG 32 BPBI 7940 1485 3382 01",
+    swift: "BPBI BGSF",
+    note: "Entro 5 giorni dall’avvenuto pagamento verrà emessa formale fattura.",
+    legalAddress: "Шипченски проход (Shipchenski Prohod), 65B blocco 11 - 1574 Sofia (BG)",
+    operatingAddress: "Via Posillipo, 299 - 80123 Napoli (IT)",
+    phone1: "+35 987 689.84.62",
+    phone2: "+39 081 575.02.63",
+    mobile: "+39 328 32.98.115",
+  });
+
+  return await htmlToPdfBuffer(html);
+}
+
+
  module.exports = {
   listImportedDocuments,
   getImportedDocumentDetail,
@@ -2958,5 +3990,9 @@ async function getPaymentDetail(id) {
   registraPagamentoFattura,
   listPayments,
   getPaymentDetail,
+  createManualProforma,
+  createManualFattura,
+  generateProformaPdf,
+  generateFatturaPdf,
 
 };

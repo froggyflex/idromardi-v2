@@ -412,6 +412,100 @@ async function getImportedDocuments(req, res) {
   }
 }
 
+async function createManualProforma(req, res) {
+  try {
+    const {
+      condominioId,
+      descrizione,
+      dataDocumento,
+      importo,
+    } = req.body;
+
+    const result = await service.createManualProforma({
+      condominioId,
+      descrizione,
+      dataDocumento,
+      importo,
+    });
+
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("createManualProforma error:", err);
+    return res.status(500).json({
+      error: err.message || "Errore durante la creazione manuale della proforma.",
+    });
+  }
+}
+
+async function createManualFattura(req, res) {
+  try {
+    const {
+      condominioId,
+      descrizione,
+      dataDocumento,
+      importo,
+      proformaIds,
+    } = req.body;
+
+    const result = await service.createManualFattura({
+      condominioId,
+      descrizione,
+      dataDocumento,
+      importo,
+      proformaIds: Array.isArray(proformaIds) ? proformaIds : [],
+    });
+
+    return res.status(201).json(result);
+  } catch (err) {
+    console.error("createManualFattura error:", err);
+    return res.status(500).json({
+      error: err.message || "Errore durante la creazione manuale della fattura.",
+    });
+  }
+}
+async function printProformaPdf(req, res) {
+  try {
+    const { id } = req.params;
+
+    const pdfBuffer = await service.generateProformaPdf(id);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="proforma-${id}.pdf"`
+    );
+
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error("Errore generando PDF proforma:", err);
+    return res.status(500).json({
+      error: err?.message || "Errore generando il PDF della proforma.",
+    });
+  }
+}
+
+async function printFatturaPdf(req, res) {
+  try {
+    const { id } = req.params;
+
+    const pdfBuffer = await service.generateFatturaPdf(id);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="fattura-${id}.pdf"`
+    );
+
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error("Errore generando PDF fattura:", err);
+    return res.status(500).json({
+      error: err?.message || "Errore generando il PDF della fattura.",
+    });
+  }
+}
+
+
 module.exports = {
   getSummary,
   getRecentRows,
@@ -441,6 +535,10 @@ module.exports = {
   registraPagamentoFattura,
   listPayments,
   getPaymentDetail,
-  getImportedDocuments
+  getImportedDocuments,
+  createManualProforma,
+  createManualFattura,
+  printProformaPdf,
+  printFatturaPdf,
 
 };

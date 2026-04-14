@@ -796,7 +796,7 @@ const handleExportPdf = async () => {
         dettaglioByUtenza,
         trimestreLabel: "07.25 - 01.2025",
         dataLettura: "12/01/2026",
-        logoUrl: "http://localhost:5173/images/idro-logo.jpeg",
+        logoUrl: "https://i.postimg.cc/2SDBbptC/idro-logo.jpg",
       },
       {
         responseType: "blob",

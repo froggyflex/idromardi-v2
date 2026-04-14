@@ -355,6 +355,209 @@ export default function FinancialSummaryPageTemplate() {
   const importedTableScrollRef = useRef<HTMLDivElement | null>(null);
   const importedTableScrollTopRef = useRef(0);
 
+  const [isCreateManualProformaModalOpen, setIsCreateManualProformaModalOpen] = useState(false);
+  const [creatingManualProforma, setCreatingManualProforma] = useState(false);
+  const [manualProformaForm, setManualProformaForm] = useState({
+    condominioId: "",
+    descrizione: "",
+    dataDocumento: new Date().toISOString().slice(0, 10),
+    importo: "",
+  });
+
+  const [isCreateManualFatturaModalOpen, setIsCreateManualFatturaModalOpen] = useState(false);
+  const [creatingManualFattura, setCreatingManualFattura] = useState(false);
+  const [manualFatturaForm, setManualFatturaForm] = useState({
+    condominioId: "",
+    descrizione: "",
+    dataDocumento: new Date().toISOString().slice(0, 10),
+    importo: "",
+  });
+  const [manualFatturaProformaSearch, setManualFatturaProformaSearch] = useState("");
+  const [selectedProformaIdsForManualFattura, setSelectedProformaIdsForManualFattura] = useState<string[]>([]);
+
+  const availableProformasForManualFattura = useMemo(() => {
+    return proformasRows.filter(
+      (p: any) => !p.fattura_id && p.stato !== "ANNULLATA"
+    );
+  }, [proformasRows]);
+
+  const filteredAvailableProformasForManualFattura = useMemo(() => {
+    const q = manualFatturaProformaSearch.trim().toLowerCase();
+    if (!q) return availableProformasForManualFattura;
+
+    return availableProformasForManualFattura.filter((p: any) =>
+      [
+        p.numero,
+        p.condominio || "",
+        p.descrizione || "",
+        String(p.importo || ""),
+        p.stato || "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [availableProformasForManualFattura, manualFatturaProformaSearch]);
+
+    async function printProformaPdf(proformaId: String) {
+    try {
+      const response = await api.get(`/financial-summary/proforme/${proformaId}/print`, {
+        responseType: "blob",
+      });
+
+      const blob = new Blob([response.data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+
+      window.open(url, "_blank", "noopener,noreferrer");
+
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 10000);
+    } catch (err: any) {
+      setError(
+        err?.response?.data?.error || "Errore generando il PDF della proforma."
+      );
+    }
+  }
+  async function printFatturaPdf(fatturaId: String) {
+    try {
+      const response = await api.get(`/financial-summary/fatture/${fatturaId}/print`, {
+        responseType: "blob",
+      });
+
+      const blob = new Blob([response.data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+
+      window.open(url, "_blank", "noopener,noreferrer");
+
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 10000);
+    } catch (err: any) {
+      setError(
+        err?.response?.data?.error || "Errore generando il PDF della fattura."
+      );
+    }
+  }
+
+  async function createManualProforma() {
+  const importo = Number(manualProformaForm.importo);
+
+  if (!manualProformaForm.condominioId) {
+    setError("Seleziona un condominio.");
+    return;
+  }
+
+  if (!manualProformaForm.descrizione.trim()) {
+    setError("Inserisci una descrizione.");
+    return;
+  }
+
+  if (!manualProformaForm.dataDocumento) {
+    setError("Inserisci una data.");
+    return;
+  }
+
+  if (!Number.isFinite(importo) || importo <= 0) {
+    setError("Importo non valido.");
+    return;
+  }
+
+  try {
+    setCreatingManualProforma(true);
+    setError("");
+
+    await api.post("/financial-summary/manual-proforma/", {
+      condominioId: manualProformaForm.condominioId,
+      descrizione: manualProformaForm.descrizione,
+      dataDocumento: manualProformaForm.dataDocumento,
+      importo,
+    });
+
+    setIsCreateManualProformaModalOpen(false);
+    setManualProformaForm({
+      condominioId: "",
+      descrizione: "",
+      dataDocumento: new Date().toISOString().slice(0, 10),
+      importo: "",
+    });
+
+    await Promise.all([
+      loadSummary(),
+      loadRecentRows(),
+      loadProformasRows(),
+    ]);
+  } catch (err: any) {
+    console.error("createManualProforma error:", err?.response?.data || err);
+    setError(
+      err?.response?.data?.error || "Errore durante la creazione manuale della proforma."
+    );
+  } finally {
+    setCreatingManualProforma(false);
+  }
+}
+
+async function createManualFattura() {
+  const importo = Number(manualFatturaForm.importo);
+
+  if (!manualFatturaForm.condominioId) {
+    setError("Seleziona un condominio.");
+    return;
+  }
+
+  if (!manualFatturaForm.descrizione.trim()) {
+    setError("Inserisci una descrizione.");
+    return;
+  }
+
+  if (!manualFatturaForm.dataDocumento) {
+    setError("Inserisci una data.");
+    return;
+  }
+
+  if (!Number.isFinite(importo) || importo <= 0) {
+    setError("Importo non valido.");
+    return;
+  }
+
+  try {
+    setCreatingManualFattura(true);
+    setError("");
+
+    await api.post("/financial-summary/manual-fattura/", {
+      condominioId: manualFatturaForm.condominioId,
+      descrizione: manualFatturaForm.descrizione,
+      dataDocumento: manualFatturaForm.dataDocumento,
+      importo,
+      proformaIds: selectedProformaIdsForManualFattura,
+    });
+
+    setIsCreateManualFatturaModalOpen(false);
+    setManualFatturaForm({
+      condominioId: "",
+      descrizione: "",
+      dataDocumento: new Date().toISOString().slice(0, 10),
+      importo: "",
+    });
+    setManualFatturaProformaSearch("");
+    setSelectedProformaIdsForManualFattura([]);
+
+    await Promise.all([
+      loadSummary(),
+      loadRecentRows(),
+      loadProformasRows(),
+      loadFattureRows(),
+    ]);
+  } catch (err: any) {
+    console.error("createManualFattura error:", err?.response?.data || err);
+    setError(
+      err?.response?.data?.error || "Errore durante la creazione manuale della fattura."
+    );
+  } finally {
+    setCreatingManualFattura(false);
+  }
+}
+
   function rememberImportedTableScroll() {
     if (importedTableScrollRef.current) {
       importedTableScrollTopRef.current = importedTableScrollRef.current.scrollTop;
@@ -544,7 +747,7 @@ async function loadPaymentDetail(id: string) {
     const quickActions = [
       {
         key: "new-proforma",
-        title: "Nuova proforma",
+        title: "Nuovo proforma",
         description: "Inserimento manuale di una proforma singola.",
         badge: "Manuale",
       },
@@ -1300,22 +1503,41 @@ async function waitForImportedFilesCompletion(
 
   function handleQuickAction(actionKey: string) {
     if (actionKey === "new-proforma") {
-      console.log("TODO: apri modal nuova proforma");
+      setManualProformaForm({
+        condominioId: "",
+        descrizione: "",
+        dataDocumento: new Date().toISOString().slice(0, 10),
+        importo: "",
+      });
+      setIsCreateManualProformaModalOpen(true);
+      void loadCondomini();
       return;
     }
+
     if (actionKey === "new-fattura") {
-      console.log("TODO: apri modal nuova fattura");
+      setManualFatturaForm({
+        condominioId: "",
+        descrizione: "",
+        dataDocumento: new Date().toISOString().slice(0, 10),
+        importo: "",
+      });
+      setManualFatturaProformaSearch("");
+      setSelectedProformaIdsForManualFattura([]);
+      setIsCreateManualFatturaModalOpen(true);
+      void loadCondomini();
+      void loadProformasRows();
       return;
     }
+
     if (actionKey === "upload-proforme") {
-      console.log("TODO: apri modal nuova proforma");
       return;
-       
     }
+
     if (actionKey === "upload-fatture") {
-      console.log("TODO: apri upload batch fatture");
+      return;
     }
   }
+
 async function loadImportedFattureDocuments() {
   try {
     setLoadingImportedFattureDocs(true);
@@ -1587,6 +1809,46 @@ async function uploadProformaFiles() {
     return matchesSearch && matchesStatus;
   });
 }, [paymentsRows, paymentSearch, paymentStatusFilter]);
+
+
+  function handleCreateManualCard(cardKey: string) {
+    if (cardKey === "proforma") {
+      setManualProformaForm({
+        condominioId: "",
+        descrizione: "",
+        dataDocumento: new Date().toISOString().slice(0, 10),
+        importo: "",
+      });
+      setIsCreateManualProformaModalOpen(true);
+      void loadCondomini();
+      return;
+    }
+
+    if (cardKey === "fatture") {
+      setManualFatturaForm({
+        condominioId: "",
+        descrizione: "",
+        dataDocumento: new Date().toISOString().slice(0, 10),
+        importo: "",
+      });
+      setIsCreateManualFatturaModalOpen(true);
+      void loadCondomini();
+      return;
+    }
+  }
+
+  function handleOpenDetailSection(cardKey: string) {
+    rememberImportedTableScroll();
+
+    setActiveDetailSection(
+      cardKey === "proforma"
+        ? "PROFORMA"
+        : cardKey === "fatture"
+        ? "FATTURA"
+        : "PAGAMENTO"
+    );
+  }
+
   const renderImportedTableSection = (
     title: string,
     subtitle: string,
@@ -1604,14 +1866,7 @@ async function uploadProformaFiles() {
             {importedDocsTotal} document{importedDocsTotal === 1 ? "o" : "i"}
           </div>
         </div>
-
-        {error ? (
-          <div className="px-5 py-10 text-center">
-            <div className="mx-auto max-w-md">
-              <div className="text-sm font-semibold text-rose-700">{error}</div>
-            </div>
-          </div>
-        ) : loadingImportedDocs ? (
+        { loadingImportedDocs ? (
           <div className="px-5 py-10 text-center">
             <div className="mx-auto max-w-md">
               <div className="text-sm font-semibold text-slate-700">
@@ -1992,68 +2247,113 @@ async function uploadProformaFiles() {
 
         <div className="space-y-6 bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100/80 p-1 rounded-[36px]">
           {/* Summary cards */}
+ 
           <section className="grid gap-4 xl:grid-cols-3">
+            
             {summaryCards.map((card) => (
-              <article
-                key={card.key}
-                className="group relative overflow-hidden rounded-[30px] border border-slate-300/70 bg-gradient-to-b from-white via-slate-50 to-slate-100/80 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
+<article
+  key={card.key}
+  className="group relative overflow-hidden rounded-[30px] border border-slate-300/70 bg-gradient-to-b from-white via-slate-50 to-slate-100/80 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
+>
+  <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${card.accent}`} />
+
+  <div className="p-5 sm:p-6">
+    {/* Header */}
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+          {card.eyebrow}
+        </div>
+
+        <h2 className="mt-3 text-lg font-bold tracking-tight text-slate-900">
+          {card.title}
+        </h2>
+      </div>
+
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-slate-300/70 bg-slate-200/80 text-2xl text-slate-700 shadow-inner">
+        {card.icon}
+      </div>
+    </div>
+
+    {/* Body */}
+    <div className="mt-7 border-t border-slate-200/80 pt-5">
+      <div className="grid gap-5 md:grid-cols-[1fr_220px] md:items-end">
+        {/* Total */}
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            Totale
+          </div>
+
+          <div className="mt-2 text-4xl font-bold leading-none tracking-tight text-slate-900">
+            {loadingSummary ? (
+              <span className="animate-pulse text-slate-400">...</span>
+            ) : (
+              formatAmount(card.amount)
+            )}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => handleCreateManualCard(card.key)}
+            className={`group inline-flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold transition ${card.border} ${card.text} bg-white shadow-sm hover:-translate-y-[1px] hover:bg-white hover:shadow-md active:scale-[0.99]`}
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 transition group-hover:bg-slate-200">
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
               >
-                <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${card.accent}`} />
+                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+              </svg>
+            </span>
 
-                <div className="p-5 sm:p-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        {card.eyebrow}
-                      </div>
+            <span className="flex-1 text-left">
+              {card.key === "proforma"
+                ? "Nuovo proforma"
+                : card.key === "fatture"
+                ? "Nuova fattura"
+                : "Nuovo pagamento"}
+            </span>
+          </button>
 
-                      <h2 className="mt-3 text-lg font-bold tracking-tight text-slate-900">
-                        {card.title}
-                      </h2>
-                    </div>
+          <button
+            onClick={() => handleOpenDetailSection(card.key)}
+            className="inline-flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-[1px] hover:bg-white hover:shadow-md active:scale-[0.99]"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-slate-200">
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M3.75 12h16.5" strokeLinecap="round" />
+                <path
+                  d="M13.5 5.25L20.25 12 13.5 18.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
 
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-slate-300/70 bg-slate-200/80 text-2xl text-slate-700 shadow-inner">
-                      {card.icon}
-                    </div>
-                  </div>
+            <span className="flex-1 text-left">Dettagli</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
-                  <div className="mt-7 flex items-end justify-between gap-4"> 
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
-                        Totale
-                      </div>
-                      <div className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-                        {loadingSummary ? "..." : formatAmount(card.amount)}
-                      </div>
-                    </div>
-
-                    <button
-                      className={`inline-flex items-center rounded-2xl border px-4 py-2.5 text-sm font-semibold transition ${card.border} ${card.text} bg-white/90 shadow-sm hover:bg-white`}
-                        onClick={() =>
-                        {
-                          rememberImportedTableScroll();
-                          setActiveDetailSection(
-                            card.key === "proforma"
-                              ? "PROFORMA"
-                              : card.key === "fatture"
-                              ? "FATTURA"
-                              : "PAGAMENTO"
-                          )
-                        }
-                      }
-                    >
-                      Dettagli
-                    </button>
-                  </div>
-                </div>
-
-                <div className="border-t border-slate-200 bg-slate-100/80 px-5 py-3 sm:px-6">
-                  <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>Panoramica aggiornata</span>
-                    {/* <span className="font-semibold text-slate-700">Dashboard</span> */}
-                  </div>
-                </div>
-              </article>
+  <div className="border-t border-slate-200 bg-slate-100/80 px-5 py-3 sm:px-6">
+    <div className="flex items-center justify-between text-xs text-slate-500">
+      <span>Panoramica aggiornata</span>
+    </div>
+  </div>
+</article>
             ))}
           </section>
 
@@ -2102,6 +2402,7 @@ async function uploadProformaFiles() {
                       <option value={20}>20 righe</option>
                       <option value={50}>50 righe</option>
                     </select>
+
 
                     <button
                       onClick={() => setActiveDetailSection(null)}
@@ -2162,38 +2463,121 @@ async function uploadProformaFiles() {
                             </td>
                             <td className="px-6 py-4 text-slate-700">{row.fattura_numero || "-"}</td>
                             <td className="px-6 py-4 text-right">
-                              <div className="flex justify-end gap-2">
-                                {row.stato === "EMESSA" ? (
-                                  <div className="flex justify-end gap-2">
-                                    <button
-                                      onClick={() => annullaProforma(row.id)}
-                                      disabled={annullingId === row.id}
-                                      className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-60"
-                                    >
-                                      {annullingId === row.id ? "..." : "ANNULLA"}
-                                    </button>
+                              <div className="flex items-center justify-end gap-2">
+      {row.stato === "EMESSA" ? (
+        <>
+          {/* ANNULLA */}
+          <button
+            onClick={() => annullaProforma(row.id)}
+            disabled={annullingId === row.id}
+            title="Annulla proforma"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {annullingId === row.id ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300 border-t-amber-700" />
+            ) : (
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  d="M6 6l12 12M18 6L6 18"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
 
-                                    <button
-                                      onClick={() => deleteProforma(row.id)}
-                                      disabled={deletingId === row.id}
-                                      className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+          {/* ELIMINA */}
+          <button
+            onClick={() => deleteProforma(row.id)}
+            disabled={deletingId === row.id}
+            title="Elimina proforma"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-rose-200 bg-rose-50 text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {deletingId === row.id ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" />
+            ) : (
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </button>
+        </>
+      ) : (
+        <div className="px-2 text-xs text-slate-400">-</div>
+      )}
+
+                                  {/* ASSOCIA */}
+                                  <button
+                                    onClick={() => {
+                                      setLinkingProforma(row);
+                                      setSelectedFatturaId("");
+                                    }}
+                                    disabled={row.stato === "ANNULLATA" || row.fattura_numero != null}
+                                    title="Associa a fattura"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      className="h-4 w-4"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
                                     >
-                                      {deletingId === row.id ? "..." : "ELIMINA"}
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="text-right text-xs text-slate-400">-</div>
-                                )}
-                                <button
-                                  onClick={() => {
-                                    setLinkingProforma(row);
-                                    setSelectedFatturaId("");
-                                  }}
-                                  disabled={row.stato === "ANNULLATA" || row.fattura_numero != null}
-                                  className="rounded-xl border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-50"
-                                >
-                                  ASSOCIA
-                                </button>
+                                      <path
+                                        d="M10 13a5 5 0 007.07 0l1.41-1.41a5 5 0 00-7.07-7.07L10 5"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                      <path
+                                        d="M14 11a5 5 0 00-7.07 0L5.52 12.41a5 5 0 107.07 7.07L14 19"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  </button>
+
+                                  {/* STAMPA */}
+                                  <button
+                                    onClick={() => void printProformaPdf((row.id))}
+                                    disabled={row.stato === "ANNULLATA" || row.fattura_numero != null}
+                                    title="Stampa proforma"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 shadow-sm transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      className="h-4 w-4"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                    >
+                                      <path
+                                        d="M7 9V4h10v5M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                      <path
+                                        d="M7 14h10v6H7z"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  </button>
                               </div>
                             </td>
                           </tr>
@@ -2410,6 +2794,31 @@ async function uploadProformaFiles() {
                                           <path strokeLinecap="round" strokeLinejoin="round" d="M18 6L6 18M6 6l12 12" />
                                         </svg>
                                       )}
+                                    </button>
+                                    <button
+                                      onClick={() => void printFatturaPdf((row.id))}
+                                      disabled={row.stato === "ANNULLATA" || row.fattura_numero != null}
+                                      title="Stampa fattura"
+                                      className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 shadow-sm transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        className="h-4 w-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                      >
+                                        <path
+                                          d="M7 9V4h10v5M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                        <path
+                                          d="M7 14h10v6H7z"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                      </svg>
                                     </button>
 
                                   </div>
@@ -3746,7 +4155,7 @@ async function uploadProformaFiles() {
                         </div>
 
                         <div>
-                          <span className="font-semibold">Proforme selezionate:</span>{" "}
+                          <span className="font-semibold">Proforma selezionati:</span>{" "}
                           {selectedProformaIdsForFattura.length}
                         </div>
                       </div>
@@ -4481,6 +4890,640 @@ async function uploadProformaFiles() {
                       className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {registeringPayment ? "Registrazione..." : "Conferma pagamento"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isCreateManualProformaModalOpen ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-[2px]">
+              <div className="relative w-full max-w-3xl overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
+                <div className="h-1.5 w-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500" />
+
+                {/* header */}
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 sm:px-7">
+                  <div className="min-w-0">
+                    <div className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                      Creazione manuale
+                    </div>
+
+                    <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">
+                      Nuovo proforma
+                    </h3>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      Inserisci i dati principali e genera manualmente un nuovo proforma.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setIsCreateManualProformaModalOpen(false)}
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+                    title="Chiudi"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* body */}
+                <div className="grid gap-6 px-6 py-6 sm:px-7 lg:grid-cols-[1fr_320px]">
+                  {/* form */}
+                  <div className="space-y-5">
+                    {/* searchable condominio */}
+                    <div className="relative">
+                      <label className="mb-2 block text-sm font-semibold text-slate-700">
+                        Condominio
+                      </label>
+
+                      <input
+                        type="text"
+                        value={condominiSearch}
+                        onChange={(e) => setCondominiSearch(e.target.value)}
+                        placeholder="Cerca indirizzo condominio..."
+                        className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      />
+
+                      <div className="mt-2 max-h-56 overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setManualProformaForm((prev) => ({ ...prev, condominioId: "" }))
+                          }
+                          className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
+                            !manualProformaForm.condominioId
+                              ? "bg-sky-50 font-semibold text-sky-700"
+                              : "text-slate-700"
+                          }`}
+                        >
+                          Nessun condominio selezionato
+                        </button>
+
+                        {condomini
+                          .filter((c) =>
+                            `${c.indirizzo || ""}`.toLowerCase().includes(condominiSearch.toLowerCase())
+                          )
+                          .map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                setManualProformaForm((prev) => ({
+                                  ...prev,
+                                  condominioId: String(c.id),
+                                }));
+                                setCondominiSearch(c.indirizzo || "");
+                              }}
+                              className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
+                                String(manualProformaForm.condominioId) === String(c.id)
+                                  ? "bg-sky-50 font-semibold text-sky-700"
+                                  : "text-slate-700"
+                              }`}
+                            >
+                              {c.indirizzo}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold text-slate-700">
+                        Descrizione
+                      </label>
+                      <textarea
+                        value={manualProformaForm.descrizione}
+                        onChange={(e) =>
+                          setManualProformaForm((prev) => ({ ...prev, descrizione: e.target.value }))
+                        }
+                        rows={5}
+                        placeholder="Es. proforma per ripartizione costi, acconto, saldo..."
+                        className="w-full rounded-[24px] border border-slate-300 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      />
+                    </div>
+
+                    <div className="grid gap-5 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-700">
+                          Data documento
+                        </label>
+                        <input
+                          type="date"
+                          value={manualProformaForm.dataDocumento}
+                          onChange={(e) =>
+                            setManualProformaForm((prev) => ({
+                              ...prev,
+                              dataDocumento: e.target.value,
+                            }))
+                          }
+                          className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm font-semibold text-slate-700">
+                          Importo
+                        </label>
+                        <div className="relative">
+                          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
+                            €
+                          </span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={manualProformaForm.importo}
+                            onChange={(e) =>
+                              setManualProformaForm((prev) => ({ ...prev, importo: e.target.value }))
+                            }
+                            placeholder="0,00"
+                            className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-9 pr-4 text-sm font-medium text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* side summary */}
+                  <aside className="space-y-4">
+                    <div className="rounded-[28px] border border-slate-200 bg-slate-50/80 p-5">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Riepilogo
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200/70">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Condominio selezionato
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-800">
+                            {condomini.find(
+                              (c) => String(c.id) === String(manualProformaForm.condominioId)
+                            )?.indirizzo || "-"}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200/70">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Data
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-800">
+                            {manualProformaForm.dataDocumento || "-"}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">
+                            Importo previsto
+                          </div>
+                          <div className="mt-1 text-lg font-extrabold text-sky-800">
+                            {manualProformaForm.importo
+                              ? new Intl.NumberFormat("it-IT", {
+                                  style: "currency",
+                                  currency: "EUR",
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                }).format(Number(manualProformaForm.importo || 0))
+                              : "€ 0,00"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+
+                {/* footer */}
+                <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-6 py-4 sm:flex-row sm:items-center sm:px-7">
+                  <div className="text-xs text-slate-500">
+                    Controlla condominio, data e importo prima della conferma.
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setIsCreateManualProformaModalOpen(false)}
+                      className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                    >
+                      Annulla
+                    </button>
+
+                    <button
+                      onClick={createManualProforma}
+                      disabled={creatingManualProforma}
+                      className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {creatingManualProforma ? "Creazione..." : "Conferma proforma"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isCreateManualFatturaModalOpen ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-[2px]">
+              <div className="relative w-full max-w-6xl overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
+                <div className="h-1.5 w-full bg-gradient-to-r from-fuchsia-400 via-violet-500 to-indigo-500" />
+
+                {/* header */}
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 sm:px-7">
+                  <div className="min-w-0">
+                    <div className="inline-flex items-center rounded-full border border-fuchsia-200 bg-fuchsia-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-fuchsia-700">
+                      Creazione manuale
+                    </div>
+
+                    <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">
+                      Nuova fattura
+                    </h3>
+
+                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+                      Crea manualmente una fattura e, se necessario, collega una o più proforme già esistenti.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setIsCreateManualFatturaModalOpen(false)}
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+                    title="Chiudi"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* body */}
+                <div className="grid gap-6 px-6 py-6 sm:px-7 xl:grid-cols-[360px_minmax(0,1fr)]">
+                  {/* left side - form */}
+                  <aside className="space-y-5">
+                    <div className="rounded-[28px] border border-slate-200 bg-slate-50/80 p-5">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Dati fattura
+                      </div>
+
+                      <div className="mt-4 space-y-5">
+                        {/* searchable condominio */}
+                        <div>
+                          <label className="mb-2 block text-sm font-semibold text-slate-700">
+                            Condominio
+                          </label>
+
+                          <input
+                            type="text"
+                            value={condominiSearch}
+                            onChange={(e) => setCondominiSearch(e.target.value)}
+                            placeholder="Cerca indirizzo condominio..."
+                            className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                          />
+
+                          <div className="mt-2 max-h-56 overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setManualFatturaForm((prev) => ({ ...prev, condominioId: "" }))
+                              }
+                              className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
+                                !manualFatturaForm.condominioId
+                                  ? "bg-fuchsia-50 font-semibold text-fuchsia-700"
+                                  : "text-slate-700"
+                              }`}
+                            >
+                              Nessun condominio selezionato
+                            </button>
+
+                            {condomini
+                              .filter((c) =>
+                                `${c.indirizzo || ""}`.toLowerCase().includes(condominiSearch.toLowerCase())
+                              )
+                              .map((c) => (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setManualFatturaForm((prev) => ({
+                                      ...prev,
+                                      condominioId: String(c.id),
+                                    }));
+                                    setCondominiSearch(c.indirizzo || "");
+                                  }}
+                                  className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
+                                    String(manualFatturaForm.condominioId) === String(c.id)
+                                      ? "bg-fuchsia-50 font-semibold text-fuchsia-700"
+                                      : "text-slate-700"
+                                  }`}
+                                >
+                                  {c.indirizzo}
+                                </button>
+                              ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="mb-2 block text-sm font-semibold text-slate-700">
+                            Descrizione
+                          </label>
+                          <textarea
+                            value={manualFatturaForm.descrizione}
+                            onChange={(e) =>
+                              setManualFatturaForm((prev) => ({ ...prev, descrizione: e.target.value }))
+                            }
+                            rows={5}
+                            placeholder="Es. fattura periodo, saldo, conguaglio, ripartizione..."
+                            className="w-full rounded-[24px] border border-slate-300 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                          />
+                        </div>
+
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div>
+                            <label className="mb-2 block text-sm font-semibold text-slate-700">
+                              Data documento
+                            </label>
+                            <input
+                              type="date"
+                              value={manualFatturaForm.dataDocumento}
+                              onChange={(e) =>
+                                setManualFatturaForm((prev) => ({
+                                  ...prev,
+                                  dataDocumento: e.target.value,
+                                }))
+                              }
+                              className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-2 block text-sm font-semibold text-slate-700">
+                              Importo
+                            </label>
+                            <div className="relative">
+                              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
+                                €
+                              </span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={manualFatturaForm.importo}
+                                onChange={(e) =>
+                                  setManualFatturaForm((prev) => ({ ...prev, importo: e.target.value }))
+                                }
+                                placeholder="0,00"
+                                className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-9 pr-4 text-sm font-medium text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* left side summary */}
+                    <div className="rounded-[28px] border border-slate-200 bg-white p-5">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Riepilogo rapido
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        <div className="rounded-2xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200/70">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Condominio selezionato
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-800">
+                            {condomini.find(
+                              (c) => String(c.id) === String(manualFatturaForm.condominioId)
+                            )?.indirizzo || "-"}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200/70">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Data
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-800">
+                            {manualFatturaForm.dataDocumento || "-"}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+                            Importo fattura
+                          </div>
+                          <div className="mt-1 text-lg font-extrabold text-fuchsia-800">
+                            {manualFatturaForm.importo
+                              ? new Intl.NumberFormat("it-IT", {
+                                  style: "currency",
+                                  currency: "EUR",
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                }).format(Number(manualFatturaForm.importo || 0))
+                              : "€ 0,00"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </aside>
+
+                  {/* right side - proformas */}
+                  <section className="space-y-5">
+                    <div className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-800">
+                            Proforme disponibili da associare
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Seleziona una o più proforme già esistenti da collegare alla fattura.
+                          </div>
+                        </div>
+
+                        <input
+                          value={manualFatturaProformaSearch}
+                          onChange={(e) => setManualFatturaProformaSearch(e.target.value)}
+                          placeholder="Cerca numero, condominio, descrizione..."
+                          className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100 sm:max-w-[320px]"
+                        />
+                      </div>
+
+                      <div className="max-h-[430px] overflow-auto">
+                        <table className="min-w-full text-sm">
+                          <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            <tr className="border-b border-slate-200">
+                              <th className="px-4 py-3">Sel.</th>
+                              <th className="px-4 py-3">Numero</th>
+                              <th className="px-4 py-3">Condominio</th>
+                              <th className="px-4 py-3">Descrizione</th>
+                              <th className="px-4 py-3 text-right">Importo</th>
+                              <th className="px-4 py-3">Stato</th>
+                            </tr>
+                          </thead>
+
+                          <tbody>
+                            {filteredAvailableProformasForManualFattura.length === 0 ? (
+                              <tr>
+                                <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                                  Nessuna proforma disponibile.
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredAvailableProformasForManualFattura.map((p: any, index: number) => {
+                                const checked = selectedProformaIdsForManualFattura.includes(p.id);
+
+                                return (
+                                  <tr
+                                    key={p.id}
+                                    className={`border-b border-slate-100 transition ${
+                                      checked
+                                        ? "bg-fuchsia-50"
+                                        : index % 2 === 0
+                                        ? "bg-white hover:bg-slate-50"
+                                        : "bg-slate-50/60 hover:bg-slate-100/70"
+                                    }`}
+                                  >
+                                    <td className="px-4 py-3">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setSelectedProformaIdsForManualFattura((prev) =>
+                                              prev.includes(p.id) ? prev : [...prev, p.id]
+                                            );
+                                          } else {
+                                            setSelectedProformaIdsForManualFattura((prev) =>
+                                              prev.filter((id) => id !== p.id)
+                                            );
+                                          }
+                                        }}
+                                        className="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500"
+                                      />
+                                    </td>
+
+                                    <td className="px-4 py-3 font-semibold text-slate-800">
+                                      {p.numero}
+                                    </td>
+
+                                    <td className="px-4 py-3 text-slate-700">
+                                      {p.condominio || "-"}
+                                    </td>
+
+                                    <td className="px-4 py-3 text-slate-700">
+                                      {p.descrizione || "-"}
+                                    </td>
+
+                                    <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                                      {euro(Number(p.importo || 0))}
+                                    </td>
+
+                                    <td className="px-4 py-3">
+                                      <span
+                                        className={`rounded-full px-2 py-1 text-[11px] font-semibold ring-1 ${
+                                          statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                                        }`}
+                                      >
+                                        {String(p.stato || "").replaceAll("_", " ")}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[28px] border border-fuchsia-200 bg-fuchsia-50 p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fuchsia-700">
+                            Proforme selezionate
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {selectedProformaIdsForManualFattura.length === 0 ? (
+                              <div className="text-sm text-slate-500">
+                                Nessuna proforma selezionata.
+                              </div>
+                            ) : (
+                              availableProformasForManualFattura
+                                .filter((p: any) => selectedProformaIdsForManualFattura.includes(p.id))
+                                .map((p: any) => (
+                                  <span
+                                    key={p.id}
+                                    className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm font-medium text-fuchsia-800 ring-1 ring-fuchsia-200"
+                                  >
+                                    {p.numero}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setSelectedProformaIdsForManualFattura((prev) =>
+                                          prev.filter((id) => id !== p.id)
+                                        )
+                                      }
+                                      className="text-fuchsia-700"
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                ))
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="min-w-[220px] rounded-2xl bg-white px-4 py-4 shadow-sm ring-1 ring-fuchsia-200/70">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+                            Totale proforme selezionate
+                          </div>
+                          <div className="mt-1 text-lg font-extrabold text-slate-900">
+                            {new Intl.NumberFormat("it-IT", {
+                              style: "currency",
+                              currency: "EUR",
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }).format(
+                              availableProformasForManualFattura
+                                .filter((p: any) => selectedProformaIdsForManualFattura.includes(p.id))
+                                .reduce((sum: number, p: any) => sum + Number(p.importo || 0), 0)
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+
+                {/* footer */}
+                <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-6 py-4 sm:flex-row sm:items-center sm:px-7">
+                  <div className="text-xs text-slate-500">
+                    Verifica importo, condominio e proforme collegate prima della conferma.
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setIsCreateManualFatturaModalOpen(false)}
+                      className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                    >
+                      Annulla
+                    </button>
+
+                    <button
+                      onClick={createManualFattura}
+                      disabled={creatingManualFattura}
+                      className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {creatingManualFattura ? "Creazione..." : "Conferma fattura"}
                     </button>
                   </div>
                 </div>
