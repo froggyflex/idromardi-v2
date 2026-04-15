@@ -1571,20 +1571,38 @@ async function uploadFatturaFiles() {
     setError("");
 
     const formData = new FormData();
-    selectedUploadFiles.forEach((file) => formData.append("files", file));
-
-    await api.post("/financial-summary/imported-documents/uploadf", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
+    selectedUploadFiles.forEach((file) => {
+      formData.append("files", file);
     });
 
-    setSelectedUploadFiles([]);
-     
-      setTimeout(() => {
-            loadImportedDocuments();
-      }, 800);
+    const { data } = await api.post(
+      "/financial-summary/imported-documents/uploadf",
+      formData,
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+      }
+    );
 
+    setSelectedUploadFiles([]);
+
+    const uploadedIds = Array.isArray(data?.files)
+      ? data.files.map((f: any) => f.id).filter(Boolean)
+      : [];
+
+    const completed = await waitForImportedFilesCompletion(uploadedIds);
+
+    if (!completed) {
+      console.warn(
+        "Non tutti i documenti risultano completati entro il tempo previsto. Ricarico comunque la lista."
+      );
+      setImportedDocsPage(1);
+      await loadImportedDocuments(1, activeImportTab, importedDocsSearch);
+    }
   } catch (err: any) {
-    setError(err?.response?.data?.error || "Errore nel caricamento dei file fattura.");
+    setError(
+      err?.response?.data?.error ||
+        "Errore nel caricamento dei file proforma."
+    );
   } finally {
     setUploading(false);
   }
