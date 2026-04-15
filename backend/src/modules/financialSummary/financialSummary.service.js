@@ -931,7 +931,7 @@ async function getImportedDocumentDetail(fileId) {
     FROM import_batch_files f
     LEFT JOIN import_items i
       ON i.promoted_entity_id = f.id
-     AND i.document_type = 'PROFORMA'
+     
     WHERE f.id = ?
     LIMIT 1
     `,
@@ -3827,11 +3827,7 @@ function buildFinancialDocument({
                   <div class="chip-label">data di emissione</div>
                   <div class="chip-value">${esc(shortDate || "-")}</div>
                 </div>
-
-                <div class="chip yellow">
-                  <div class="chip-label">condominio</div>
-                  <div class="chip-value">${esc(textOrDash(customerAddressLine1))}</div>
-                </div>
+ 
               </div>
 
 
@@ -3841,8 +3837,8 @@ function buildFinancialDocument({
           <section class="hero">
             <div class="period-block">
               <div class="period-label">Documento di riferimento</div>
-              <div class="period-dates">${esc(title)}</div>
-              <div class="period-sub"></div>
+              <div class="period-dates">${esc(title)}<br><br></div>
+              <div class="period-dates">Spett.le<br>${esc(textOrDash(customerAddressLine1))}</div>
             </div>
 
           </section>

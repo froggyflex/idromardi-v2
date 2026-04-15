@@ -10,6 +10,7 @@ router.get("/recent", controller.getRecentRows);
 
 router.get("/imported-documents", controller.getImportedDocuments);
 router.get("/imported-documents/:id", controller.getImportedDocumentDetail);
+
 router.delete("/imported-documents/fattura/:id", controller.deleteImportedDocumentF);
 router.delete("/imported-documents/proforma/:id", controller.deleteImportedDocument);
 router.post("/manual-proforma", controller.createManualProforma);

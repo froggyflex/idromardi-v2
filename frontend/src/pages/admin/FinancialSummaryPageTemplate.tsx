@@ -277,7 +277,7 @@ export default function FinancialSummaryPageTemplate() {
   const [condomini, setCondomini] = useState<any[]>([]);
   const [condominiSearch, setCondominiSearch] = useState("");
   const [isLocked, setIsLocked] = useState(false);
-  const [activeImportTab, setActiveImportTab] = useState<"PROFORMA" | "FATTURA">("PROFORMA");
+  const [activeImportTab, setActiveImportTab] = useState<"PROFORMA" | "FATTURA">("FATTURA");
   const [selectedCondomini, setSelectedCondomini] = useState<{ id: string; indirizzo: string }[]>([]);
   
 
@@ -1445,6 +1445,7 @@ async function waitForImportedFilesCompletion(
     try {
       const { data } = await api.get(`/financial-summary/imported-documents/${id}`);
   
+      console.log("Documento importato selezionato:", data);
       setSelectedImportedDoc(data);
       if(data?.parse_status == "COMPLETATO_PROMOSSO") {
         setIsLocked(true);
@@ -4094,6 +4095,7 @@ async function uploadProformaFiles() {
 
                     <button
                       onClick={() => {
+                       
                         setIsCreateFatturaModalOpen(false);
                         setSelectedFatturaCondominioId("");
                         setSelectedProformaIdsForFattura([]);
@@ -4111,6 +4113,7 @@ async function uploadProformaFiles() {
                     <div className="rounded-2xl bg-slate-50 p-4">
                       <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                         Documento da approvare
+                        
                       </div>
 
                       <div className="mt-3 space-y-2 text-sm text-slate-700">
