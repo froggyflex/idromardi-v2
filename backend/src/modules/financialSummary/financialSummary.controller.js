@@ -505,8 +505,23 @@ async function printFatturaPdf(req, res) {
   }
 }
 
+async function resetProformaToEmessa(req, res) {
+  try {
+    const { id } = req.params;
+
+    await service.resetToEmessa(id);
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({
+      error: "Errore nel reset della proforma a EMESSA",
+    });
+  }
+}
+
 
 module.exports = {
+  resetProformaToEmessa,
   getSummary,
   getRecentRows,
   listImportedDocuments,

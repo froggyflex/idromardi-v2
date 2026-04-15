@@ -428,14 +428,18 @@ async function getFatturaDetail(id) {
       f.created_at,
       f.updated_at,
       c.indirizzo AS condominio
+        
     FROM fatture f
     LEFT JOIN condomini_v2 c
       ON c.id = f.condominio_id
+ 
     WHERE f.id = ?
     LIMIT 1
     `,
     [id]
   );
+
+
 
   if (!fattura) return null;
 
@@ -483,18 +487,22 @@ async function getFatturaDetail(id) {
   const importoFattura = Number(fattura.importo || 0);
   const totaleProforme = proformas.reduce((sum, p) => sum + Number(p.importo || 0), 0);
 
+    console.log("Fetched fattura:", fattura);
+
   return {
     id: fattura.id,
     condominio_id: fattura.condominio_id,
     numero_progressivo: fattura.numero_progressivo,
     numero: fattura.numero,
     descrizione: fattura.descrizione,
+     
     data_documento: fattura.data_documento,
     importo: importoFattura,
     stato: fattura.stato,
     created_at: fattura.created_at,
     updated_at: fattura.updated_at,
     condominio: fattura.condominio || "-",
+     
     totale_proforme_collegate: totaleProforme,
     residuo_da_associare: Math.max(importoFattura - totaleProforme, 0),
     eccedenza_proforme: Math.max(totaleProforme - importoFattura, 0),
@@ -537,12 +545,15 @@ async function listFattureSimple() {
       f.stato,
       f.created_at,
       f.updated_at,
+      pi.extracted_number as import_numero,
       c.indirizzo AS condominio,
 
       COALESCE(SUM(p.importo), 0) AS totale_proforme_collegate,
       COUNT(p.id) AS numero_proforme_collegate
 
     FROM fatture f
+    LEFT JOIN import_items pi
+      ON pi.promoted_entity_id = f.source_import_file_id
     LEFT JOIN condomini_v2 c
       ON c.id = f.condominio_id
     LEFT JOIN proformas p
@@ -577,6 +588,7 @@ async function listFattureSimple() {
       condominio_id: row.condominio_id,
       numero_progressivo: row.numero_progressivo,
       numero: row.numero,
+       
       descrizione: row.descrizione,
       data_documento: row.data_documento,
       importo: importoFattura,
@@ -584,7 +596,7 @@ async function listFattureSimple() {
       created_at: row.created_at,
       updated_at: row.updated_at,
       condominio: row.condominio || "-",
-
+      import_numero: row.import_numero || null,
       totale_proforme_collegate: totaleProforme,
       numero_proforme_collegate: Number(row.numero_proforme_collegate || 0),
       residuo_da_associare: Math.max(importoFattura - totaleProforme, 0),
@@ -4085,7 +4097,20 @@ async function generateProformaPdf(id) {
   return await htmlToPdfBuffer(html);
 }
 
+async function resetToEmessa(id) {
+  await db.query(
+    `
+    UPDATE proformas
+    SET stato = 'EMESSA',
+        fattura_id = NULL
+    WHERE id = ?
+    `,
+    [id]
+  );
+}
+
  module.exports = {
+  resetToEmessa,
   listImportedDocuments,
   getImportedDocumentDetail,
   uploadImportedDocuments,

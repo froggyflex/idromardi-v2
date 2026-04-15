@@ -57,6 +57,8 @@ router.get("/payments/:id", controller.getPaymentDetail);
 router.get("/proforme/:id/print",controller.printProformaPdf);
 router.get("/fatture/:id/print",controller.printFatturaPdf);
 
+router.put("/proforme/:id/reset-to-emessa",controller.resetProformaToEmessa);
+ 
 
 
 module.exports = router;
