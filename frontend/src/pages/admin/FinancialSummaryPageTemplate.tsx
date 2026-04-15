@@ -4082,7 +4082,7 @@ async function uploadProformaFiles() {
 
           {isCreateFatturaModalOpen && selectedImportedDoc && activeImportTab === "FATTURA" ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-              <div className="w-full max-w-7xl rounded-3xl bg-white shadow-2xl">
+              <div className="w-full max-w-8xl rounded-3xl bg-white shadow-2xl">
                 <div className="border-b border-slate-200 px-6 py-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
