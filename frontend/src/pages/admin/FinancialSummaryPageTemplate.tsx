@@ -802,27 +802,44 @@ async function loadPaymentDetail(id: string) {
   
 
   const [importedDocsSearch, setImportedDocsSearch] = useState("");
+const extractSearchFromDescription = (description: any) => {
+  const text = String(description ?? "").trim();
+  if (!text) return "";
 
-  const extractSearchFromDescription = (description: any) => {
-    const text = String(description ?? "").trim();
-    if (!text) return "";
+  const normalized = text
+    .replace(/\s+/g, " ")
+    .replace(/\s*,\s*/g, ", ")
+    .trim();
 
-    const normalized = text.replace(/\s+/g, " ").trim();
+  const stopWords =
+    "(?=\\s+(?:periodo|fatturazione|consumi|relativi|relativo|condominio|sito)\\b|$)";
 
-    const match =
-      normalized.match(/consumi\s+idrici\s+(.*?)(?:\s+periodo\b|$)/i) ||
-      normalized.match(/(via|viale|corso|piazza)\s+.*?(?:\s+periodo\b|$)/i);
+  const patterns = [
+    new RegExp(`\\balla\\s+((?:via|viale|corso|piazza)\\s+.*?)${stopWords}`, "i"),
+    new RegExp(`\\b((?:via|viale|corso|piazza)\\s+.*?)(?:,\\s*\\d{5}\\s*-\\s*[A-Za-zÀ-ÿ' ]+)?${stopWords}`, "i"),
+    new RegExp(`\\b((?:via|viale|corso|piazza)\\s+[^,]+(?:,\\s*[^,]+){0,2})`, "i"),
+  ];
 
-    let extracted = match?.[1] || match?.[0] || "";
-    if (!extracted) return "";
+  let extracted = "";
 
-    return extracted
-      .replace(/,\s*\d{5}\s*-\s*[A-Za-zÀ-ÿ' ]+$/i, "") // remove CAP + city
-      .replace(/\b\d{5}\b\s*-\s*[A-Za-zÀ-ÿ' ]+$/i, "")
-      .replace(/\s+/g, " ")
-      .replace(/,\s*$/, "") // ✅ remove trailing comma
-      .trim();
-  };
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      extracted = match[1];
+      break;
+    }
+  }
+
+  if (!extracted) return "";
+
+  return extracted
+    .replace(/,\s*\d{5}\s*-\s*[A-Za-zÀ-ÿ' ]+/i, "")
+    .replace(/\b\d{5}\b\s*-\s*[A-Za-zÀ-ÿ' ]+/i, "")
+    .replace(/\s+,/g, ",")
+    .replace(/,+/g, ",")
+    .replace(/,\s*$/g, "")
+    .trim();
+};
   
     async function annullaFattura(id: string) {
     const reason = window.prompt("Motivo annullamento fattura:");
