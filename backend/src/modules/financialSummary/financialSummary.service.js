@@ -3234,6 +3234,7 @@ async function getFatturaPrintData(id) {
 async function htmlToPdfBuffer(html) {
   const browser = await puppeteer.launch({
     headless: "new",
+    executablePath: puppeteer.executablePath(),
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
@@ -3754,6 +3755,24 @@ function buildFinancialDocumentPdfHtml(doc) {
           font-size: 8.5pt;
           color: #333;
         }
+
+        .recipient {
+          position: absolute;
+          top: 40mm;
+          right: 18mm;
+          width: 70mm;
+          text-align: left; /* IMPORTANT */
+        }
+
+        .label {
+          font-weight: 500;
+          margin-bottom: 4px;
+        }
+
+        .address {
+          line-height: 1.4;
+        }
+
       </style>
     </head>
     <body>
@@ -3838,10 +3857,17 @@ function buildFinancialDocument({
             <div class="period-block">
               <div class="period-label">Documento di riferimento</div>
               <div class="period-dates">${esc(title)}<br><br></div>
-              <div class="period-dates">Spett.le<br>${esc(textOrDash(customerAddressLine1))}</div>
+ 
             </div>
 
           </section>
+
+          <div class="recipient period-dates">
+            <div class="label">Spett.le</div>
+            <div class="address">
+              ${esc(textOrDash(customerAddressLine1))}
+            </div>
+          </div>
 
           <section class="content">
             <div class="left">
