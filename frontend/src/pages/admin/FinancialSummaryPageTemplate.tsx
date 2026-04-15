@@ -648,7 +648,7 @@ async function loadPaymentDetail(id: string) {
   function openRegisterPaymentModal(fattura: any) {
     setRegisterPaymentTargetFattura(fattura);
     setPaymentForm({
-      importo: String(Number(fattura.residuo_da_associare || 0) || ""),
+      importo: String(Number(fattura.importo || 0) || ""),
       paymentMethod: "BONIFICO",
       dataPagamento: new Date().toISOString().slice(0, 10),
       descrizione: "",
@@ -2900,6 +2900,14 @@ async function uploadProformaFiles() {
                           onClick={() => {
                             setSelectedProformaIdsForExistingFattura([]);
                             setFatturaProformaSearch("");
+                            setRegisterPaymentTargetFattura(selectedFatturaDetail);
+                            setPaymentForm({
+                              importo: String(Number(selectedFatturaDetail.importo || 0).toFixed(2)),
+                              paymentMethod: "BONIFICO",
+                              dataPagamento: new Date().toISOString().slice(0, 10),
+                              descrizione: `Pagamento fattura ${selectedFatturaDetail.numero || ""}`.trim(),
+                            });
+ 
                             setIsManageFatturaModalOpen(true);
                           }}
                           className="rounded-2xl border border-fuchsia-300 bg-fuchsia-50 px-4 py-3 text-sm font-semibold text-fuchsia-700"
@@ -4805,16 +4813,14 @@ async function uploadProformaFiles() {
                           Importo pagamento
                         </label>
                         <div className="relative">
-                          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
-                            €
-                          </span>
+                         
                           <input
                             type="number"
                             step="0.01"
-                            value={paymentForm.importo}
-                            onChange={(e) =>
-                              setPaymentForm((prev) => ({ ...prev, importo: euro(Number(registerPaymentTargetFattura.importo || 0)) }))
-                            }
+                              value={paymentForm.importo}
+                              onChange={(e) =>
+                                setPaymentForm((prev) => ({ ...prev, importo: e.target.value }))
+                              }
                             className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-9 pr-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                             placeholder="0.00"
                           />
@@ -5142,18 +5148,18 @@ async function uploadProformaFiles() {
           ) : null}
 
           {isCreateManualFatturaModalOpen ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-[2px]">
-              <div className="relative w-full max-w-6xl overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-4 backdrop-blur-[2px]">
+              <div className="relative flex h-[92vh] w-full max-w-[1380px] flex-col overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
                 <div className="h-1.5 w-full bg-gradient-to-r from-fuchsia-400 via-violet-500 to-indigo-500" />
 
                 {/* header */}
-                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5 sm:px-7">
+                <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
                   <div className="min-w-0">
                     <div className="inline-flex items-center rounded-full border border-fuchsia-200 bg-fuchsia-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-fuchsia-700">
                       Creazione manuale
                     </div>
 
-                    <h3 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">
+                    <h3 className="mt-2 text-xl font-bold tracking-tight text-slate-900">
                       Nuova fattura
                     </h3>
 
@@ -5164,7 +5170,7 @@ async function uploadProformaFiles() {
 
                   <button
                     onClick={() => setIsCreateManualFatturaModalOpen(false)}
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
                     title="Chiudi"
                   >
                     <svg
@@ -5181,345 +5187,357 @@ async function uploadProformaFiles() {
                 </div>
 
                 {/* body */}
-                <div className="grid gap-6 px-6 py-6 sm:px-7 xl:grid-cols-[360px_minmax(0,1fr)]">
-                  {/* left side - form */}
-                  <aside className="space-y-5">
-                    <div className="rounded-[28px] border border-slate-200 bg-slate-50/80 p-5">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                        Dati fattura
-                      </div>
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+                    <div className="space-y-5">
+                      {/* TOP STRIP */}
+                      <section className="grid gap-4 xl:grid-cols-[1.2fr_1fr_0.9fr]">
+                        {/* dati fattura */}
+                        <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                            Dati fattura
+                          </div>
 
-                      <div className="mt-4 space-y-5">
-                        {/* searchable condominio */}
-                        <div>
-                          <label className="mb-2 block text-sm font-semibold text-slate-700">
-                            Condominio
-                          </label>
+                          <div className="mt-4 space-y-4">
+                            <div>
+                              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                                Condominio
+                              </label>
 
-                          <input
-                            type="text"
-                            value={condominiSearch}
-                            onChange={(e) => setCondominiSearch(e.target.value)}
-                            placeholder="Cerca indirizzo condominio..."
-                            className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
-                          />
+                              <input
+                                type="text"
+                                value={condominiSearch}
+                                onChange={(e) => setCondominiSearch(e.target.value)}
+                                placeholder="Cerca indirizzo condominio..."
+                                className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                              />
 
-                          <div className="mt-2 max-h-56 overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setManualFatturaForm((prev) => ({ ...prev, condominioId: "" }))
-                              }
-                              className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
-                                !manualFatturaForm.condominioId
-                                  ? "bg-fuchsia-50 font-semibold text-fuchsia-700"
-                                  : "text-slate-700"
-                              }`}
-                            >
-                              Nessun condominio selezionato
-                            </button>
-
-                            {condomini
-                              .filter((c) =>
-                                `${c.indirizzo || ""}`.toLowerCase().includes(condominiSearch.toLowerCase())
-                              )
-                              .map((c) => (
+                              <div className="mt-2 max-h-44 overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
                                 <button
-                                  key={c.id}
                                   type="button"
-                                  onClick={() => {
-                                    setManualFatturaForm((prev) => ({
-                                      ...prev,
-                                      condominioId: String(c.id),
-                                    }));
-                                    setCondominiSearch(c.indirizzo || "");
-                                  }}
+                                  onClick={() =>
+                                    setManualFatturaForm((prev) => ({ ...prev, condominioId: "" }))
+                                  }
                                   className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
-                                    String(manualFatturaForm.condominioId) === String(c.id)
+                                    !manualFatturaForm.condominioId
                                       ? "bg-fuchsia-50 font-semibold text-fuchsia-700"
                                       : "text-slate-700"
                                   }`}
                                 >
-                                  {c.indirizzo}
+                                  Nessun condominio selezionato
                                 </button>
-                              ))}
-                          </div>
-                        </div>
 
-                        <div>
-                          <label className="mb-2 block text-sm font-semibold text-slate-700">
-                            Descrizione
-                          </label>
-                          <textarea
-                            value={manualFatturaForm.descrizione}
-                            onChange={(e) =>
-                              setManualFatturaForm((prev) => ({ ...prev, descrizione: e.target.value }))
-                            }
-                            rows={5}
-                            placeholder="Es. fattura periodo, saldo, conguaglio, ripartizione..."
-                            className="w-full rounded-[24px] border border-slate-300 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
-                          />
-                        </div>
+                                {condomini
+                                  .filter((c) =>
+                                    `${c.indirizzo || ""}`.toLowerCase().includes(condominiSearch.toLowerCase())
+                                  )
+                                  .map((c) => (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setManualFatturaForm((prev) => ({
+                                          ...prev,
+                                          condominioId: String(c.id),
+                                        }));
+                                        setCondominiSearch(c.indirizzo || "");
+                                      }}
+                                      className={`block w-full px-4 py-3 text-left text-sm transition hover:bg-slate-50 ${
+                                        String(manualFatturaForm.condominioId) === String(c.id)
+                                          ? "bg-fuchsia-50 font-semibold text-fuchsia-700"
+                                          : "text-slate-700"
+                                      }`}
+                                    >
+                                      {c.indirizzo}
+                                    </button>
+                                  ))}
+                              </div>
+                            </div>
 
-                        <div className="grid gap-4 sm:grid-cols-2">
-                          <div>
-                            <label className="mb-2 block text-sm font-semibold text-slate-700">
-                              Data documento
-                            </label>
-                            <input
-                              type="date"
-                              value={manualFatturaForm.dataDocumento}
-                              onChange={(e) =>
-                                setManualFatturaForm((prev) => ({
-                                  ...prev,
-                                  dataDocumento: e.target.value,
-                                }))
-                              }
-                              className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-2 block text-sm font-semibold text-slate-700">
-                              Importo
-                            </label>
-                            <div className="relative">
-                              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
-                                €
-                              </span>
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={manualFatturaForm.importo}
+                            <div>
+                              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                                Descrizione
+                              </label>
+                              <textarea
+                                value={manualFatturaForm.descrizione}
                                 onChange={(e) =>
-                                  setManualFatturaForm((prev) => ({ ...prev, importo: e.target.value }))
+                                  setManualFatturaForm((prev) => ({ ...prev, descrizione: e.target.value }))
                                 }
-                                placeholder="0,00"
-                                className="h-12 w-full rounded-2xl border border-slate-300 bg-white pl-9 pr-4 text-sm font-medium text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                                rows={4}
+                                placeholder="Es. fattura periodo, saldo, conguaglio, ripartizione..."
+                                className="w-full rounded-[20px] border border-slate-300 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
                               />
                             </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
 
-                    {/* left side summary */}
-                    <div className="rounded-[28px] border border-slate-200 bg-white p-5">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                        Riepilogo rapido
-                      </div>
-
-                      <div className="mt-4 space-y-3">
-                        <div className="rounded-2xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200/70">
+                        {/* date + amount */}
+                        <div className="rounded-[24px] border border-slate-200 bg-white p-4">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            Condominio selezionato
+                            Parametri documento
                           </div>
-                          <div className="mt-1 text-sm font-semibold text-slate-800">
-                            {condomini.find(
-                              (c) => String(c.id) === String(manualFatturaForm.condominioId)
-                            )?.indirizzo || "-"}
+
+                          <div className="mt-4 grid gap-4">
+                            <div>
+                              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                                Data documento
+                              </label>
+                              <input
+                                type="date"
+                                value={manualFatturaForm.dataDocumento}
+                                onChange={(e) =>
+                                  setManualFatturaForm((prev) => ({
+                                    ...prev,
+                                    dataDocumento: e.target.value,
+                                  }))
+                                }
+                                className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="mb-2 block text-sm font-semibold text-slate-700">
+                                Importo
+                              </label>
+                              <div className="relative">
+                                <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400">
+                                  €
+                                </span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={manualFatturaForm.importo}
+                                  onChange={(e) =>
+                                    setManualFatturaForm((prev) => ({ ...prev, importo: e.target.value }))
+                                  }
+                                  placeholder="0,00"
+                                  className="h-11 w-full rounded-2xl border border-slate-300 bg-white pl-9 pr-4 text-sm font-medium text-slate-800 outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100"
+                                />
+                              </div>
+                            </div>
                           </div>
                         </div>
 
-                        <div className="rounded-2xl bg-slate-50 px-4 py-3 ring-1 ring-slate-200/70">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            Data
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-slate-800">
-                            {manualFatturaForm.dataDocumento || "-"}
-                          </div>
-                        </div>
-
-                        <div className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 shadow-sm">
+                        {/* summary */}
+                        <div className="rounded-[24px] border border-fuchsia-200 bg-fuchsia-50 p-4">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
-                            Importo fattura
+                            Riepilogo rapido
                           </div>
-                          <div className="mt-1 text-lg font-extrabold text-fuchsia-800">
-                            {manualFatturaForm.importo
-                              ? new Intl.NumberFormat("it-IT", {
-                                  style: "currency",
-                                  currency: "EUR",
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                }).format(Number(manualFatturaForm.importo || 0))
-                              : "€ 0,00"}
+
+                          <div className="mt-4 space-y-3">
+                            <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-fuchsia-200/70">
+                              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                Condominio selezionato
+                              </div>
+                              <div className="mt-1 text-sm font-semibold text-slate-900">
+                                {condomini.find(
+                                  (c) => String(c.id) === String(manualFatturaForm.condominioId)
+                                )?.indirizzo || "-"}
+                              </div>
+                            </div>
+
+                            <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-fuchsia-200/70">
+                              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                Data
+                              </div>
+                              <div className="mt-1 text-sm font-semibold text-slate-900">
+                                {manualFatturaForm.dataDocumento || "-"}
+                              </div>
+                            </div>
+
+                            <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-fuchsia-200/70">
+                              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+                                Importo fattura
+                              </div>
+                              <div className="mt-1 text-lg font-extrabold text-fuchsia-800">
+                                {manualFatturaForm.importo
+                                  ? new Intl.NumberFormat("it-IT", {
+                                      style: "currency",
+                                      currency: "EUR",
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    }).format(Number(manualFatturaForm.importo || 0))
+                                  : "€ 0,00"}
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  </aside>
+                      </section>
 
-                  {/* right side - proformas */}
-                  <section className="space-y-5">
-                    <div className="rounded-[28px] border border-slate-200 bg-white shadow-sm">
-                      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-800">
-                            Proforme disponibili da associare
+                      {/* TABLE */}
+                      <section className="rounded-[24px] border border-slate-200 bg-white shadow-sm">
+                        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-800">
+                              Proforme disponibili da associare
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              Seleziona una o più proforme già esistenti da collegare alla fattura.
+                            </div>
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            Seleziona una o più proforme già esistenti da collegare alla fattura.
-                          </div>
+
+                          <input
+                            value={manualFatturaProformaSearch}
+                            onChange={(e) => setManualFatturaProformaSearch(e.target.value)}
+                            placeholder="Cerca numero, condominio, descrizione..."
+                            className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100 sm:max-w-[320px]"
+                          />
                         </div>
 
-                        <input
-                          value={manualFatturaProformaSearch}
-                          onChange={(e) => setManualFatturaProformaSearch(e.target.value)}
-                          placeholder="Cerca numero, condominio, descrizione..."
-                          className="h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none transition focus:border-fuchsia-400 focus:ring-4 focus:ring-fuchsia-100 sm:max-w-[320px]"
-                        />
-                      </div>
-
-                      <div className="max-h-[430px] overflow-auto">
-                        <table className="min-w-full text-sm">
-                          <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            <tr className="border-b border-slate-200">
-                              <th className="px-4 py-3">Sel.</th>
-                              <th className="px-4 py-3">Numero</th>
-                              <th className="px-4 py-3">Condominio</th>
-                              <th className="px-4 py-3">Descrizione</th>
-                              <th className="px-4 py-3 text-right">Importo</th>
-                              <th className="px-4 py-3">Stato</th>
-                            </tr>
-                          </thead>
-
-                          <tbody>
-                            {filteredAvailableProformasForManualFattura.length === 0 ? (
-                              <tr>
-                                <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
-                                  Nessuna proforma disponibile.
-                                </td>
+                        <div className="max-h-[360px] overflow-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="sticky top-0 z-10 bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                              <tr className="border-b border-slate-200">
+                                <th className="px-4 py-3">Sel.</th>
+                                <th className="px-4 py-3">Numero</th>
+                                <th className="px-4 py-3">Condominio</th>
+                                <th className="px-4 py-3">Descrizione</th>
+                                <th className="px-4 py-3 text-right">Importo</th>
+                                <th className="px-4 py-3">Stato</th>
                               </tr>
-                            ) : (
-                              filteredAvailableProformasForManualFattura.map((p: any, index: number) => {
-                                const checked = selectedProformaIdsForManualFattura.includes(p.id);
+                            </thead>
 
-                                return (
-                                  <tr
-                                    key={p.id}
-                                    className={`border-b border-slate-100 transition ${
-                                      checked
-                                        ? "bg-fuchsia-50"
-                                        : index % 2 === 0
-                                        ? "bg-white hover:bg-slate-50"
-                                        : "bg-slate-50/60 hover:bg-slate-100/70"
-                                    }`}
-                                  >
-                                    <td className="px-4 py-3">
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={(e) => {
-                                          if (e.target.checked) {
-                                            setSelectedProformaIdsForManualFattura((prev) =>
-                                              prev.includes(p.id) ? prev : [...prev, p.id]
-                                            );
-                                          } else {
+                            <tbody>
+                              {filteredAvailableProformasForManualFattura.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                                    Nessuna proforma disponibile.
+                                  </td>
+                                </tr>
+                              ) : (
+                                filteredAvailableProformasForManualFattura.map((p: any, index: number) => {
+                                  const checked = selectedProformaIdsForManualFattura.includes(p.id);
+
+                                  return (
+                                    <tr
+                                      key={p.id}
+                                      className={`border-b border-slate-100 transition ${
+                                        checked
+                                          ? "bg-fuchsia-50"
+                                          : index % 2 === 0
+                                          ? "bg-white hover:bg-slate-50"
+                                          : "bg-slate-50/60 hover:bg-slate-100/70"
+                                      }`}
+                                    >
+                                      <td className="px-4 py-3">
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={(e) => {
+                                            if (e.target.checked) {
+                                              setSelectedProformaIdsForManualFattura((prev) =>
+                                                prev.includes(p.id) ? prev : [...prev, p.id]
+                                              );
+                                            } else {
+                                              setSelectedProformaIdsForManualFattura((prev) =>
+                                                prev.filter((id) => id !== p.id)
+                                              );
+                                            }
+                                          }}
+                                          className="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500"
+                                        />
+                                      </td>
+
+                                      <td className="px-4 py-3 font-semibold text-slate-800">
+                                        {p.numero}
+                                      </td>
+
+                                      <td className="px-4 py-3 text-slate-700">
+                                        {p.condominio || "-"}
+                                      </td>
+
+                                      <td className="px-4 py-3 text-slate-700">
+                                        {p.descrizione || "-"}
+                                      </td>
+
+                                      <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                                        {euro(Number(p.importo || 0))}
+                                      </td>
+
+                                      <td className="px-4 py-3">
+                                        <span
+                                          className={`rounded-full px-2 py-1 text-[11px] font-semibold ring-1 ${
+                                            statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
+                                          }`}
+                                        >
+                                          {String(p.stato || "").replaceAll("_", " ")}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+
+                      {/* SELECTED AREA */}
+                      <section className="rounded-[24px] border border-fuchsia-200 bg-fuchsia-50 p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+                              Proforme selezionate
+                            </div>
+
+                            <div className="mt-3 max-h-32 overflow-auto pr-1">
+                              <div className="flex flex-wrap gap-2">
+                                {selectedProformaIdsForManualFattura.length === 0 ? (
+                                  <div className="text-sm text-slate-500">
+                                    Nessuna proforma selezionata.
+                                  </div>
+                                ) : (
+                                  availableProformasForManualFattura
+                                    .filter((p: any) => selectedProformaIdsForManualFattura.includes(p.id))
+                                    .map((p: any) => (
+                                      <span
+                                        key={p.id}
+                                        className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm font-medium text-fuchsia-800 ring-1 ring-fuchsia-200"
+                                      >
+                                        {p.numero}
+                                        <button
+                                          type="button"
+                                          onClick={() =>
                                             setSelectedProformaIdsForManualFattura((prev) =>
                                               prev.filter((id) => id !== p.id)
-                                            );
+                                            )
                                           }
-                                        }}
-                                        className="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500"
-                                      />
-                                    </td>
-
-                                    <td className="px-4 py-3 font-semibold text-slate-800">
-                                      {p.numero}
-                                    </td>
-
-                                    <td className="px-4 py-3 text-slate-700">
-                                      {p.condominio || "-"}
-                                    </td>
-
-                                    <td className="px-4 py-3 text-slate-700">
-                                      {p.descrizione || "-"}
-                                    </td>
-
-                                    <td className="px-4 py-3 text-right font-semibold text-slate-900">
-                                      {euro(Number(p.importo || 0))}
-                                    </td>
-
-                                    <td className="px-4 py-3">
-                                      <span
-                                        className={`rounded-full px-2 py-1 text-[11px] font-semibold ring-1 ${
-                                          statusClass[p.stato] || "bg-slate-100 text-slate-700 ring-slate-200"
-                                        }`}
-                                      >
-                                        {String(p.stato || "").replaceAll("_", " ")}
+                                          className="text-fuchsia-700"
+                                        >
+                                          ×
+                                        </button>
                                       </span>
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    <div className="rounded-[28px] border border-fuchsia-200 bg-fuchsia-50 p-5">
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fuchsia-700">
-                            Proforme selezionate
-                          </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {selectedProformaIdsForManualFattura.length === 0 ? (
-                              <div className="text-sm text-slate-500">
-                                Nessuna proforma selezionata.
+                                    ))
+                                )}
                               </div>
-                            ) : (
-                              availableProformasForManualFattura
-                                .filter((p: any) => selectedProformaIdsForManualFattura.includes(p.id))
-                                .map((p: any) => (
-                                  <span
-                                    key={p.id}
-                                    className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm font-medium text-fuchsia-800 ring-1 ring-fuchsia-200"
-                                  >
-                                    {p.numero}
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setSelectedProformaIdsForManualFattura((prev) =>
-                                          prev.filter((id) => id !== p.id)
-                                        )
-                                      }
-                                      className="text-fuchsia-700"
-                                    >
-                                      ×
-                                    </button>
-                                  </span>
-                                ))
-                            )}
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="min-w-[220px] rounded-2xl bg-white px-4 py-4 shadow-sm ring-1 ring-fuchsia-200/70">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
-                            Totale proforme selezionate
-                          </div>
-                          <div className="mt-1 text-lg font-extrabold text-slate-900">
-                            {new Intl.NumberFormat("it-IT", {
-                              style: "currency",
-                              currency: "EUR",
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            }).format(
-                              availableProformasForManualFattura
-                                .filter((p: any) => selectedProformaIdsForManualFattura.includes(p.id))
-                                .reduce((sum: number, p: any) => sum + Number(p.importo || 0), 0)
-                            )}
+                          <div className="min-w-[220px] rounded-2xl bg-white px-4 py-4 shadow-sm ring-1 ring-fuchsia-200/70">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fuchsia-700">
+                              Totale proforme selezionate
+                            </div>
+                            <div className="mt-1 text-lg font-extrabold text-slate-900">
+                              {new Intl.NumberFormat("it-IT", {
+                                style: "currency",
+                                currency: "EUR",
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              }).format(
+                                availableProformasForManualFattura
+                                  .filter((p: any) => selectedProformaIdsForManualFattura.includes(p.id))
+                                  .reduce((sum: number, p: any) => sum + Number(p.importo || 0), 0)
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      </section>
                     </div>
-                  </section>
+                  </div>
                 </div>
 
                 {/* footer */}
-                <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-6 py-4 sm:flex-row sm:items-center sm:px-7">
+                <div className="flex shrink-0 flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:px-6">
                   <div className="text-xs text-slate-500">
                     Verifica importo, condominio e proforme collegate prima della conferma.
                   </div>
