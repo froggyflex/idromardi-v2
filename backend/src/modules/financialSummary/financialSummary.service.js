@@ -3232,11 +3232,14 @@ async function getFatturaPrintData(id) {
 }
 
 async function htmlToPdfBuffer(html) {
+  console.log("Resolved executablePath:", puppeteer.executablePath());
+
   const browser = await puppeteer.launch({
-    headless: "new",
+     headless: "new",
     executablePath: puppeteer.executablePath(),
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
+  
 
   try {
     const page = await browser.newPage();
