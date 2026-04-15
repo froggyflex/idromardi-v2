@@ -1295,7 +1295,7 @@ useEffect(() => {
         condominioIds: selectedCondominioIds,
       });
 
-      console.log("Promote result:", data);
+ 
 
       setIsAssociateModalOpen(false);
       setSelectedCondomini([]);
@@ -1667,12 +1667,13 @@ async function promoteImportedFattura() {
         setSelectedFatturaCondominioId("");
         setSelectedProformaIdsForFattura([]);
 
-        await loadImportedFattureDocuments();
-        await loadImportedFatturaDocumentDetail(selectedImportedDoc.id);
+        await loadImportedFattureDocuments();//this we might not need
+        await loadImportedFatturaDocumentDetail(selectedImportedDoc.id); //this we might not need
+
+        await loadImportedDocuments();
+        await loadImportedDocumentDetail(selectedImportedDoc.id);
         await loadSummary();
         await loadRecentRows();
-        await loadProformasRows();
-        await loadFattureRows();
       } catch (err: any) {
         setError(err?.response?.data?.error || "Errore durante la creazione della fattura.");
       } finally {
