@@ -11,8 +11,7 @@ router.get("/recent", controller.getRecentRows);
 router.get("/imported-documents", controller.getImportedDocuments);
 router.get("/imported-documents/:id", controller.getImportedDocumentDetail);
 
-router.delete("/imported-documents/fattura/:id", controller.deleteImportedDocumentF);
-router.delete("/imported-documents/proforma/:id", controller.deleteImportedDocument);
+
 router.post("/manual-proforma", controller.createManualProforma);
 router.post("/manual-fattura", controller.createManualFattura);
 router.post(
@@ -46,7 +45,10 @@ router.get("/fatture", controller.listFattureSimple);
 
 router.post("/:id/annulla", controller.annullaProforma);
 router.post("/:id/annullaF", controller.annullaFattura);
+
 router.delete("/:id", controller.deleteProforma);
+router.delete("/imported-documents/fattura/:id", controller.deleteImportedDocumentF);
+router.delete("/imported-documents/proforma/:id", controller.deleteImportedDocument);
 
  
 router.post("/:id/registra-pagamento", controller.registraPagamentoFattura);

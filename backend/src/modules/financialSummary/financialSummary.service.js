@@ -1027,7 +1027,7 @@ async function uploadImportedDocuments(files) {
   );
 
  
-  uploadedFiles.forEach(async f => await parseImportedDocument(f.id));
+  uploadedFiles.forEach(async f => await parseImportedDocumentF(f.id));
 
   return {
     batch_id: batchId,
