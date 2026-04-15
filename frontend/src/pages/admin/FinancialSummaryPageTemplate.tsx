@@ -3953,7 +3953,7 @@ async function uploadProformaFiles() {
           {/* cazz */}
           {isCreateFatturaModalOpen && selectedImportedDoc && activeImportTab === "FATTURA" ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-4 backdrop-blur-[2px]">
-              <div className="relative flex h-[92vh] w-full max-w-[1380px] flex-col overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
+              <div className="relative flex h-[98vh] w-full max-w-[1450px] flex-col overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.18)]">
                 <div className="h-1.5 w-full bg-gradient-to-r from-fuchsia-400 via-violet-500 to-indigo-500" />
 
                 {/* header */}
