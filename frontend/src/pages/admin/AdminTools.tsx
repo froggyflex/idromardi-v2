@@ -22,9 +22,9 @@ export default function AdminTools() {
       <div className="bg-white border rounded-lg p-6">
 
         <h2 className="text-lg font-semibold mb-4">
-          Strumenti Sistema
+          Geolocalizzazione
         </h2>
-
+ 
         <button
           onClick={handleGeocode}
           disabled={loading}

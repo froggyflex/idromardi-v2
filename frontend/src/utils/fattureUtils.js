@@ -8,7 +8,7 @@ function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
-function summarizePeriodiAndTariffe( data) {
+export function summarizePeriodiAndTariffe( data) {
   const periodi = Array.isArray(data?.periodi_fatturazione) ? data.periodi_fatturazione : [];
   const tariffe = Array.isArray(data?.componente_tariffa_acquedotto)
     ? data.componente_tariffa_acquedotto

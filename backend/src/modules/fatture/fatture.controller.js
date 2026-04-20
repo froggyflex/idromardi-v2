@@ -123,15 +123,7 @@ exports.deleteSession = async (req, res) => {
 
 exports.uploadImportedDocument = async (req, res) => {
   try {
-    console.log("uploadImportedDocument start");
-    console.log("file =", req.file ? {
-      originalname: req.file.originalname,
-      filename: req.file.filename,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-    } : null);
-    console.log("body =", req.body);
-
+   
     const result = await service.uploadImportedDocument({
       file: req.file,
       body: req.body,
@@ -144,6 +136,29 @@ exports.uploadImportedDocument = async (req, res) => {
   }
 };
 
+exports.exportRipartizionePdf = async (req, res, next) => {
+  try {
+    const { righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl } = req.body;
+
+    const pdfBuffer = await service.exportRipartizionePdf({
+      righe,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+    });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="bollette-ripartizione.pdf"'
+    );
+
+    return res.send(pdfBuffer);
+  } catch (error) {
+    next(error);
+  }
+};
 exports.parseImportedDocument = async (req, res) => {
   try {
     const { id } = req.params;

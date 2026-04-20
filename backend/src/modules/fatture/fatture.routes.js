@@ -55,5 +55,6 @@ router.get("/imported-documents/:id", controller.getImportedDocumentById);
 router.post("/imported-documents/:id/parse", controller.parseImportedDocument);
 router.put("/imported-documents/:id/parsed-result", controller.updateImportedDocumentParsedResult);
 router.post("/imported-documents/:id/link-session", controller.linkImportedDocumentToSession);
+router.post("/export-ripartizione-pdf",controller.exportRipartizionePdf);
 
 module.exports = router;

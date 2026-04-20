@@ -193,6 +193,7 @@ export default function Dashboard() {
             ))}
 
           </MarkerClusterGroup>
+          
         </MapContainer>
       </div>
     </div>

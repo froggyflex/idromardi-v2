@@ -42,8 +42,9 @@ export default function MainLayout({ children }: Props) {
   const condominioId = match?.[1];
 
   return (
-    <div className="flex h-screen bg-slate-50">
-      <aside className="w-64 bg-slate-50 border-r border-slate-200 flex flex-col">
+    
+    <div className="flex h-screen bg-slate-50 ">
+      <aside className="w-64 bg-slate-50 border-r border-slate-200 flex flex-col navbarside">
 
         {/* Logo */}
         <div className="px-6 py-6 border-b border-slate-200">
@@ -111,9 +112,11 @@ export default function MainLayout({ children }: Props) {
             <div className="space-y-1">
               <NavItem
                 to="/admin/tools"
-                label="Strumenti Sistema"
+                label="Gegolocalizzazione Condomini"
               />
               <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
+              <NavItem to="/admin/contabilita" label="Contabilità" />
+              
             </div>
           </div>
         </nav>

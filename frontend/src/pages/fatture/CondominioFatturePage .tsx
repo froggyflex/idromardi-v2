@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
 import { Trash2 } from "lucide-react";
@@ -7,7 +7,9 @@ import { Save } from "lucide-react";
 import { parse, set, weeksToDays } from "date-fns";
 import { useRef } from "react";
 import { ca, se } from "date-fns/locale";
- 
+import InvoicePrintCard from "../components/InvoicePrintCard";
+ // @ts-ignore
+import { summarizePeriodiAndTariffe } from "../../utils/fattureUtils";
 
 
 type Provider = { id: string; nome: string; codice?: string };
@@ -62,6 +64,19 @@ export default function CondominioFatturePage() {
     const [righeCalcoli, setRigheCalcoli] = useState<any[]>([]);
     const [tfCode, setTfCode] = useState<string>("TF1");
   
+    const [expandedRows, setExpandedRows] = useState<Record<string | number, boolean>>({});
+
+    const toggleRow = (rowKey: string | number) => {
+      setExpandedRows((prev) => ({
+        ...prev,
+        [rowKey]: !prev[rowKey],
+      }));
+    };
+    //consumo values
+    const [parsedImpCons, setParsedImpCons] = useState<number>(0);
+    const [depfog, setDepFog] = useState<number>(0);
+
+    //-------------------------------------------------------
     //storno values
     const [mcStorno, setMcStorno] = useState<number>(0);
     const [eurStorno, setEurStorno] = useState<number>(0);
@@ -124,10 +139,10 @@ export default function CondominioFatturePage() {
     const [importFile, setImportFile] = useState<File | null>(null);
     const [uploadingImport, setUploadingImport] = useState(false);
     const [parsingImportId, setParsingImportId] = useState<string | null>(null);
- 
+    const [dettaglioByUtenza, setDettaglioByUtenza]  = useState<Record<string, any[]>>({})
     const [importedDocYear, setImportedDocYear] = useState<number | null>(null);
 
-
+   
    const years: any[] = [];
    years.length = 0; // clear array while keeping reference
    years.push(selectedImportedDoc?.data_fine_periodo ? new Date(selectedImportedDoc.data_fine_periodo).getFullYear() : new Date().getFullYear()); // current year
@@ -136,7 +151,7 @@ export default function CondominioFatturePage() {
    years.sort((a, b) => a - b);
   
    const handleImportedDocsWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    const el = importedDocsScrollRef.current;
+   const el = importedDocsScrollRef.current;
     if (!el) return;
 
     const canScrollHorizontally = el.scrollWidth > el.clientWidth;
@@ -148,68 +163,15 @@ export default function CondominioFatturePage() {
 
     const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
     el.scrollLeft += delta;
-  };
-  function parseITDate(str: { split: (arg0: string) => [any, any, any]; }) {
-    if (!str) return null;
-    const [dd, mm, yyyy] = str.split("/");
-    return new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
-  }
+   } ;
 
-  function round2(n: any) {
-    return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-  }
-
-  function summarizePeriodiAndTariffe( data: { periodi_fatturazione: any; componente_tariffa_acquedotto: any; }) {
-    const periodi = Array.isArray(data?.periodi_fatturazione) ? data.periodi_fatturazione : [];
-    const tariffe = Array.isArray(data?.componente_tariffa_acquedotto)
-      ? data.componente_tariffa_acquedotto
-      : [];
-
-    return periodi.map((periodo: { data_inizio: any; data_fine: any; tipo_lettura: any; consumo_mc: any; }) => {
-      const pStart = parseITDate(periodo.data_inizio);
-      const pEnd = parseITDate(periodo.data_fine);
-
-      const righeTariffa = tariffe.filter((r: { from_date: any; to_date: any; }) => {
-        const rStart = parseITDate(r.from_date);
-        const rEnd = parseITDate(r.to_date);
-        return rStart && rEnd && pStart && pEnd && rStart >= pStart && rEnd <= pEnd;
-      });
-
-      const quantita = righeTariffa.reduce((s: number, r: { quantita: any; }) => s + Number(r.quantita || 0), 0);
-      const importo = righeTariffa.reduce((s: number, r: { importo: any; }) => s + Number(r.importo || 0), 0);
-
-      const positiveRows = righeTariffa.filter((r: { quantita: any; }) => Number(r.quantita || 0) > 0);
-      const negativeRows = righeTariffa.filter((r: { quantita: any; }) => Number(r.quantita || 0) < 0);
-
-      const quantitaPositive = positiveRows.reduce((s: number, r: { quantita: any; }) => s + Number(r.quantita || 0), 0);
-      const importoPositive = positiveRows.reduce((s: number, r: { importo: any; }) => s + Number(r.importo || 0), 0);
-
-      const quantitaNegative = negativeRows.reduce((s: number, r: { quantita: any; }) => s + Number(r.quantita || 0), 0);
-      const importoNegative = negativeRows.reduce((s: number, r: { importo: any; }) => s + Number(r.importo || 0), 0);
-
-      return {
-        tipo_lettura: periodo.tipo_lettura,
-        data_inizio: periodo.data_inizio,
-        data_fine: periodo.data_fine,
-        consumo_periodo_mc: Number(periodo.consumo_mc || 0),
-        righe_tariffa: righeTariffa.map((r: { from_date: any; to_date: any; quantita: any; importo: any; tariffa: any; }) => ({
-          from_date: r.from_date,
-          to_date: r.to_date,
-          quantita: Number(r.quantita || 0),
-          importo: Number(r.importo || 0),
-          tariffa: Number(r.tariffa || 0)
-        })),
-        totali: {
-          quantita: round2(quantita),
-          importo: round2(importo),
-          quantita_positive: round2(quantitaPositive),
-          importo_positive: round2(importoPositive),
-          quantita_negative: round2(quantitaNegative),
-          importo_negative: round2(importoNegative)
-        }
-      };
-    });
-  }
+  function chunkArray<T>(arr: T[], size: number) {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) {
+      out.push(arr.slice(i, i + size));
+    }
+    return out;
+  } 
   async function parseImportedInvoice(id: string) {
     try {
       setParsingImportId(id);
@@ -314,11 +276,11 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     console.log("Assigning state from parsed payload:", payload);
 
     const parsedSummary = summarizePeriodiAndTariffe(payload || null);
+    parsedConsumoFromParsedPayload(parsedSummary);
 
-    // setDataQfFrom(payload.data_inizio_periodo || "");
-    // setDataQfTo(payload.data_fine_periodo || "");
-    // setDataConsFrom(payload.data_inizio_periodo || "");
-    // setDataConsTo(payload.data_fine_periodo || "");
+
+    console.log("Parsed summary from payload:", parsedSummary);
+
 
     const grouped = payload.grouped_letture || {};
     const aGiro = grouped.a_giro;
@@ -332,6 +294,9 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       parseAccontoFromParsedPayload(payloadJson, parsedSummary);
       parseStornoFromParsedPayload(payloadJson);
       parseQFFromParsedPayload(payloadJson);
+      setDepFog(JSON.parse(payloadJson).totale_dep_fog)
+      console.log(JSON.parse(payloadJson))
+      
 
 
 
@@ -362,10 +327,18 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     console.error("Errore durante il parsing del payload:", err);
   }
 }
+  function parsedConsumoFromParsedPayload(parsedSummary?: any){
+    parsedSummary?.map((t: any) => {
+      if(t.tipo_lettura === "a_giro") {
+        setParsedImpCons(t.totali.importo_positive)
+      }   
+    })
+  }
   function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummary?: any) {
     if (!payloadJson) return; 
     try {
       const payload = JSON.parse(payloadJson);
+
       if (payload.letture_summary?.ha_acconto) {
          payload.periodi_fatturazione.map((p: any) => {
           if (p.tipo_lettura === "acconto" || p.tipo_lettura === "acconto_a_giro" || p.tipo_lettura === "media") {
@@ -373,8 +346,12 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
             setMcAcconto(p.consumo_mc ?? 0);
           }
          });
-        parsedSummary?.tariffe_acquedotto?.map((t: any) => {
-          
+        parsedSummary?.map((t: any) => {
+          if(t.tipo_lettura === "acconto" || t.tipo_lettura === "acconto_a_giro" || t.tipo_lettura === "media") {
+            setEurAcconto(t.totali.importo_positive ?? 0);
+            setIvaAcconto(t.totali.importo_positive * 0.10);
+            
+          }   
         })
       }
 
@@ -471,6 +448,9 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setSessions(sRes.data || []);
       setImportedDocs(iRes.data?.items || []);
       loadImportedDocuments();
+
+       
+      console.log(sRes.data)
  
 
     } catch (err: any) {
@@ -601,6 +581,35 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
         setRigheCalcoli(res.data.righe || []);
         setGenerale(res.data.generale || null);
 
+        
+
+      
+
+        for (const group of generale?.dettaglio ?? []) {
+          if (!Array.isArray(group) || group.length === 0) continue;
+
+
+          for (const item of group) {
+            const key = String(item?.key ?? "").trim();
+            if (!key) continue;
+
+            if (!dettaglioByUtenza[key]) {
+              dettaglioByUtenza[key] = [];
+            }
+
+            dettaglioByUtenza[key].push(item);
+          }
+        }
+
+        for (const key of Object.keys(dettaglioByUtenza)) {
+          dettaglioByUtenza[key] = dettaglioByUtenza[key]
+            .filter((item) => String(item?.key ?? "").trim() === key)
+            .sort((a, b) => Number(a?.ordine ?? 0) - Number(b?.ordine ?? 0));
+        }
+        
+       
+
+        setDettaglioByUtenza(dettaglioByUtenza);
 
       } catch (err: any) {
         setError(err?.response?.data?.error || "Errore calcolo: " + (err?.message || "Errore sconosciuto"));
@@ -772,1218 +781,1249 @@ const totals = useMemo(() => {
   };
 }, [righe, session]);
 
-  
-
-  return (
-<div className="w-full px-6 py-6 space-y-6">
 
 
 
-{/* SUMMARY */}
-<div className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b shadow-sm">
-  <div className="max-w-full px-6 py-4 space-y-4">
-    <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
-      <div>
-          {/* ERROR */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
-              {error}
+const handleExportPdf = async () => {
+
+  // console.log(righe, dettaglioByUtenza);
+  // return;
+  try {
+    const response = await api.post(
+      "/fatture/export-ripartizione-pdf",
+      {
+        righe,
+        dettaglioByUtenza,
+        trimestreLabel: "07.25 - 01.2025",
+        dataLettura: "12/01/2026",
+        logoUrl: "https://i.postimg.cc/2SDBbptC/idro-logo.jpg",
+      },
+      {
+        responseType: "blob",
+      }
+    );
+
+    const blob = new Blob([response.data], { type: "application/pdf" });
+    const url = window.URL.createObjectURL(blob);
+
+    window.open(url, "_blank");
+
+    // optional cleanup with delay so the new tab has time to load it
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+    }, 10000);
+  } catch (error: any) {
+    console.error("Errore export PDF:", error);
+
+    let message = "Errore durante l'esportazione del PDF";
+
+    if (error?.response?.data instanceof Blob) {
+      try {
+        message = await error.response.data.text();
+      } catch {}
+    } else if (error?.message) {
+      message = error.message;
+    }
+
+    alert(message);
+  }
+};
+const pages = chunkArray(righe, 2);
+const dettaglio = generale?.dettaglio ?? [];
+
+ 
+
+return (
+    <div className="w-full px-6 py-6 space-y-6">
+      <div className="screen-only">
+      {/* SUMMARY */}
+      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b shadow-sm">
+        <div className="max-w-full px-6 py-4 space-y-4">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+            <div>
+                {/* ERROR */}
+                {error && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
+                    {error}
+                  </div>
+                )}
+              <div className="text-lg font-semibold text-slate-900">Fatturazione | Totale € {Number(selectedDoc || 0).toFixed(2)}</div>
+
+              <div className="text-sm text-slate-500">
+            
+              </div>
+
             </div>
-          )}
-        <div className="text-lg font-semibold text-slate-900">Fatturazione | Totale € {Number(selectedDoc || 0).toFixed(2)}</div>
 
-        <div className="text-sm text-slate-500">
-       
-        </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">TF</span>
+                <select
+                  value={tfCode}
+                  onChange={(e) => setTfCode(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+                  disabled={loadingCalc}
+                >
+                  <option value="TF1">TF1</option>
+                  <option value="TF2">TF2</option>
+                  <option value="TF3">TF3</option>
+                  {/* add more when needed */}
+                </select>
+              </div>
 
-      </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">TF</span>
-          <select
-            value={tfCode}
-            onChange={(e) => setTfCode(e.target.value)}
-            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-            disabled={loadingCalc}
-          >
-            <option value="TF1">TF1</option>
-            <option value="TF2">TF2</option>
-            <option value="TF3">TF3</option>
-            {/* add more when needed */}
-          </select>
-        </div>
-
-        <button
-          onClick={calcola}
-          disabled={loadingCalc}
-          className="bg-blue-600 text-white px-5 py-2 rounded-xl hover:bg-blue-700 transition shadow-md disabled:opacity-60"
-        >
-          {loadingCalc ? "Calcolo..." : "Calcola Contabilità"}
-        </button>
-      </div>
-    </div>
-
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-      <div className="flex items-center justify-between gap-4 mb-3">
-        <div>
-          <div className="text-sm font-semibold text-slate-900">
-            Sessioni esistenti
-          </div>
-       
-        </div>
-
-        <div className="shrink-0 rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600">
-          {sessions.length} {sessions.length === 1 ? "sessione" : "sessioni"}
-        </div>
-      </div>
-
-      {sessions.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-500">
-          Nessuna fattura disponibile.
-        </div>
-      ) : (
-        <div className="flex gap-2 overflow-x-auto pb-1 pr-1">
-          {sessions.map((s: any) => (
-            <div
-              key={s.id}
-              className={`group flex-shrink-0 flex items-center gap-2 rounded-full border px-3 py-2 transition ${
-                fatturaId === s.id
-                  ? "border-blue-500 bg-blue-50"
-                  : "border-slate-200 bg-white hover:bg-slate-50"
-              }`}
-            >
               <button
-                onClick={() =>
-                  navigate(`/condomini/${condominioId}/fatture/${s.id}`)
-                }
-                className="flex items-center gap-2 text-left"
+                onClick={calcola}
+                disabled={loadingCalc}
+                className="bg-blue-600 text-white px-5 py-2 rounded-xl hover:bg-blue-700 transition shadow-md disabled:opacity-60"
               >
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                    s.stato === "BOZZA"
-                      ? "bg-amber-100 text-amber-700"
-                      : "bg-emerald-100 text-emerald-700"
-                  }`}
-                >
-                  {s.stato}
-                </span>
-
-                <span className="text-sm font-medium text-slate-800">
-                  {String(s.id).slice(0, 8)}...
-                </span>
-
-                <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
-                  € {Number(s.grand_total ?? 0).toFixed(2)}
-                </span>
+                {loadingCalc ? "Calcolo..." : "Calcola Contabilità"}
               </button>
+            </div>
+          </div>
 
-              {s.stato === "BOZZA" && (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+            <div className="flex items-center justify-between gap-4 mb-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">
+                  Sessioni esistenti
+                </div>
+            
+              </div>
+
+              <div className="shrink-0 rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600">
+                {sessions.length} {sessions.length === 1 ? "sessione" : "sessioni"}
+              </div>
+            </div>
+
+            {sessions.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-500">
+                Nessuna fattura disponibile.
+              </div>
+            ) : (
+              <div className="flex gap-2 overflow-x-auto pb-1 pr-1">
+                {sessions.map((s: any) => (
+                  <div
+                    key={s.id}
+                    className={`group flex-shrink-0 flex items-center gap-2 rounded-full border px-3 py-2 transition ${
+                      fatturaId === s.id
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
+                    }`}
+                  >
+                    <button
+                      onClick={() =>
+                        navigate(`/condomini/${condominioId}/fatture/${s.id}`)
+                      }
+                      className="flex items-center gap-2 text-left"
+                    >
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          s.stato === "BOZZA"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-emerald-100 text-emerald-700"
+                        }`}
+                      >
+                        {s.stato}
+                      </span>
+
+                      <span className="text-sm font-medium text-slate-800">
+                        {String(s.id).slice(0, 8)}...
+                      </span>
+
+                      <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
+                        € {Number(s.grand_total ?? 0).toFixed(2)}
+                      </span>
+                    </button>
+
+                    {s.stato === "BOZZA" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(s.id);
+                        }}
+                        className="rounded-full p-1 opacity-60 transition hover:opacity-100 hover:bg-red-50"
+                        title="Elimina Bozza"
+                      >
+                        <Trash2
+                          size={14}
+                          className="text-red-500 hover:text-red-700 transition"
+                        />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div><abbr title=""></abbr>
+
+        {/* TOP BAR */}
+      <div className="space-y-6">
+        
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+          <div className="xl:col-span-5">
+            <div className="bg-white rounded-2xl shadow p-5 h-full">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">
+                    Importa Bolletta
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500 leading-relaxed">
+                    Carica un documento e preparalo per il parsing.
+                  </div>
+                </div>
+
+                <div className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                  Upload
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4">
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">
+                    File bolletta
+                  </label>
+
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-4 transition hover:border-slate-400">
+                    <input
+                      type="file"
+                      accept=".pdf,.png,.jpg,.jpeg,.json"
+                      className="block w-full text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800"
+                      onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                    />
+                    <div className="mt-2 text-xs text-slate-500">
+                      Formati supportati: PDF
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">
+                    Provider
+                  </label>
+                  <select
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                    value={importProviderId}
+                    onChange={(e) => setImportProviderId(e.target.value)}
+                  >
+                    <option value="">Provider opzionale</option>
+                    {providers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      Stato
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-slate-800">
+                      {uploadingImport
+                        ? "Upload in corso..."
+                        : importFile
+                        ? "Pronto al caricamento"
+                        : "Nessun file selezionato"}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      File selezionato
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-slate-800 truncate">
+                      {importFile ? importFile.name : "-"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between gap-4 border-t pt-4">
+                <div className="text-xs text-slate-500 leading-relaxed max-w-[220px]">
+                  Dopo il caricamento, il documento apparirà nella lista importata.
+                </div>
+
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(s.id);
-                  }}
-                  className="rounded-full p-1 opacity-60 transition hover:opacity-100 hover:bg-red-50"
-                  title="Elimina Bozza"
+                  onClick={uploadImportedInvoice}
+                  disabled={!importFile || uploadingImport}
+                  className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Trash2
-                    size={14}
-                    className="text-red-500 hover:text-red-700 transition"
-                  />
+                  {uploadingImport ? "Upload in corso..." : "Carica documento"}
                 </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="xl:col-span-7">
+            <div className="bg-white rounded-2xl shadow p-5 h-full">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-lg font-semibold text-slate-900">
+                    Documenti Importati
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    Seleziona un documento per lavorarci nel workspace.
+                  </div>
+                </div>
+
+                <div className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                  {importedDocs.length} {importedDocs.length === 1 ? "documento" : "documenti"}
+                </div>
+              </div>
+                      
+        {loadingImportedDocs ? (
+              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
+                Caricamento documenti...
+              </div>
+            ) : importedDocs.length === 0 ? (
+              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
+                Nessun documento importato.
+              </div>
+            ) : (
+              <div className="mt-5">
+                <div
+                  ref={importedDocsScrollRef}
+                  onWheel={handleImportedDocsWheel}
+                  className="flex gap-4 overflow-x-auto overflow-y-hidden overscroll-contain pb-3 pr-1 snap-x snap-mandatory scroll-smooth cursor-grab active:cursor-grabbing"
+                >
+                  {importedDocs.map((doc: any) => (
+                    <div
+                      key={doc.id}
+                      className={`min-w-[320px] max-w-[320px] shrink-0 rounded-2xl border p-4 transition cursor-pointer snap-start shadow-sm ${
+                        selectedImportedDoc?.id === doc.id
+                          ? "border-blue-500 bg-blue-50"
+                          : "border-slate-200 bg-white hover:bg-slate-50"
+                      }`}
+                      onClick={() => loadImportedDocumentDetail(doc.id)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-900 truncate">
+                            {doc.numero_bolletta || doc.original_filename || "Documento"}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500 truncate">
+                            {doc.original_filename || "-"}
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-700">
+                          {doc.parse_status || "uploaded"}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
+                          <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                            Totale
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-900">
+                            € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
+                          <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                            Validazione
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-slate-900">
+                            {doc.validation_status || "pending"}
+                          </div>
+                        </div>
+                      </div>
+
+                      {doc.parse_status !== "parsed" && doc.parse_status !== "imported" && (
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              parseImportedInvoice(doc.id);
+                            }}
+                            className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                          >
+                            Esegui parsing
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          
+              
+                <div className="bg-white rounded-2xl shadow p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-lg font-semibold text-slate-900">
+                Anteprima Documento Importato
+              </div>
+              <div className="mt-1 text-sm text-slate-500 leading-relaxed">
+                Lavora sul documento selezionato o crea una sessione manuale.
+              </div>
+            </div>
+
+            <div className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+              Operazioni
+            </div>
+          </div>
+
+          {selectedImportedDoc ? (
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  
+                  <div className="mt-1 text-sm text-slate-500">
+                    Controlla i dati estratti prima di collegare il documento a una sessione.
+                  </div>
+                </div>
+
+                <div className="rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+                  {selectedImportedDoc.validation_status || "pending"}
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Numero Bolletta
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                    {selectedImportedDoc.numero_bolletta || "-"}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Codice Fornitura
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                    {selectedImportedDoc.codice_fornitura || "-"}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Totale Documento
+                  </div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    € {Number(selectedImportedDoc.importo_totale_da_pagare || 0).toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Consumo
+                  </div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {selectedImportedDoc.consumo_globale_mc ?? "-"} mc
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Stato Parsing
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-slate-800">
+                    {selectedImportedDoc.parse_status || "-"}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                    Documento
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-slate-800 truncate">
+                    {selectedImportedDoc.original_filename || "-"}
+                  </div>
+                </div>
+              </div>
+
+              {fatturaId && (
+                <div className="mt-5 flex justify-end border-t pt-4">
+                  <button
+                    onClick={() => linkImportedToCurrentSession(selectedImportedDoc.id, fatturaId)}
+                    className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700"
+                  >
+                    Collega alla sessione aperta
+                  </button>
+                </div>
               )}
             </div>
-          ))}
+          ) : (
+            <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
+              Seleziona un documento importato per vedere l’anteprima.
+            </div>
+          )}
+
+        
         </div>
-      )}
-    </div>
-  </div>
-</div><abbr title=""></abbr>
-
-  {/* TOP BAR */}
-<div className="space-y-6">
-   
-  <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-    <div className="xl:col-span-5">
-      <div className="bg-white rounded-2xl shadow p-5 h-full">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-lg font-semibold text-slate-900">
-              Importa Bolletta
-            </div>
-            <div className="mt-1 text-sm text-slate-500 leading-relaxed">
-              Carica un documento e preparalo per il parsing.
-            </div>
-          </div>
-
-          <div className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            Upload
-          </div>
-        </div>
-
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4">
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-slate-700">
-              File bolletta
-            </label>
-
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-4 transition hover:border-slate-400">
-              <input
-                type="file"
-                accept=".pdf,.png,.jpg,.jpeg,.json"
-                className="block w-full text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800"
-                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-              />
-              <div className="mt-2 text-xs text-slate-500">
-                Formati supportati: PDF, immagini e JSON.
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-slate-700">
-              Provider
-            </label>
-            <select
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
-              value={importProviderId}
-              onChange={(e) => setImportProviderId(e.target.value)}
-            >
-              <option value="">Provider opzionale</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                Stato
-              </div>
-              <div className="mt-1 text-sm font-medium text-slate-800">
-                {uploadingImport
-                  ? "Upload in corso..."
-                  : importFile
-                  ? "Pronto al caricamento"
-                  : "Nessun file selezionato"}
-              </div>
-            </div>
-
-            <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                File selezionato
-              </div>
-              <div className="mt-1 text-sm font-medium text-slate-800 truncate">
-                {importFile ? importFile.name : "-"}
-              </div>
             </div>
           </div>
         </div>
 
-        <div className="mt-5 flex items-center justify-between gap-4 border-t pt-4">
-          <div className="text-xs text-slate-500 leading-relaxed max-w-[220px]">
-            Dopo il caricamento, il documento apparirà nella lista importata.
-          </div>
 
-          <button
-            onClick={uploadImportedInvoice}
-            disabled={!importFile || uploadingImport}
-            className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {uploadingImport ? "Upload..." : "Carica documento"}
-          </button>
-        </div>
       </div>
-    </div>
 
-    <div className="xl:col-span-7">
-      <div className="bg-white rounded-2xl shadow p-5 h-full">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-lg font-semibold text-slate-900">
-              Documenti Importati
-            </div>
-            <div className="mt-1 text-sm text-slate-500">
-              Seleziona un documento per lavorarci nel workspace.
-            </div>
+        {/* SESSION CONTROL BAR */}
+        <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
+
+          <div className="grid grid-cols-12 gap-8">
+
+            {/* CREATE */}
+            {/* <div className="col-span-12 lg:col-span-5 space-y-4">
+              <div className="font-semibold">Crea Fattura</div>
+
+
+
+              <div className="flex flex-wrap gap-3">
+                <select
+                  className="border rounded px-3 py-2 w-48"
+                  value={providerId}
+                  onChange={(e) => setProviderId(e.target.value)}
+                >
+                  <option value="">Casa Idrica</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nome}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="border rounded px-3 py-2 w-40"
+                  value={current}
+                  onChange={(e) => setCurrent(e.target.value)}
+                >
+                  <option value="">Periodo Attuale</option>
+                  {periodi.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.period_month}/{p.period_year}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="border rounded px-3 py-2 w-40"
+                  value={previous}
+                  onChange={(e) => setPrevious(e.target.value)}
+                >
+                  <option value="">Periodo Prec.</option>
+                  {periodi
+                    .filter((p) => p.id !== current)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.period_month}/{p.period_year}
+                      </option>
+                    ))}
+                </select>
+
+                <button
+                  disabled={!canCreate || loadingCreate}
+                  onClick={createSession}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg disabled:opacity-50"
+                >
+                  {loadingCreate ? "Creazione..." : "Crea"}
+                </button>
+              </div>
+            </div> */}
+          </div>
+            
+        </div>
+         
+
+      {/* DETAIL SECTION */}
+
+      {!fatturaId ? (
+        <div className="bg-white p-6 rounded-xl shadow">
+          <div className="font-semibold">Seleziona una fattura</div>
+          {/* <div className="text-sm text-slate-500">
+            Crea una nuova fattura oppure aprine una esistente.
+          </div>  */}
+          <div className="mt-6 border-t pt-5">
+          
+          <div className="mt-1 text-sm text-slate-500">
+            Crea una nuova sessione manuale.
           </div>
 
-          <div className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            {importedDocs.length} {importedDocs.length === 1 ? "documento" : "documenti"}
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <select
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                value={providerId}
+                onChange={(e) => setProviderId(e.target.value)}
+              >
+                <option value="">Casa Idrica</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nome}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+              >
+                <option value="">Periodo Attuale</option>
+                {periodi.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.period_month}/{p.period_year}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                value={previous}
+                onChange={(e) => setPrevious(e.target.value)}
+              >
+                <option value="">Periodo Prec.</option>
+                {periodi
+                  .filter((p) => p.id !== current)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.period_month}/{p.period_year}
+                    </option>
+                  ))}
+              </select>
+
+              <button
+                disabled={!canCreate || loadingCreate}
+                onClick={createSession}
+                className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loadingCreate ? "Creazione..." : "Carica Sessione"}
+              </button>
+            </div>
           </div>
         </div>
-                 
-  {loadingImportedDocs ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-          Caricamento documenti...
         </div>
-      ) : importedDocs.length === 0 ? (
-        <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-          Nessun documento importato.
+      ) : loadingDetail ? (
+        <div className="bg-white p-6 rounded-xl shadow">
+          Caricamento...
+        </div>
+      ) : !session ? (
+        <div className="bg-white p-6 rounded-xl shadow">
+          Sessione non trovata
         </div>
       ) : (
-        <div className="mt-5">
-          <div
-            ref={importedDocsScrollRef}
-            onWheel={handleImportedDocsWheel}
-            className="flex gap-4 overflow-x-auto overflow-y-hidden overscroll-contain pb-3 pr-1 snap-x snap-mandatory scroll-smooth cursor-grab active:cursor-grabbing"
-          >
-            {importedDocs.map((doc: any) => (
-              <div
-                key={doc.id}
-                className={`min-w-[320px] max-w-[320px] shrink-0 rounded-2xl border p-4 transition cursor-pointer snap-start shadow-sm ${
-                  selectedImportedDoc?.id === doc.id
-                    ? "border-blue-500 bg-blue-50"
-                    : "border-slate-200 bg-white hover:bg-slate-50"
-                }`}
-                onClick={() => loadImportedDocumentDetail(doc.id)}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 truncate">
-                      {doc.numero_bolletta || doc.original_filename || "Documento"}
+        <>
+      
+          {/* CONTATORE GENERALE */}
+          <div className="bg-white border rounded-2xl p-6 w-full space-y-6">
+
+            <div className="flex justify-between items-center">
+              <h3 className="font-semibold text-lg">Imposta Giorni</h3>
+            </div>
+          {/* ============================= */}
+          {/* CONTROLLO CALCOLO + GENERALE */}
+          {/* ============================= */}
+          <div className="bg-white border border-slate-200 rounded-2xl px-5 py-4 shadow-sm">
+            <div className="mb-4">
+              <h3 className="text-[15px] font-semibold text-slate-900">
+                Parametri Calcolo e Contatore Generale
+              </h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Imposta i parametri di calcolo e aggiorna il contatore generale.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <div className="flex min-w-max items-end gap-5">
+
+                {/* BLOCCO PRINCIPALE - CONTATORE GENERALE */}
+                <div className="rounded-2xl border border-slate-300 bg-gradient-to-br from-slate-50 to-white px-4 py-3 shadow-sm ring-1 ring-slate-100">
+                  <div className="mb-3 flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        Contatore Generale
+                      </div>
+                      <div className="mt-0.5 text-sm text-slate-600">
+                        Valori principali da aggiornare
+                      </div>
                     </div>
-                    <div className="mt-1 text-xs text-slate-500 truncate">
-                      {doc.original_filename || "-"}
+
+                    <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
+                      Consumo: {Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))}
                     </div>
                   </div>
 
-                  <div className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-700">
-                    {doc.parse_status || "uploaded"}
+                  <div className="flex items-end gap-4">
+                    <div className="flex flex-col">
+                      <label className="mb-1.5 text-xs font-semibold tracking-wide text-slate-700">
+                        Lettura Attuale
+                      </label>
+                      <input
+                        type="number"
+                        className="h-11 w-[132px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all duration-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                        value={valAtt}
+                        onChange={(e) => setValAtt(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="flex flex-col">
+                      <label className="mb-1.5 text-xs font-semibold tracking-wide text-slate-700">
+                        Lettura Precedente
+                      </label>
+                      <input
+                        type="number"
+                        className="h-11 w-[132px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all duration-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                        value={valPrec}
+                        onChange={(e) => setValPrec(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="flex flex-col">
+                      <label className="mb-1.5 text-xs font-semibold text-transparent select-none">
+                        Azione
+                      </label>
+                      <button
+                        onClick={saveGenerale}
+                        disabled={savingGenerale}
+                        className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-md transition-all duration-200 hover:-translate-y-[1px] hover:bg-slate-800 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Save size={16} />
+                        {savingGenerale ? "Salvando..." : "Salva Generale"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                      Totale
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900">
-                      € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
-                    </div>
-                  </div>
 
-                  <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                      Validazione
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900">
-                      {doc.validation_status || "pending"}
-                    </div>
-                  </div>
-                </div>
-
-                {doc.parse_status !== "parsed" && doc.parse_status !== "imported" && (
-                  <div className="mt-3 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        parseImportedInvoice(doc.id);
-                      }}
-                      className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                {/* DIVIDER */}
+                <div className="h-14 w-px self-center bg-slate-200" />
+                
+                {/* PARAMETRI SECONDARI */}
+                <div className="flex items-end gap-5">
+                  <div className="flex flex-wrap gap-3">
+                    <select
+                      className="border rounded px-3 py-2 w-48"
+                      value={annoTariffa}
+                      onChange={(e) => setAnnoTariffa(e.target.value)}
                     >
-                      Esegui parsing
-                    </button>
+                      <option value="">Anno Tariffa</option>
+                      {years.map((year) => (
+                      <option key={year} value={year}>
+                        {year === importedDocYear ? `Anno Corrente (${year})` : year}
+                      </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col">
+                    <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Giorni QF
+                    </label>
+                    <input
+                      type="number"
+                      className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                      value={giorniQf}
+                      onChange={(e) => setGiorniQf(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex flex-col">
+                    <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Giorni Consumi
+                    </label>
+                    <input
+                      type="number"
+                      className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                      value={giorniConsumi}
+                      onChange={(e) => setGiorniConsumi(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex flex-col">
+                    <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Giorni Interni
+                    </label>
+                    <input
+                      type="number"
+                      className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                      value={giorniConsumi}
+                      onChange={(e) => setGiorniCasaInterni(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex flex-col">
+                    <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Giorni Acconto
+                    </label>
+                    <input
+                      type="number"
+                      className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                      value={giorniAcconto}
+                      onChange={(e) => setGiorniAcconto(e.target.value)}
+                    />
+                  </div>
+
+                  {Number(giorniAcconto) > 0 && (
+                    <>
+                      <div className="h-10 w-px self-end bg-slate-200" />
+
+                      <div className="flex flex-col">
+                        <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          MC Acconto
+                        </label>
+                        <input
+                          type="number"
+                          className="h-10 w-[96px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                          value={mcAcconto}
+                          onChange={(e) => setMcAcconto(Number(e.target.value))}
+                        />
+                      </div>
+                      <div className="flex flex-col">
+                        <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          MC Storno
+                        </label>
+                        <input
+                          type="number"
+                          className="h-10 w-[96px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+                          value={mcStorno}
+                          onChange={(e) => setMcStorno(Number(e.target.value))}
+                        />
+                      </div>
+          
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          {/* CALCULATION BREAKDOWN */}
+          <div className="bg-slate-50 rounded-2xl p-6 space-y-6 border border-slate-200">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-lg font-semibold text-slate-800">
+                  Dettaglio Calcolo
+                </div>
+                <div className="text-sm text-slate-500">
+                  Riepilogo valori di calcolo e confronto con il totale documento.
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+              {/* LEFT SIDE */}
+              <div className="xl:col-span-9 space-y-6">
+                {/* PRIMARY VALUES */}
+                <div>
+          
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">
+                        Consumo
+                      </div>
+                      <div className="text-2xl font-bold text-slate-800 mt-1">
+                        {Number(valAtt || 0) - Number(valPrec || 0)}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">mc</div>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">
+                        Imp. Cons.
+                      </div>
+                      <div className="text-lg font-semibold text-slate-800 mt-2">
+                        € {Number(parsedImpCons ?? 0).toFixed(2)}  
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">
+                        Dep.
+                      </div>
+                      <div className="text-lg font-semibold text-slate-800 mt-2">
+                        € {Number(depfog).toFixed(2)}
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">
+                        Q.F
+                      </div>
+                      <div className="text-lg font-semibold text-slate-800 mt-2">
+                        € {Number(parsedQF ?? session?.tot_qf ?? 0).toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECONDARY VALUES */}
+                <div>
+                
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">
+                        IVA
+                      </div>
+                      <div className="text-lg font-semibold text-slate-800 mt-2">
+                        € {Number(parsedImpCons + depfog + (parsedQF? parsedQF: 0)).toFixed(2)}
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">
+                        Varie
+                      </div>
+                      <div className="mt-3">
+                        <input
+                          type="number"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 bg-white"
+                          value={varie}
+                          onChange={(e) => setVarie(e.target.value)}
+                          placeholder="Inserisci valore"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ACCONTO */}
+                {mcAcconto > 0 && (
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 mb-3">
+                      Dati acconto
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                      <div className="grid grid-cols-5 gap-0 border-b bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
+                        <div className="px-4 py-3">Cons. Acconto</div>
+                        <div className="px-4 py-3">Imp. Acconto</div>
+                        <div className="px-4 py-3">Dep. Acconto</div>
+                        <div className="px-4 py-3">Iva Acconto</div>
+                        <div className="px-4 py-3">Tot. Acconto</div>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-0 text-sm text-slate-800">
+                        <div className="px-4 py-3 border-t">{mcAcconto?.toFixed(2)}</div>
+                        <div className="px-4 py-3 border-t">{eurAcconto?.toFixed(2)}</div>
+                        <div className="px-4 py-3 border-t">{depfogAcconto?.toFixed(2)}</div>
+                        <div className="px-4 py-3 border-t">{ivaAcconto?.toFixed(2)}</div>
+                        <div className="px-4 py-3 border-t font-semibold">{totaleAcconto?.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* STORNO */}
+                {mcStorno !== 0 && (
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 mb-3">
+                      Dati storno acconto
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                      <div className="grid grid-cols-5 gap-0 border-b bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
+                        <div className="px-4 py-3">Cons. Storno</div>
+                        <div className="px-4 py-3">Imp. Storno</div>
+          
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-0 text-sm text-slate-800">
+                        <div className="px-4 py-3 border-t">{mcStorno? (Number(mcStorno).toFixed(2)) : 0}</div>
+                        <div className="px-4 py-3 border-t">{eurStorno? (Number(eurStorno).toFixed(2)) : 0}</div>
+          
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-    
-        
-          <div className="bg-white rounded-2xl shadow p-5">
-    <div className="flex items-start justify-between gap-4">
-      <div>
-        <div className="text-lg font-semibold text-slate-900">
-          Anteprima Documento Importato
-        </div>
-        <div className="mt-1 text-sm text-slate-500 leading-relaxed">
-          Lavora sul documento selezionato o crea una sessione manuale.
-        </div>
-      </div>
 
-      <div className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-        Operazioni
-      </div>
-    </div>
+              {/* RIGHT SIDE COMPARISON */}
+              <div className="xl:col-span-3">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 h-full">
+                  <div className="text-sm font-semibold text-slate-800">
+                    Confronto Totali
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Verifica tra il totale del documento importato e il totale calcolato.
+                  </div>
 
-    {selectedImportedDoc ? (
-      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-             
-            <div className="mt-1 text-sm text-slate-500">
-              Controlla i dati estratti prima di collegare il documento a una sessione.
+                  <div className="mt-5 space-y-4">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                        Totale ABC
+                      </div>
+                      <div className="mt-1 text-2xl font-bold text-slate-900">
+                        € {Number(selectedImportedDoc?.importo_totale_da_pagare || 0).toFixed(2)}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-blue-200 bg-blue-600 px-4 py-4 text-white shadow-sm">
+                      <div className="text-[11px] uppercase tracking-wide opacity-80">
+                        Gran Totale
+                      </div>
+                      <div className="mt-1 text-2xl font-bold">
+                        € {Number(session?.grand_total ?? 0).toFixed(2)}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                        Delta
+                      </div>
+                      <div
+                        className={`mt-1 text-xl font-bold ${
+                          Math.abs(
+                            Number(session?.grand_total ?? 0) -
+                              Number(selectedImportedDoc?.importo_totale_da_pagare || 0)
+                          ) < 0.01
+                            ? "text-emerald-600"
+                            : "text-amber-600"
+                        }`}
+                      >
+                        €{" "}
+                        {(
+                          Number(session?.grand_total ?? 0) -
+                          Number(selectedImportedDoc?.importo_totale_da_pagare || 0)
+                        ).toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+         {selectedImportedId !== null && (
+          <><button
+                      onClick={handleExportPdf}
+                      className="rounded-xl bg-slate-900 px-4 py-2 text-white"
+                    >
+                      Stampa Bollette
+                    </button><div className="bg-white border rounded-2xl p-6">
+                        <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
 
-          <div className="rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-            {selectedImportedDoc.validation_status || "pending"}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs border border-slate-200">
+                            <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
+                              <tr>
+                                <th className="p-2">ID</th>
+                                <th className="p-2">Utente</th>
+                                <th className="p-2">Isolato</th>
+                                <th className="p-2">Scala</th>
+                                <th className="p-2">Interno</th>
+                                <th className="p-2">Lett Att</th>
+                                <th className="p-2">Lett Prec</th>
+                                <th className="p-2">Stato</th>
+                                <th className="p-2">Consumo</th>
+
+                                <th className="p-2">Acq</th>
+                                <th className="p-2">Fog</th>
+                                <th className="p-2">Dep</th>
+                                <th className="p-2">QF</th>
+                                <th className="p-2">Cong.</th>
+                                <th className="p-2">Oneri</th>
+                                <th className="p-2">Oneri <br></br>Pereq.</th>
+                                <th className="p-2">IVA</th>
+                                <th className="p-2">Acconto<br></br>MC/EUR</th>
+                                <th className="p-2">Storno<br></br>EUR</th>
+                                <th className="p-2">Arr</th>
+                                <th className="p-2 font-semibold">Totale</th>
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {righe.length === 0 && (
+                                <tr>
+                                  <td colSpan={21} className="p-4 text-center text-slate-400">
+                                    Nessun dato disponibile
+                                  </td>
+                                </tr>
+                              )}
+
+
+                              {righe.map((r: any, idx: number) => {
+                                const rowKey = r.id ?? idx;
+                                const isExpanded = !!expandedRows[rowKey];
+
+                                const utenzaKey = String(r.utenza?.id ?? "").trim();
+
+                                const tiers = dettaglioByUtenza[utenzaKey] ?? [];
+
+                                return (
+                                  <Fragment key={rowKey}>
+                                    <tr
+                                      onClick={() => toggleRow(rowKey)}
+                                      className={`border-t cursor-pointer transition-colors ${isExpanded
+                                          ? "bg-sky-50"
+                                          : idx % 2 === 0
+                                            ? "bg-white hover:bg-slate-100"
+                                            : "bg-slate-50 hover:bg-slate-100"}`}
+                                    >
+                                      <td className="p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
+                                      <td className="p-2 text-center">
+                                        {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                                      </td>
+                                      <td className="p-2 text-center">{r.utenza?.Isolato ?? ""}</td>
+                                      <td className="p-2 text-center">{r.utenza?.Scala ?? ""}</td>
+                                      <td className="p-2 text-center">{r.utenza?.Interno ?? ""}</td>
+                                      <td className="p-2 text-center">
+                                        {r.riga?.lettura_attuale ?? r.attuale?.valore_lettura ?? "-"}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {r.riga?.lettura_precedente ?? r.precedente?.valore_lettura ?? "-"}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {r.riga?.stato_attuale ?? r.attuale?.stato_lettura ?? "-"}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {Number(r.riga?.consumo_totale ?? 0).toFixed(0)}
+                                      </td>
+                                      <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
+                                      <td className="p-2 text-center">0</td>
+                                      <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
+                                      <td className="p-2 text-center">
+                                        {Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc
+                                        <br />
+                                        {Number(r.riga?.imp_acconto ?? 0).toFixed(2)}
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        {Number(r.riga?.storno_acconto ?? 0).toFixed(2)}
+                                      </td>
+                                      <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
+                                      <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>
+                                    </tr>
+
+                                    {isExpanded && (
+                                      <tr className="border-t bg-sky-50">
+                                        <td colSpan={21} className="p-4">
+                                          <div className="grid grid-cols-1 gap-4 md:grid-cols-1">
+                                            <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                                Dettaglio Consumi
+                                              </div>
+
+                                              <div className="space-y-1 text-sm text-slate-700">
+                                                {tiers.length === 0 ? (
+                                                  <div className="text-slate-400">Nessun dettaglio disponibile</div>
+                                                ) : (
+                                                  tiers.map((tier: any, i: number) => {
+                                                    const raw = String(tier.label ?? "").trim().toLowerCase();
+
+                                                    const labelMap: Record<string, string> = {
+                                                      agev: "Agevolata",
+                                                      agevolata: "Agevolata",
+                                                      "1a": "1ª Fascia",
+                                                      base: "Base",
+                                                      "2a": "2ª Fascia",
+                                                      "3a": "3ª Fascia",
+                                                      "1": "1ª Fascia",
+                                                      "2": "2ª Fascia",
+                                                      "3": "3ª Fascia",
+                                                      fascia1: "1ª Fascia",
+                                                      fascia2: "2ª Fascia",
+                                                      fascia3: "3ª Fascia",
+                                                      ecc: "Eccedenza",
+                                                      eccedenza: "Eccedenza",
+                                                      bonus: "Bonus Idrico",
+                                                      bonus_idrico: "Bonus Idrico",
+                                                    };
+
+                                                    const uiLabel = labelMap[raw] || tier.label || `Scaglione ${tier.ordine ?? i + 1}`;
+
+                                                    return (
+                                                      <div
+                                                        key={`${utenzaKey}-${tier.ordine ?? i}-${raw}`}
+                                                        className="grid grid-cols-3 items-center gap-2 border-b border-slate-100 pb-1"
+                                                      >
+                                                        <span className="font-medium">{uiLabel}</span>
+                                                        <span className="text-center">
+                                                          {Number(tier.mc_allocati ?? 0).toFixed(2)} mc
+                                                        </span>
+                                                        <span className="text-right">
+                                                          {Number(tier.importo ?? 0).toFixed(2)} €
+                                                        </span>
+                                                      </div>
+                                                    );
+                                                  })
+                                                )}
+
+                                                <div className="mt-2 border-t pt-2 flex items-center justify-between text-base font-bold text-slate-900">
+
+                                                  <span>Totale Consumo</span>
+                                                  <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
+                                                </div>
+                                              </div>
+                                            </div>
+
+                                            {/* <div className="rounded-lg border border-slate-200 bg-white p-3">
+                         
+                        </div> */}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot className="bg-slate-200 font-semibold">
+                              <tr>
+                                <td colSpan={8} className="p-2 text-right">
+                                  TOTALE
+                                </td>
+                                <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
+                                <td className="p-2 text-center">{totals.acq.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.fog.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
+                                <td className="p-2 text-center">0.00</td>
+                                <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
+                                <td className="p-2 text-center">
+                                  {totals.totConsAcc.toFixed(2)}mc
+                                  <br />
+                                  {totals.acconto.toFixed(2)}
+                                </td>
+                                <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
+                                <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
+                                <td
+                                  className={`p-2 text-center font-bold ${totals.isGreen ? "text-green-600" : "text-red-600"}`}
+                                >
+                                  {totals.totaleInterni.toFixed(2)}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div></>
+          )}
+
           </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Numero Bolletta
-            </div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
-              {selectedImportedDoc.numero_bolletta || "-"}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Codice Fornitura
-            </div>
-            <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
-              {selectedImportedDoc.codice_fornitura || "-"}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Totale Documento
-            </div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              € {Number(selectedImportedDoc.importo_totale_da_pagare || 0).toFixed(2)}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Consumo
-            </div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">
-              {selectedImportedDoc.consumo_globale_mc ?? "-"} mc
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Stato Parsing
-            </div>
-            <div className="mt-1 text-sm font-medium text-slate-800">
-              {selectedImportedDoc.parse_status || "-"}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Documento
-            </div>
-            <div className="mt-1 text-sm font-medium text-slate-800 truncate">
-              {selectedImportedDoc.original_filename || "-"}
-            </div>
-          </div>
-        </div>
-
-        {fatturaId && (
-          <div className="mt-5 flex justify-end border-t pt-4">
-            <button
-              onClick={() => linkImportedToCurrentSession(selectedImportedDoc.id, fatturaId)}
-              className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700"
-            >
-              Collega alla sessione aperta
-            </button>
-          </div>
-        )}
-      </div>
-    ) : (
-      <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-        Seleziona un documento importato per vedere l’anteprima.
-      </div>
-    )}
-
-  
-  </div>
-      </div>
-    </div>
-  </div>
-
-
-</div>
-
-  {/* SESSION CONTROL BAR */}
-  <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
-
-    <div className="grid grid-cols-12 gap-8">
-
-      {/* CREATE */}
-       {/* <div className="col-span-12 lg:col-span-5 space-y-4">
-        <div className="font-semibold">Crea Fattura</div>
-
-
-
-        <div className="flex flex-wrap gap-3">
-          <select
-            className="border rounded px-3 py-2 w-48"
-            value={providerId}
-            onChange={(e) => setProviderId(e.target.value)}
-          >
-            <option value="">Casa Idrica</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nome}
-              </option>
-            ))}
-          </select>
-
-          <select
-            className="border rounded px-3 py-2 w-40"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-          >
-            <option value="">Periodo Attuale</option>
-            {periodi.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.period_month}/{p.period_year}
-              </option>
-            ))}
-          </select>
-
-          <select
-            className="border rounded px-3 py-2 w-40"
-            value={previous}
-            onChange={(e) => setPrevious(e.target.value)}
-          >
-            <option value="">Periodo Prec.</option>
-            {periodi
-              .filter((p) => p.id !== current)
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.period_month}/{p.period_year}
-                </option>
-              ))}
-          </select>
-
-          <button
-            disabled={!canCreate || loadingCreate}
-            onClick={createSession}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg disabled:opacity-50"
-          >
-            {loadingCreate ? "Creazione..." : "Crea"}
-          </button>
-        </div>
-      </div> */}
-    </div>
       
-  </div>
-      {/* EXISTING */}
-      {/* <div className="col-span-12 lg:col-span-7 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="font-semibold">Fatture Esistenti</div>
-          <button
-            onClick={refreshSessionsList}
-            className="text-sm px-3 py-1 rounded border bg-white hover:bg-slate-50"
-          >
-            Aggiorna
-          </button>
-        </div>
-
-        {sessions.length === 0 ? (
-          <div className="text-sm text-slate-500">
-            Nessuna fattura.
-          </div>
-        ) : (
-          <div className="flex gap-3 overflow-x-auto">
-            {sessions.map((s: any) => (
-             <div
-              key={s.id}
-              className={`relative min-w-[220px] p-3 rounded-xl border text-left ${
-                fatturaId === s.id
-                  ? "border-blue-500 bg-blue-50"
-                  : "bg-white hover:bg-slate-50"
-              }`}
-            >
-              <button
-                onClick={() =>
-                  navigate(`/condomini/${condominioId}/fatture/${s.id}`)
-                }
-                className="w-full text-left"
-              >
-                <div className="text-xs uppercase font-medium">
-                  {s.stato}
-                </div>
-                <div className="text-sm break-all">
-                  {s.id.slice(0, 8)}...
-                </div>
-                <div className="text-sm font-semibold">
-                  € {s.grand_total ?? 0}
-                </div>
-              </button>
-
-              {s.stato === "BOZZA" && (
-              <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(s.id);
-                    }}
-                    className="absolute top-2 right-2 opacity-60 hover:opacity-100 transition"
-                    title="Elimina Bozza"
-                  >
-                    <Trash2
-                      size={16}
-                      className="text-red-500 hover:text-red-700 transition"
+        </>
+      )}
+      </div>
+      <div className="print-only">
+              {pages.map((page, pageIndex) => (
+                <div key={pageIndex} className="print-page">
+                  {page.map((r:any, idx) => (
+                    <InvoicePrintCard
+                      key={`${r?.id ?? r?.utenza?.id_user ?? idx}-${pageIndex}`}
+                      r={r}
+                      logoUrl="/images/idromardi-logo.png"
+                      trimestreLabel={`1`}
+                      dataLettura={`1`}
                     />
-                  </button>
-              )}
-            </div>
-
-            ))}
-          </div>
-        )}
-      </div> */}
-
-    {/* </div> */}
-  {/* </div> */}
-
-  {/* DETAIL SECTION */}
-  {!fatturaId ? (
-    <div className="bg-white p-6 rounded-xl shadow">
-       <div className="font-semibold">Seleziona una fattura</div>
-      {/* <div className="text-sm text-slate-500">
-        Crea una nuova fattura oppure aprine una esistente.
-      </div>  */}
-      <div className="mt-6 border-t pt-5">
-      
-      <div className="mt-1 text-sm text-slate-500">
-        Crea una nuova sessione manuale.
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <select
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
-            value={providerId}
-            onChange={(e) => setProviderId(e.target.value)}
-          >
-            <option value="">Casa Idrica</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nome}
-              </option>
-            ))}
-          </select>
-
-          <select
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-          >
-            <option value="">Periodo Attuale</option>
-            {periodi.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.period_month}/{p.period_year}
-              </option>
-            ))}
-          </select>
-
-          <select
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
-            value={previous}
-            onChange={(e) => setPrevious(e.target.value)}
-          >
-            <option value="">Periodo Prec.</option>
-            {periodi
-              .filter((p) => p.id !== current)
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.period_month}/{p.period_year}
-                </option>
+                  ))}
+                </div>
               ))}
-          </select>
-
-          <button
-            disabled={!canCreate || loadingCreate}
-            onClick={createSession}
-            className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loadingCreate ? "Creazione..." : "Carica Sessione"}
-          </button>
-        </div>
-      </div>
+      </div> 
     </div>
-    </div>
-  ) : loadingDetail ? (
-    <div className="bg-white p-6 rounded-xl shadow">
-      Caricamento...
-    </div>
-  ) : !session ? (
-    <div className="bg-white p-6 rounded-xl shadow">
-      Sessione non trovata
-    </div>
-  ) : (
-    <>
-  
-{/* CONTATORE GENERALE */}
-<div className="bg-white border rounded-2xl p-6 w-full space-y-6">
-
-  <div className="flex justify-between items-center">
-    <h3 className="font-semibold text-lg">Imposta Giorni</h3>
-  </div>
-{/* ============================= */}
-{/* CONTROLLO CALCOLO + GENERALE */}
-{/* ============================= */}
-<div className="bg-white border border-slate-200 rounded-2xl px-5 py-4 shadow-sm">
-  <div className="mb-4">
-    <h3 className="text-[15px] font-semibold text-slate-900">
-      Parametri Calcolo e Contatore Generale
-    </h3>
-    <p className="mt-1 text-sm text-slate-500">
-      Imposta i parametri di calcolo e aggiorna il contatore generale.
-    </p>
-  </div>
-
-  <div className="overflow-x-auto">
-    <div className="flex min-w-max items-end gap-5">
-
-      {/* BLOCCO PRINCIPALE - CONTATORE GENERALE */}
-      <div className="rounded-2xl border border-slate-300 bg-gradient-to-br from-slate-50 to-white px-4 py-3 shadow-sm ring-1 ring-slate-100">
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-              Contatore Generale
-            </div>
-            <div className="mt-0.5 text-sm text-slate-600">
-              Valori principali da aggiornare
-            </div>
-          </div>
-
-          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
-            Consumo: {Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))}
-          </div>
-        </div>
-
-        <div className="flex items-end gap-4">
-          <div className="flex flex-col">
-            <label className="mb-1.5 text-xs font-semibold tracking-wide text-slate-700">
-              Lettura Attuale
-            </label>
-            <input
-              type="number"
-              className="h-11 w-[132px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all duration-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-              value={valAtt}
-              onChange={(e) => setValAtt(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-col">
-            <label className="mb-1.5 text-xs font-semibold tracking-wide text-slate-700">
-              Lettura Precedente
-            </label>
-            <input
-              type="number"
-              className="h-11 w-[132px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition-all duration-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-              value={valPrec}
-              onChange={(e) => setValPrec(e.target.value)}
-            />
-          </div>
-
-          <div className="flex flex-col">
-            <label className="mb-1.5 text-xs font-semibold text-transparent select-none">
-              Azione
-            </label>
-            <button
-              onClick={saveGenerale}
-              disabled={savingGenerale}
-              className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-md transition-all duration-200 hover:-translate-y-[1px] hover:bg-slate-800 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Save size={16} />
-              {savingGenerale ? "Salvando..." : "Salva Generale"}
-            </button>
-          </div>
-        </div>
-      </div>
-
-
-      {/* DIVIDER */}
-      <div className="h-14 w-px self-center bg-slate-200" />
-      
-      {/* PARAMETRI SECONDARI */}
-      <div className="flex items-end gap-5">
-        <div className="flex flex-wrap gap-3">
-          <select
-            className="border rounded px-3 py-2 w-48"
-            value={annoTariffa}
-            onChange={(e) => setAnnoTariffa(e.target.value)}
-          >
-            <option value="">Anno Tariffa</option>
-            {years.map((year) => (
-            <option key={year} value={year}>
-              {year === importedDocYear ? `Anno Corrente (${year})` : year}
-            </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col">
-          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Giorni QF
-          </label>
-          <input
-            type="number"
-            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-            value={giorniQf}
-            onChange={(e) => setGiorniQf(e.target.value)}
-          />
-        </div>
-
-        <div className="flex flex-col">
-          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Giorni Consumi
-          </label>
-          <input
-            type="number"
-            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-            value={giorniConsumi}
-            onChange={(e) => setGiorniConsumi(e.target.value)}
-          />
-        </div>
-
-        <div className="flex flex-col">
-          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Giorni Interni
-          </label>
-          <input
-            type="number"
-            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-            value={giorniCasaInterni}
-            onChange={(e) => setGiorniCasaInterni(e.target.value)}
-          />
-        </div>
-
-        <div className="flex flex-col">
-          <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Giorni Acconto
-          </label>
-          <input
-            type="number"
-            className="h-10 w-[88px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-            value={giorniAcconto}
-            onChange={(e) => setGiorniAcconto(e.target.value)}
-          />
-        </div>
-
-        {Number(giorniAcconto) > 0 && (
-          <>
-            <div className="h-10 w-px self-end bg-slate-200" />
-
-            <div className="flex flex-col">
-              <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                MC Acconto
-              </label>
-              <input
-                type="number"
-                className="h-10 w-[96px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                value={mcAcconto}
-                onChange={(e) => setMcAcconto(Number(e.target.value))}
-              />
-            </div>
-            <div className="flex flex-col">
-              <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                MC Storno
-              </label>
-              <input
-                type="number"
-                className="h-10 w-[96px] rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-all duration-200 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                value={mcStorno}
-                onChange={(e) => setMcStorno(Number(e.target.value))}
-              />
-            </div>
- 
-          </>
-        )}
-      </div>
-    </div>
-  </div>
-</div>
-{/* CALCULATION BREAKDOWN */}
-<div className="bg-slate-50 rounded-2xl p-6 space-y-6 border border-slate-200">
-  <div className="flex items-center justify-between gap-4">
-    <div>
-      <div className="text-lg font-semibold text-slate-800">
-        Dettaglio Calcolo
-      </div>
-      <div className="text-sm text-slate-500">
-        Riepilogo valori di calcolo e confronto con il totale documento.
-      </div>
-    </div>
-  </div>
-
-  <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-    {/* LEFT SIDE */}
-    <div className="xl:col-span-9 space-y-6">
-      {/* PRIMARY VALUES */}
-      <div>
- 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="text-xs text-slate-500 uppercase tracking-wide">
-              Consumo
-            </div>
-            <div className="text-2xl font-bold text-slate-800 mt-1">
-              {Number(valAtt || 0) - Number(valPrec || 0)}
-            </div>
-            <div className="text-xs text-slate-400 mt-1">mc</div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="text-xs text-slate-500 uppercase tracking-wide">
-              Imp. Cons.
-            </div>
-            <div className="text-lg font-semibold text-slate-800 mt-2">
-              € {Number(session?.tot_acquedotto ?? 0).toFixed(2)}  
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="text-xs text-slate-500 uppercase tracking-wide">
-              Dep.
-            </div>
-            <div className="text-lg font-semibold text-slate-800 mt-2">
-              € {(Number(session?.tot_fognatura ?? 0) + Number(session?.tot_depurazione ?? 0)).toFixed(2)}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="text-xs text-slate-500 uppercase tracking-wide">
-              Q.F
-            </div>
-            <div className="text-lg font-semibold text-slate-800 mt-2">
-              € {Number(parsedQF ?? session?.tot_qf ?? 0).toFixed(2)}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* SECONDARY VALUES */}
-      <div>
-        <div className="text-sm font-semibold text-slate-700 mb-3">
-          Valori secondari
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="text-xs text-slate-500 uppercase tracking-wide">
-              IVA
-            </div>
-            <div className="text-lg font-semibold text-slate-800 mt-2">
-              € {Number(session?.tot_iva ?? 0).toFixed(2)}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
-            <div className="text-xs text-slate-500 uppercase tracking-wide">
-              Varie
-            </div>
-            <div className="mt-3">
-              <input
-                type="number"
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-slate-800 bg-white"
-                value={varie}
-                onChange={(e) => setVarie(e.target.value)}
-                placeholder="Inserisci valore"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ACCONTO */}
-      {mcAcconto > 0 && (
-        <div>
-          <div className="text-sm font-semibold text-slate-700 mb-3">
-            Dati acconto
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="grid grid-cols-5 gap-0 border-b bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
-              <div className="px-4 py-3">Cons. Acconto</div>
-              <div className="px-4 py-3">Imp. Acconto</div>
-              <div className="px-4 py-3">Dep. Acconto</div>
-              <div className="px-4 py-3">Iva Acconto</div>
-              <div className="px-4 py-3">Tot. Acconto</div>
-            </div>
-
-            <div className="grid grid-cols-5 gap-0 text-sm text-slate-800">
-              <div className="px-4 py-3 border-t">{mcAcconto?.toFixed(2)}</div>
-              <div className="px-4 py-3 border-t">{eurAcconto?.toFixed(2)}</div>
-              <div className="px-4 py-3 border-t">{depfogAcconto?.toFixed(2)}</div>
-              <div className="px-4 py-3 border-t">{ivaAcconto?.toFixed(2)}</div>
-              <div className="px-4 py-3 border-t font-semibold">{totaleAcconto?.toFixed(2)}</div>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* STORNO */}
-      {mcStorno !== 0 && (
-        <div>
-          <div className="text-sm font-semibold text-slate-700 mb-3">
-            Dati storno acconto
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="grid grid-cols-5 gap-0 border-b bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
-              <div className="px-4 py-3">Cons. Storno</div>
-              <div className="px-4 py-3">Imp. Storno</div>
- 
-            </div>
-
-            <div className="grid grid-cols-5 gap-0 text-sm text-slate-800">
-              <div className="px-4 py-3 border-t">{mcStorno? (Number(mcStorno).toFixed(2)) : 0}</div>
-              <div className="px-4 py-3 border-t">{eurStorno? (Number(eurStorno).toFixed(2)) : 0}</div>
- 
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-
-    {/* RIGHT SIDE COMPARISON */}
-    <div className="xl:col-span-3">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 h-full">
-        <div className="text-sm font-semibold text-slate-800">
-          Confronto Totali
-        </div>
-        <div className="text-xs text-slate-500 mt-1">
-          Verifica tra il totale del documento importato e il totale calcolato.
-        </div>
-
-        <div className="mt-5 space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Totale ABC
-            </div>
-            <div className="mt-1 text-2xl font-bold text-slate-900">
-              € {Number(selectedImportedDoc?.importo_totale_da_pagare || 0).toFixed(2)}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-blue-200 bg-blue-600 px-4 py-4 text-white shadow-sm">
-            <div className="text-[11px] uppercase tracking-wide opacity-80">
-              Gran Totale
-            </div>
-            <div className="mt-1 text-2xl font-bold">
-              € {Number(session?.grand_total ?? 0).toFixed(2)}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">
-              Delta
-            </div>
-            <div
-              className={`mt-1 text-xl font-bold ${
-                Math.abs(
-                  Number(session?.grand_total ?? 0) -
-                    Number(selectedImportedDoc?.importo_totale_da_pagare || 0)
-                ) < 0.01
-                  ? "text-emerald-600"
-                  : "text-amber-600"
-              }`}
-            >
-              €{" "}
-              {(
-                Number(session?.grand_total ?? 0) -
-                Number(selectedImportedDoc?.importo_totale_da_pagare || 0)
-              ).toFixed(2)}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-
-</div>
-
-
- {/* QF SECTION */}
-        {/* <div className="bg-white border rounded-xl p-4 space-y-4">
-          <div className="text-sm font-semibold text-slate-600">
-            Giorni Operatore - Giorni Casa Idrica
-          </div>
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-   */}
-  {/* Operatore */}
-  {/* <div className="bg-white border rounded-lg p-4 space-y-2">
-    <div className="text-sm font-medium text-blue-600">
-      Operatore
-    </div>
-
-    <div className="text-sm">
-      {periodoPrecedente?.data_lettura_operatore ?? "-"} →{" "}
-      {periodoAttuale?.data_lettura_operatore ?? "-"}
-    </div>
-
-    <div className="text-sm font-semibold">
-      Giorni: {giorniOperatore}
-    </div>
-  </div> */}
-
-  {/* Casa Idrica */}
-  {/* <div className="bg-white border rounded-lg p-4 space-y-2">
-    <div className="text-sm font-medium text-indigo-600">
-      Casa Idrica
-    </div>
-
-    <div className="text-sm">
-      {periodoPrecedente?.data_lettura_casa_idrica ?? "-"} →{" "}
-      {periodoAttuale?.data_lettura_casa_idrica ?? "-"}
-    </div>
-
-    <div className="text-sm font-semibold">
-      Giorni: {giorniCasaIdrica}
-    </div>
-  </div> */}
-
-{/* </div> */}
-
- 
- {/* </div> */}
-
-      {/* OPERATIONS PANEL */}
-      {/* <div className="bg-white rounded-2xl shadow p-6 space-y-6">
-
-        <div className="text-lg font-semibold">
-          Operazioni Fatturazione
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
- 
-
-          <button
-            className="bg-indigo-600 text-white px-4 py-2 rounded-xl hover:bg-indigo-700 transition"
-            onClick={() => onStampaProspetto(fatturaId)}
-          >
-            Stampa Prospetto
-          </button>
-
-          <button
-            className="bg-indigo-600 text-white px-4 py-2 rounded-xl hover:bg-indigo-700 transition"
-          >
-            Stampa Bollette
-          </button>
- 
-        </div>
-      </div> */}
-
-
-      {/* CONTATORI INTERNI */}
-      <div className="bg-white border rounded-2xl p-6">
-        <h3 className="font-semibold mb-4">      Situazione Contatori Interni 
-</h3>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs border border-slate-200">
-            <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
-              <tr>
-                <th className="p-2 sticky left-0 bg-slate-100 z-30">ID</th>
-                <th className="p-2 sticky left-[60px] bg-slate-100 z-30">Utente</th>
-                <th className="p-2">Isolato</th>
-                <th className="p-2">Scala</th>
-                <th className="p-2">Interno</th>
-                <th className="p-2">Lett Att</th>
-                <th className="p-2">Lett Prec</th>
-                <th className="p-2">Stato</th>
-                <th className="p-2">Consumo</th>
-                 
-                <th className="p-2">Acq</th>
-                <th className="p-2">Fog</th>
-                <th className="p-2">Dep</th>
-                <th className="p-2">QF</th>
-                <th className="p-2">Cong.</th>
-                <th className="p-2">Oneri</th>
-                <th className="p-2">IVA</th>
-                <th className="p-2">Acconto<br></br>MC/EUR</th>
-                <th className="p-2">Storno<br></br>EUR</th>
-                <th className="p-2">Arr</th>
-                <th className="p-2 font-semibold">Totale</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {righe.length === 0 && (
-                <tr>
-                  <td colSpan={14} className="p-4 text-center text-slate-400">
-                    Nessun dato disponibile
-                  </td>
-                </tr>
-              )}
-
-              {
-                //console.log("Righe contatori interni:", totals)
-              }
-              {righe.map((r: any, idx: number) => (
-                
-                <tr key={r.id ?? idx} className="border-t odd:bg-white even:bg-slate-50">
-                  <td className="p-2 text-right">{r.utenza.id_user ?? "-"}</td>
-                  <td className="p-2 text-center">{r.utenza.Nome + " " + (r.utenza.Cognome ?? "-")}</td>
-                  <td className="p-2 text-center">{r.utenza.Isolato ?? ""}</td>
-                  <td className="p-2 text-center">{r.utenza.Scala ?? ""}</td>
-                  <td className="p-2 text-center">{r.utenza.Interno ?? ""}</td>
-                  <td className="p-2 text-center">{r.riga?.lettura_attuale ?? r.attuale?.valore_lettura}</td>
-                  <td className="p-2 text-center">{r.riga?.lettura_precedente ?? r.precedente?.valore_lettura}</td>
-                  
-                  <td className="p-2 text-center">{r.riga?.stato_attuale ?? r.attuale?.stato_lettura}</td>
-                  <td className="p-2 text-center">{parseInt(r.riga?.consumo_totale ?? 0)}</td>
-                  <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
-                  <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
-
-                  <td className="p-2 text-center">{Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc<br></br>{Number(r.riga?.imp_acconto ?? 0).toFixed(2)} </td>
-                  <td className="p-2 text-center">{Number(r.riga?.storno_acconto ?? 0).toFixed(2)}</td>
-                  
-                  <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
-                  <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-slate-200 font-semibold">
-              <tr>
-                <td colSpan={8} className="p-2 text-right">TOTALE</td>
-                <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
-                <td className="p-2 text-center">{totals.acq.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.fog.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
-
-                <td className="p-2 text-center">{totals.acconto.toFixed(2)}<br></br> {totals.totConsAcc.toFixed(2)}mc </td>
-                <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
-                <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
- 
-                <td
-                  className={`p-2 text-center font-bold ${
-                    totals.isGreen ? "text-green-600" : "text-red-600"
-                  }`}
-                >
-                  {totals.totaleInterni.toFixed(2)}
-                </td>
-              </tr>
-          </tfoot>
-          </table>
-        </div>
-      </div>
-
-    </>
-  )}
-</div>
+    
 
   );
   
