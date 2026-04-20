@@ -60,6 +60,7 @@ exports.calculateSession = async (req, res) => {
       annoAtt: req.body?.annoTariffa,
       eurStorno: req.body?.eurStorno,
       parsedQF: req.body?.parsedQF,
+      totaleParsedWithOneri: req.body?.totaleParsedWithOneri
      });
         
     res.json(result);

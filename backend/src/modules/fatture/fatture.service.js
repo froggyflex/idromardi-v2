@@ -681,13 +681,13 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
         ? Infinity
         : (spanBase * multN  / yearDays) * days;
 
-    const take = capacity === Infinity ? remaining : Math.min(remaining, capacity);
+    const take = capacity === Infinity ? remaining: Math.min(remaining, capacity);
     
     const mcAllocati = round2(take);
     const price = n2(s.prezzo_acquedotto);
     const importo = round2(mcAllocati * price);
-    
 
+      
     total += take * price;
     remaining -= take;
 
@@ -707,8 +707,10 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
         capacity: capacity === Infinity ? null : round2(capacity),
       });
      
+      
   }
   
+ 
   return {
     total: round2(total),
     tiers,
@@ -1478,7 +1480,9 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     conn.release();
   }
 }
-async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPrec = null, eurStorno = 0) {
+async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPrec = null, eurStorno = 0, totaleParsedWithOneri) {
+
+  console.log(generale);
   // ---------- helpers ----------
   const pick = (obj, ...keys) => {
     for (const k of keys) {
@@ -1753,7 +1757,8 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
       let impAcq = 0;
       
       let user_id = ra0.id_utenza;
-      
+
+       
       if (consumoNorm !== null) {
         const impNorm = allocateAcquedotto({
           consumo: consumoNorm,
@@ -1769,7 +1774,8 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
         impAcq = round2(impNorm.total);
         dettaglioConsumiAcquedotto.push(impNorm.tiers);
       }
-
+ 
+       
       const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
       const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
       const impQf = flatTipo === "SPECIAL" ? 0 : round2(qfPerNuae * nuaeU);
@@ -1944,8 +1950,10 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     // TF base (TF applied on TF1 base, not stacked)
     // -------------------------------------------------------------------
     const baseSum = round2(rows.reduce((s, r) => s + n2(r.base_totale), 0));
-    const diff = round2(n2(generale.totale + totaleOneri) - baseSum);
 
+    const diff = totaleParsedWithOneri!=0? round2(n2(totaleParsedWithOneri) - baseSum) : round2(n2(generale.totale + totaleOneri) - baseSum);
+
+    console.log(diff )
     applyTfToRows({ tfCode, diff, rows });
 
     // Apply conguaglio + rounding adjustment
@@ -2100,7 +2108,7 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     throw err;
   }
 }
-exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPrec = null, eurStorno = 0, parsedQF = 0 }) {
+exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPrec = null, eurStorno = 0, parsedQF = 0, totaleParsedWithOneri = 0 }) {
 
   assertUUID(sessionId, "sessionId");
 
@@ -2125,7 +2133,7 @@ exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPre
  
     session.consumoNorm = generaleResult.meta.consumoNorm;
 
-    const interniTotals = await calculateInterni(conn, session, g, tfCode, annoAtt, annoPrec, eurStorno);
+    const interniTotals = await calculateInterni(conn, session, g, tfCode, annoAtt, annoPrec, eurStorno, totaleParsedWithOneri);
     
     
     await conn.query(
