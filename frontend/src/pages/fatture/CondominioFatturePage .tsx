@@ -789,6 +789,8 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
   }
 
   async function handleCreateFattura() {
+
+    
     try {
       setError(null);
 
@@ -814,6 +816,9 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
         condominioId,
         proformaIds: [],
         fatturaDate,
+        totaleOneri,
+        current, 
+        previous, 
       });
 
       setIsCreateFatturaModalOpen(false);

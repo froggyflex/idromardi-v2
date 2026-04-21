@@ -2801,7 +2801,7 @@ async function uploadProformaFiles() {
                           filteredFattureRows.map((row: any) => (
                             
                             <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-6 py-4 font-semibold text-slate-800">{row.import_numero}</td>
+                              <td className="px-6 py-4 font-semibold text-slate-800">{row.import_numero || row.numero}</td>
                               <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
                               <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
                               <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>

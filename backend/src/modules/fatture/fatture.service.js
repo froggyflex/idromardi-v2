@@ -350,6 +350,7 @@ exports.parseImportedDocument = async (id) => {
         headers: form.getHeaders(),
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
+        timeout: 400000  
       }
     );
 

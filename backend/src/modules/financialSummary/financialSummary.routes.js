@@ -3,8 +3,7 @@ const router = express.Router();
 const controller = require("./financialSummary.controller");
 const uploadPdf = require("../../config/multerPdf");
 
-console.log("UPLOAD TYPE:", typeof uploadPdf);
-console.log("UPLOAD VALUE:", uploadPdf);
+ 
 router.get("/", controller.getSummary);
 router.get("/recent", controller.getRecentRows);
 

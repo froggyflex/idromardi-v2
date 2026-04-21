@@ -2581,7 +2581,7 @@ async function getFatturaProforme(fatturaId) {
   }));
 }
 
-async function promoteImportedDocumentToFattura(fileId, condominioId, proformaIds = []) {
+async function promoteImportedDocumentToFattura(fileId, condominioId, proformaIds = [], fatturaDate = null, totaleOneri = 0, current = null, previous = null) {
   const conn = await db.getConnection();
 
   try {
@@ -2593,46 +2593,66 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     const cleanProformaIds = Array.isArray(proformaIds)
       ? proformaIds.filter(Boolean)
       : [];
-
-    console.log("👉 PROMOTE FATTURA");
+ 
     console.log("fileId:", fileId);
     console.log("condominioId:", condominioId);
     console.log("proformaIds:", cleanProformaIds);
+    console.log("fatturaDate:", fatturaDate);
+    console.log("totaleOneri:", totaleOneri);
+    console.log("current:", parseItalianLongDate(current));
+    console.log("previous:", parseItalianLongDate(previous));
 
-    // 1. GET IMPORTED DOC
-    const [[imported]] = await conn.query(
-      `
-      SELECT *
-      FROM import_items
-      WHERE promoted_entity_id = ?
-      AND document_type = 'FATTURA'
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [fileId]
-    );
+    let imported = null;
+    if(fileId !== "01") {
+      // 1. GET IMPORTED DOC
+      [[imported]] = await conn.query(
+        `
+        SELECT *
+        FROM import_items
+        WHERE promoted_entity_id = ?
+        AND document_type = 'FATTURA'
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [fileId]
+      );
 
-    if (!imported) {
-      throw new Error("Documento importato non trovato");
+      if (!imported) {
+        throw new Error("Documento importato non trovato");
+      }
+
+      if (imported.review_status === "PROMOSSO") {
+        throw new Error("Documento già promosso");
+      }
     }
-
-    if (imported.review_status === "PROMOSSO") {
-      throw new Error("Documento già promosso");
-    }
-
-    // 2. VALIDATE DATA
-    const data = imported.extracted_date;
-    const descrizione = imported.extracted_description || "Fattura da parser";
-    const importo = Number(imported.extracted_amount);
-
-    if (!data) throw new Error("Data mancante");
-    if (!Number.isFinite(importo)) throw new Error("Importo non valido");
 
     // 3. GET CONDOMINIO
     const [[condominio]] = await conn.query(
-      `SELECT id, indirizzo FROM condomini_v2 WHERE id = ?`,
+      `SELECT id, indirizzo, cap, citta FROM condomini_v2 WHERE id = ?`,
       [condominioId]
     );
+
+    const [[currentP]] = await conn.query(
+      `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
+      [current]
+    );
+
+    const [[previousP]] = await conn.query(
+       `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
+      [previous]
+    );
+
+    const period = "dal "+previousP.period_month+"."+previousP.period_year+" al "+currentP.period_month+"."+currentP.period_year;
+    const description =  "Lettura e fatturazione consumi idrici periodo "+period+" per condominio sito in "+condominio.cap+" - "+condominio.citta+" alla "+condominio.indirizzo;
+
+    const oneriDaFatturazione =  fileId === "01"? totaleOneri : null;
+    // 2. VALIDATE DATA
+    const data = fileId === "01"? fatturaDate : imported.extracted_date;
+    const descrizione = fileId === "01" ? description : imported.extracted_description || "Fattura da parser";
+    const importo = fileId === "01" ? Number(oneriDaFatturazione) :  Number(imported.extracted_amount);
+
+    if (!data) throw new Error("Data mancante");
+    if (!Number.isFinite(importo)) throw new Error("Importo non valido");
 
     if (!condominio) throw new Error("Condominio non trovato");
 
@@ -2720,26 +2740,27 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     }
 
     // 6. MARK IMPORT AS DONE
-    await conn.query(
-      `
-      UPDATE import_items
-      SET review_status = 'PROMOSSO', updated_at = NOW()
-      WHERE id = ?
-      `,
-      [imported.id]
-    );
-
-    await conn.query(
+    if(fileId !== "01") {
+      await conn.query(
         `
-        UPDATE import_batch_files
-        SET
-          parse_status = 'COMPLETATO_PROMOSSO',
-          updated_at = NOW()
+        UPDATE import_items
+        SET review_status = 'PROMOSSO', updated_at = NOW()
         WHERE id = ?
         `,
-        [fileId]
+        [imported.id]
       );
 
+      await conn.query(
+          `
+          UPDATE import_batch_files
+          SET
+            parse_status = 'COMPLETATO_PROMOSSO',
+            updated_at = NOW()
+          WHERE id = ?
+          `,
+          [fileId]
+        );
+    }
     await conn.commit();
 
     return {
@@ -2748,7 +2769,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     };
   } catch (err) {
     await conn.rollback();
-    console.error("❌ promoteImportedDocumentToFattura:", err);
+    console.error("promoteImportedDocumentToFattura:", err);
     throw err;
   } finally {
     conn.release();

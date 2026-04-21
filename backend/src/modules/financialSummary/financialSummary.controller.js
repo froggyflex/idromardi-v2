@@ -294,8 +294,9 @@ async function annullaFattura(req, res) {
 async function promoteImportedDocumentToFattura(req, res) {
   try {
     const { fileId } = req.params;
-    const { condominioId, proformaIds } = req.body;
+    const { condominioId, proformaIds, fatturaDate, totaleOneri, current, previous} = req.body;
 
+  
     if (!fileId) {
       return res.status(400).json({ error: "fileId mancante" });
     }
@@ -307,7 +308,11 @@ async function promoteImportedDocumentToFattura(req, res) {
     const result = await service.promoteImportedDocumentToFattura(
       fileId,
       condominioId,
-      proformaIds || []
+      proformaIds || [],
+      fatturaDate || null, 
+      totaleOneri || 0,
+      current || null,
+      previous || null
     );
 
     return res.status(201).json(result);
