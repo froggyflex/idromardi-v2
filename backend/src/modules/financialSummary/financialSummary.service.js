@@ -2602,6 +2602,22 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     console.log("current:", parseItalianLongDate(current));
     console.log("previous:", parseItalianLongDate(previous));
 
+    // 3. GET CONDOMINIO
+    const [[condominio]] = await conn.query(
+            `SELECT id, indirizzo, cap, citta FROM condomini_v2 WHERE id = ?`,
+            [condominioId]
+    );
+
+    const [[currentP]] = await conn.query(
+            `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
+            [current]
+    );
+
+    const [[previousP]] = await conn.query(
+            `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
+            [previous]
+    );
+
     let imported = null;
     let description = "";
     if(fileId !== "01") {
@@ -2627,24 +2643,10 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
       }
     }else{
 
-          // 3. GET CONDOMINIO
-          const [[condominio]] = await conn.query(
-            `SELECT id, indirizzo, cap, citta FROM condomini_v2 WHERE id = ?`,
-            [condominioId]
-          );
 
-          const [[currentP]] = await conn.query(
-            `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
-            [current]
-          );
-
-          const [[previousP]] = await conn.query(
-            `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
-            [previous]
-          );
 
         const period = "dal "+previousP.period_month+"."+previousP.period_year+" al "+currentP.period_month+"."+currentP.period_year;
-        
+
         description =  "Lettura e fatturazione consumi idrici periodo "+period+" per condominio sito in "+condominio.cap+" - "+condominio.citta+" alla "+condominio.indirizzo;
 
     }
