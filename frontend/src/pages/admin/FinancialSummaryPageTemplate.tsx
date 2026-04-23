@@ -658,7 +658,7 @@ async function loadPaymentDetail(id: string) {
     setIsRegisterPaymentModalOpen(true);
   }
   const filteredFattureRows = useMemo(() => {
-    console.log("fattureRows:", fattureRows);
+  
     return fattureRows.filter((row: any) => {
       const q = fatturaSearch.trim().toLowerCase();
 
@@ -745,35 +745,7 @@ async function loadPaymentDetail(id: string) {
       }).format(num) + " €"
     );
   };
-
-
-    const quickActions = [
-      {
-        key: "new-proforma",
-        title: "Nuovo proforma",
-        description: "Inserimento manuale di una proforma singola.",
-        badge: "Manuale",
-      },
-      {
-        key: "new-fattura",
-        title: "Nuova fattura",
-        description: "Inserimento manuale di una fattura singola.",
-        badge: "Manuale",
-      },
-      {
-        key: "upload-proforme",
-        title: "Carica batch proforme",
-        description: "Upload multiplo file per parser proforma.",
-        badge: "Batch upload",
-      },
-      {
-        key: "upload-fatture",
-        title: "Carica batch fatture",
-        description: "Upload multiplo file per parser fatture.",
-        badge: "Batch upload",
-      },
-    ];
-
+ 
     const importAreaConfig = {
       PROFORMA: {
         title: "Area parser proforma",
@@ -805,44 +777,45 @@ async function loadPaymentDetail(id: string) {
   
 
   const [importedDocsSearch, setImportedDocsSearch] = useState("");
-const extractSearchFromDescription = (description: any) => {
+
+  const extractSearchFromDescription = (description: any) => {
   const text = String(description ?? "").trim();
-  if (!text) return "";
+    if (!text) return "";
 
-  const normalized = text
-    .replace(/\s+/g, " ")
-    .replace(/\s*,\s*/g, ", ")
-    .trim();
+    const normalized = text
+      .replace(/\s+/g, " ")
+      .replace(/\s*,\s*/g, ", ")
+      .trim();
 
-  const stopWords =
-    "(?=\\s+(?:periodo|fatturazione|consumi|relativi|relativo|condominio|sito)\\b|$)";
+    const stopWords =
+      "(?=\\s+(?:periodo|fatturazione|consumi|relativi|relativo|condominio|sito)\\b|$)";
 
-  const patterns = [
-    new RegExp(`\\balla\\s+((?:via|viale|corso|piazza)\\s+.*?)${stopWords}`, "i"),
-    new RegExp(`\\b((?:via|viale|corso|piazza)\\s+.*?)(?:,\\s*\\d{5}\\s*-\\s*[A-Za-zÀ-ÿ' ]+)?${stopWords}`, "i"),
-    new RegExp(`\\b((?:via|viale|corso|piazza)\\s+[^,]+(?:,\\s*[^,]+){0,2})`, "i"),
-  ];
+    const patterns = [
+      new RegExp(`\\balla\\s+((?:via|viale|corso|piazza)\\s+.*?)${stopWords}`, "i"),
+      new RegExp(`\\b((?:via|viale|corso|piazza)\\s+.*?)(?:,\\s*\\d{5}\\s*-\\s*[A-Za-zÀ-ÿ' ]+)?${stopWords}`, "i"),
+      new RegExp(`\\b((?:via|viale|corso|piazza)\\s+[^,]+(?:,\\s*[^,]+){0,2})`, "i"),
+    ];
 
-  let extracted = "";
+    let extracted = "";
 
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (match?.[1]) {
-      extracted = match[1];
-      break;
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (match?.[1]) {
+        extracted = match[1];
+        break;
+      }
     }
-  }
 
-  if (!extracted) return "";
+    if (!extracted) return "";
 
-  return extracted
-    .replace(/,\s*\d{5}\s*-\s*[A-Za-zÀ-ÿ' ]+/i, "")
-    .replace(/\b\d{5}\b\s*-\s*[A-Za-zÀ-ÿ' ]+/i, "")
-    .replace(/\s+,/g, ",")
-    .replace(/,+/g, ",")
-    .replace(/,\s*$/g, "")
-    .trim();
-};
+    return extracted
+      .replace(/,\s*\d{5}\s*-\s*[A-Za-zÀ-ÿ' ]+/i, "")
+      .replace(/\b\d{5}\b\s*-\s*[A-Za-zÀ-ÿ' ]+/i, "")
+      .replace(/\s+,/g, ",")
+      .replace(/,+/g, ",")
+      .replace(/,\s*$/g, "")
+      .trim();
+  };
   
     async function annullaFattura(id: string) {
     const reason = window.prompt("Motivo annullamento fattura:");
@@ -979,74 +952,7 @@ async function loadFatturaDetail(id: string) {
     });
   }, [importedDocs, importedDocsSearch]);
 
-  const getDocTimestamp = (doc: any) =>
-    new Date(
-      doc.created_at || doc.uploaded_at || doc.data_documento || doc.updated_at || 0
-    ).getTime();
-
-  const getSortableNumero = (numero: any) => {
-    const str = String(numero ?? "").trim();
-    const parts = str.match(/\d+/g);
-
-    if (!parts) return -1;
-
-    return Number(parts.join(""));
-  };
-
-  const getParsePriority = (doc: any) => {
-    const status = String(doc.parse_status ?? "").trim().toUpperCase();
-
-    if (status === "DA_REVISIONARE") return 0;
-    if (status === "COMPLETATO_CON_ERRORI") return 1;
-
-    return 2;
-  };
-
-  const sortImportedDocs = (docs: any[]) => {
-    return [...docs].sort((a, b) => {
-      const aPriority = getParsePriority(a);
-      const bPriority = getParsePriority(b);
-
-      if (aPriority !== bPriority) {
-        return aPriority - bPriority;
-      }
-
-      const aNum = getSortableNumero(a.numero);
-      const bNum = getSortableNumero(b.numero);
-
-      if (aNum !== bNum) {
-        return bNum - aNum;
-      }
-
-      return getDocTimestamp(b) - getDocTimestamp(a);
-    });
-  };
-
-  const proformaDocs = useMemo(() => {
-    return sortImportedDocs(
-      filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "PROFORMA")
-    );
-  }, [filteredImportedDocs]);
-
-  const fatturaDocs = useMemo(() => {
-    return sortImportedDocs(
-      filteredImportedDocs.filter((doc) => normalizeDocType(doc) === "FATTURA")
-    );
-  }, [filteredImportedDocs]);
- 
-
-  function extractNumeroValue(numero: any): number {
-    if (!numero) return 0;
-
-    const str = String(numero);
-
-    // Extract first numeric sequence
-    const match = str.match(/\d+/);
-
-    if (!match) return 0;
-
-    return Number(match[0]);
-  }
+  
   const filteredCondomini = useMemo(() => {
   const q = condominiSearch.trim().toLowerCase();
     if (!q) return condomini;
@@ -1348,6 +1254,8 @@ useEffect(() => {
       await loadImportedDocumentDetail(fileId);
       await loadSummary();
       await loadRecentRows();
+      await loadProformasRows();
+
     } catch (err: any) {
       console.error("Promote error:", err?.response?.data || err);
       setError(err?.response?.data?.error || "Errore durante la creazione delle proforme.");
@@ -1434,7 +1342,7 @@ async function waitForImportedFilesCompletion(
   delayMs = 700
 ) {
   if (!uploadedIds.length) {
-    await loadImportedDocuments();
+    await loadImportedDocuments(1, activeImportTab, importedDocsSearch);
     return true;
   }
 
@@ -1716,6 +1624,7 @@ async function promoteImportedFattura() {
         await loadImportedDocumentDetail(selectedImportedDoc.id);
         await loadSummary();
         await loadRecentRows();
+        await loadFattureRows();
       } catch (err: any) {
         setError(err?.response?.data?.error || "Errore durante la creazione della fattura.");
       } finally {
@@ -1759,7 +1668,8 @@ async function uploadProformaFiles() {
         "Non tutti i documenti risultano completati entro il tempo previsto. Ricarico comunque la lista."
       );
       setImportedDocsPage(1);
-      await loadImportedDocuments(1, activeImportTab, importedDocsSearch);
+
+      // await loadImportedDocuments(1, activeImportTab, importedDocsSearch);
     }
   } catch (err: any) {
     setError(
@@ -1786,7 +1696,29 @@ async function uploadProformaFiles() {
       setParsingImportId(null);
     }
   }
- 
+   const filteredFatturaRows = useMemo(() => {
+    return fattureRows.filter((row) => {
+      const q = fatturaSearch.trim().toLowerCase();
+
+      const matchesSearch =
+        !q ||
+        [
+          row.numero,
+          row.condominio || "",
+          row.descrizione || "",
+           
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+
+      const matchesStatus =
+        fatturaStatusFilter === "TUTTI" || row.stato === fatturaStatusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [fattureRows, fatturaSearch, fatturaStatusFilter]);
+
   const filteredProformasRows = useMemo(() => {
     return proformasRows.filter((row) => {
       const q = proformaSearch.trim().toLowerCase();
@@ -1814,6 +1746,9 @@ async function uploadProformaFiles() {
     const [proformaPage, setProformaPage] = useState(1);
     const [proformaRowsPerPage, setProformaRowsPerPage] = useState(10);
 
+    const [fatturaPage, setFatturaPage] = useState(1);
+    const [fatturaRowsPerPage, setFatturaRowsPerPage] = useState(10);
+
     // reset page when filters/search change
     useEffect(() => {
       setProformaPage(1);
@@ -1825,11 +1760,24 @@ async function uploadProformaFiles() {
       Math.ceil(filteredProformasRows.length / proformaRowsPerPage)
     );
 
+    
     const paginatedProformasRows = useMemo(() => {
       const start = (proformaPage - 1) * proformaRowsPerPage;
       const end = start + proformaRowsPerPage;
       return filteredProformasRows.slice(start, end);
     }, [filteredProformasRows, proformaPage, proformaRowsPerPage]);
+
+    const paginatedFatturaRows = useMemo(() => {
+      const start = (fatturaPage - 1) * fatturaRowsPerPage;
+      const end = start + fatturaRowsPerPage;
+      return filteredFatturaRows.slice(start, end);
+
+    }, [filteredFatturaRows, fatturaPage, fatturaRowsPerPage]);
+
+    const totalFatturaPages = Math.max(
+          1,
+          Math.ceil(filteredFattureRows.length / fatturaRowsPerPage)
+    );
 
     useEffect(() => {
       if (proformaPage > totalProformaPages) {
@@ -1837,24 +1785,14 @@ async function uploadProformaFiles() {
       }
     }, [proformaPage, totalProformaPages]);
 
-    const [fatturaPage, setFatturaPage] = useState(1);
-    const [fatturaRowsPerPage, setFatturaRowsPerPage] = useState(10);
+ 
 
     useEffect(() => {
       setFatturaPage(1);
     }, [fatturaSearch, fatturaStatusFilter]);
 
-    const totalFatturaPages = Math.max(
-      1,
-      Math.ceil(filteredFattureRows.length / fatturaRowsPerPage)
-    );
-
-    const paginatedFattureRows = useMemo(() => {
-      const start = (fatturaPage - 1) * fatturaRowsPerPage;
-      const end = start + fatturaRowsPerPage;
-      return filteredFattureRows.slice(start, end);
-    }, [filteredFattureRows, fatturaPage, fatturaRowsPerPage]);
-
+    
+  
     useEffect(() => {
       if (fatturaPage > totalFatturaPages) {
         setFatturaPage(totalFatturaPages);
@@ -1932,6 +1870,9 @@ async function uploadProformaFiles() {
     }
   }
 
+   
+
+
   function handleOpenDetailSection(cardKey: string) {
     rememberImportedTableScroll();
 
@@ -1944,372 +1885,439 @@ async function uploadProformaFiles() {
     );
   }
 
-  const renderImportedTableSection = (
-    title: string,
-    subtitle: string,
-    docs: ImportedDoc[]
+  const [showPromotedDocs, setShowPromotedDocs] = useState(false);
+
+const renderImportedTableSection = (
+  title: string,
+  subtitle: string,
+  docs: ImportedDoc[]
+) => {
+  const activeDocs = docs.filter(
+    (doc) => (doc.review_status || "DA REVISIONARE") !== "PROMOSSO"
+  );
+
+  const promotedDocs = docs.filter(
+    (doc) => (doc.review_status || "DA REVISIONARE") === "PROMOSSO"
+  );
+
+  const renderImportedDocRow = (
+    doc: ImportedDoc,
+    index: number,
+    isPromotedGroup = false
   ) => {
+    const isSelected = selectedImportedDoc?.id === String(doc.id);
+    const isExpanded = !!expandedImportedRows[String(doc.id)];
+    const creationStatusLabel = doc.review_status || "DA REVISIONARE";
+    const hasNumero = !!String(doc.numero ?? "").trim();
+    const normalizedType = normalizeDocType(doc);
+
     return (
-      <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-4 border-b border-slate-200 bg-blue-50/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="text-base font-bold text-slate-900">{title}</h3>
-            <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
-          </div>
+      <Fragment key={`${isPromotedGroup ? "promoted" : "active"}-${doc.id}`}>
+        <tr
+          className={[
+            "border-b border-slate-200 transition-all duration-150",
+            isPromotedGroup ? "opacity-75" : "",
+            isSelected
+              ? "bg-blue-50"
+              : index % 2 === 0
+              ? "bg-white hover:bg-slate-50"
+              : "bg-slate-50/60 hover:bg-slate-100/70",
+          ].join(" ")}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleImportedRow(String(doc.id));
+          }}
+        >
+          <td className="px-4 py-3">
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+              title={isExpanded ? "Comprimi" : "Espandi"}
+            >
+              <span
+                className={`text-sm transition-transform duration-200 ${
+                  isExpanded ? "rotate-90" : ""
+                }`}
+              >
+                ›
+              </span>
+            </button>
+          </td>
 
-          <div className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200">
-            {importedDocsTotal} document{importedDocsTotal === 1 ? "o" : "i"}
-          </div>
-        </div>
-        { loadingImportedDocs ? (
-          <div className="px-5 py-10 text-center">
-            <div className="mx-auto max-w-md">
-              <div className="text-sm font-semibold text-slate-700">
-                Caricamento documenti...
-              </div>
-              <p className="mt-2 text-sm text-slate-500">
-                Sto caricando la pagina corrente.
-              </p>
+          <td className="px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-800">
+                {doc.numero || "-"}
+              </span>
+
+              {!hasNumero && (
+                <span className="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                  Da parsare
+                </span>
+              )}
             </div>
-          </div>
-        ) : docs.length === 0 ? (
-          <div className="px-5 py-10 text-center">
-            <div className="mx-auto max-w-md">
-              <div className="text-sm font-semibold text-slate-700">
-                Nessun documento presente
-              </div>
-              <p className="mt-2 text-sm text-slate-500">
-                In questa sezione non ci sono documenti che corrispondono al filtro corrente.
-              </p>
+          </td>
+
+          <td className="px-4 py-3">
+            <div
+              className="max-w-[260px] truncate text-slate-600"
+              title={doc.original_filename || ""}
+            >
+              {doc.original_filename || "-"}
             </div>
-          </div>
-        ) : (
-          <>
-            <div ref={importedTableScrollRef} className="max-h-[620px] overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead className="sticky top-0 z-10 bg-slate-100/95 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 backdrop-blur">
-                  <tr className="border-b border-slate-200">
-                    <th className="w-[56px] px-4 py-3"></th>
-                    <th className="px-4 py-3">Numero</th>
-                    <th className="px-4 py-3">File</th>
-                    <th className="px-4 py-3">Tipo</th>
-                    <th className="px-4 py-3">Data</th>
-                    <th className="px-4 py-3">Importo</th>
-                    <th className="px-4 py-3">Stato</th>
-                    <th className="px-4 py-3 text-right">Azioni</th>
-                  </tr>
-                </thead>
+          </td>
 
-                <tbody>
-                  {docs.map((doc, index) => {
-                    const isSelected = selectedImportedDoc?.id === String(doc.id);
-                    const isExpanded = !!expandedImportedRows[String(doc.id)];
-                    const creationStatusLabel =
-                      doc.review_status || "DA REVISIONARE";
-                    const hasNumero = !!String(doc.numero ?? "").trim();
-                    const normalizedType = normalizeDocType(doc);
+          <td className="px-4 py-3">{doc.type || "-"}</td>
 
-                    return (
-                      <Fragment key={doc.id}>
-                        <tr
-                          className={[
-                            "border-b border-slate-200 transition-all duration-150",
-                            isSelected
-                              ? "bg-blue-50"
-                              : index % 2 === 0
-                              ? "bg-white hover:bg-slate-50"
-                              : "bg-slate-50/60 hover:bg-slate-100/70",
-                          ].join(" ")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleImportedRow(String(doc.id)) ;
+          <td className="px-4 py-3">
+            {doc.data_documento
+              ? new Date(doc.data_documento).toLocaleDateString("it-IT")
+              : "-"}
+          </td>
+
+          <td className="px-4 py-3 font-medium text-slate-700">
+            {formatAmount(doc.importo)}
+          </td>
+
+          <td className="px-4 py-3">
+            <span
+              className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                creationStatusLabel === "PROMOSSO"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-amber-100 text-amber-700"
+              }`}
+            >
+              {creationStatusLabel}
+            </span>
+          </td>
+
+          <td className="px-4 py-3">
+            <div className="flex items-center justify-end gap-2">
+              {!isPromotedGroup &&
+                (doc.parse_status === "CARICATO" ||
+                  doc.parse_status === "COMPLETATO" ||
+                  doc.parse_status === "COMPLETATO_CON_ERRORI") && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+
+                      if (normalizedType === "PROFORMA") {
+                        parseImportedProforma(String(doc.id));
+                      } else {
+                        parseImportedFattura(String(doc.id));
+                      }
+                    }}
+                    disabled={parsingImportId === String(doc.id)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Esegui parser"
+                  >
+                    {parsingImportId === String(doc.id) ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                    ) : (
+                      <span className="text-sm">✦</span>
+                    )}
+                  </button>
+                )}
+
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteImportedDoc(String(doc.id));
+                }}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
+                title="Elimina documento"
+              >
+                <span className="text-sm">✕</span>
+              </button>
+
+              {!isPromotedGroup && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+
+                    loadImportedDocumentDetail(String(doc.id));
+
+                    if (normalizedType === "PROFORMA") {
+                      setSelectedCondomini([]);
+                      setCondominiSearch("");
+                      setCondomini([]);
+                      setIsAssociateModalOpen(true);
+                      void loadCondomini();
+                    } else if (normalizedType === "FATTURA") {
+                      setSelectedFatturaCondominioId("");
+                      setSelectedProformaIdsForFattura([]);
+                      setCondominiSearch("");
+                      setCondomini([]);
+                      setIsCreateFatturaModalOpen(true);
+                      void loadCondomini();
+                      void loadProformasRows();
+                    }
+                  }}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                  title="Conferma"
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                    <path
+                      fillRule="evenodd"
+                      d="M16.704 5.29a1 1 0 010 1.42l-7.2 7.2a1 1 0 01-1.42 0l-3.2-3.2a1 1 0 111.42-1.42l2.49 2.49 6.49-6.49a1 1 0 011.42 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </td>
+        </tr>
+
+        {isExpanded ? (
+          <tr className="border-b border-slate-200 bg-slate-50/70">
+            <td colSpan={8} className="px-4 pb-4 pt-0">
+              <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                          Numero
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                          {doc.numero || "-"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                          Importo
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                          {formatAmount(doc.importo)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                        Descrizione / dettaglio
+                      </div>
+                      <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
+                        {doc.descrizione || "Nessun dettaglio disponibile."}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                        Validazione
+                      </div>
+
+                      <div className="mt-3">
+                        {doc.validation_errors?.length ? (
+                          <ul className="space-y-2 text-sm text-rose-700">
+                            {doc.validation_errors.map((err: string, idx: number) => (
+                              <li key={`${err}-${idx}`}>• {err}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="text-sm font-medium text-emerald-700">
+                            Nessun errore bloccante rilevato.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                      {doc.parse_status === "COMPLETATO_PROMOSSO" ||
+                      creationStatusLabel === "PROMOSSO" ? (
+                        <span className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-500">
+                          Documento già elaborato
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            loadImportedDocumentDetail(String(doc.id));
+
+                            if (normalizedType === "PROFORMA") {
+                              setSelectedCondomini([]);
+                              setCondominiSearch("");
+                              setCondomini([]);
+                              setIsAssociateModalOpen(true);
+                              void loadCondomini();
+                            } else if (normalizedType === "FATTURA") {
+                              setSelectedFatturaCondominioId("");
+                              setSelectedProformaIdsForFattura([]);
+                              setCondominiSearch("");
+                              setCondomini([]);
+                              setIsCreateFatturaModalOpen(true);
+                              void loadCondomini();
+                              void loadProformasRows();
+                            }
                           }}
+                          className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <td className="px-4 py-3">
-                            <button
-                              type="button"
-                              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
-                              title={isExpanded ? "Comprimi" : "Espandi"}
-                            >
-                              <span
-                                className={`text-sm transition-transform duration-200 ${
-                                  isExpanded ? "rotate-90" : ""
-                                }`}
-                              >
-                                ›
-                              </span>
-                            </button>
-                          </td>
-
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-slate-800">
-                                {doc.numero || "-"}
-                              </span>
-
-                              {!hasNumero && (
-                                <span className="inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
-                                  Da parsare
-                                </span>
-                              )}
-                            </div>
-                          </td>
-
-                          <td className="px-4 py-3">
-                            <div
-                              className="max-w-[260px] truncate text-slate-600"
-                              title={doc.original_filename || ""}
-                            >
-                              {doc.original_filename || "-"}
-                            </div>
-                          </td>
-
-                          <td className="px-4 py-3">{doc.type || "-"}</td>
-
-                          <td className="px-4 py-3">
-                            {doc.data_documento
-                              ? new Date(doc.data_documento).toLocaleDateString("it-IT")
-                              : "-"}
-                          </td>
-
-                          <td className="px-4 py-3 font-medium text-slate-700">
-                            {formatAmount(doc.importo)}
-                          </td>
-
-                          <td className="px-4 py-3">
-                            <span
-                              className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                                creationStatusLabel === "PROMOSSO"
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : "bg-amber-100 text-amber-700"
-                              }`}
-                            >
-                              {creationStatusLabel}
-                            </span>
-                          </td>
-
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end gap-2">
-                              {(doc.parse_status === "CARICATO" ||
-                                doc.parse_status === "COMPLETATO" ||
-                                doc.parse_status === "COMPLETATO_CON_ERRORI") && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (normalizedType === "PROFORMA") {
-                                      parseImportedProforma(String(doc.id));
-                                    } else {
-                                      parseImportedFattura(String(doc.id));
-                                    }
-                                  }}
-                                  disabled={parsingImportId === String(doc.id)}
-                                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                  title="Esegui parser"
-                                >
-                                  {parsingImportId === String(doc.id) ? (
-                                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-                                  ) : (
-                                    <span className="text-sm">✦</span>
-                                  )}
-                                </button>
-                              )}
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteImportedDoc(String(doc.id));
-                                }}
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
-                                title="Elimina documento"
-                              >
-                                <span className="text-sm">✕</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  loadImportedDocumentDetail(String(doc.id));
-                                  // toggleImportedRow(String(doc.id));
-
-                                  if (normalizedType === "PROFORMA") {
-                                    setSelectedCondomini([]);
-                                    setCondominiSearch("");
-                                    setCondomini([]);
-                                    setIsAssociateModalOpen(true);
-                                    void loadCondomini();
-                                  } else if (normalizedType === "FATTURA") {
-                                    setSelectedFatturaCondominioId("");
-                                    setSelectedProformaIdsForFattura([]);
-                                    setCondominiSearch("");
-                                    setCondomini([]);
-                                    setIsCreateFatturaModalOpen(true);
-                                    void loadCondomini();
-                                    void loadProformasRows();
-                                  }
-                                }}
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                                title="Conferma"
-                              >
-                                <span className="h-4 w-4">
-                                  <svg
-                                    viewBox="0 0 20 20"
-                                    fill="currentColor"
-                                    className="h-4 w-4"
-                                  >
-                                    <path
-                                      fillRule="evenodd"
-                                      d="M16.704 5.29a1 1 0 010 1.42l-7.2 7.2a1 1 0 01-1.42 0l-3.2-3.2a1 1 0 111.42-1.42l2.49 2.49 6.49-6.49a1 1 0 011.42 0z"
-                                      clipRule="evenodd"
-                                    />
-                                  </svg>
-                                </span>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-
-                        {isExpanded ? (
-                          <tr className="border-b border-slate-200 bg-slate-50/70">
-                            <td colSpan={8} className="px-4 pb-4 pt-0">
-                              <div className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-sm">
-                                <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
-                                  <div className="space-y-4">
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                          Numero
-                                        </div>
-                                        <div className="mt-1 text-sm font-semibold text-slate-900">
-                                          {doc.numero || "-"}
-                                        </div>
-                                      </div>
-
-                                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                          Importo
-                                        </div>
-                                        <div className="mt-1 text-sm font-semibold text-slate-900">
-                                          {formatAmount(doc.importo)}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                        Descrizione / dettaglio
-                                      </div>
-                                      <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">
-                                        {doc.descrizione || "Nessun dettaglio disponibile."}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div className="space-y-4">
-                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                                        Validazione
-                                      </div>
-
-                                      <div className="mt-3">
-                                        {doc.validation_errors?.length ? (
-                                          <ul className="space-y-2 text-sm text-rose-700">
-                                            {doc.validation_errors.map((err: string, idx: number) => (
-                                              <li key={`${err}-${idx}`}>• {err}</li>
-                                            ))}
-                                          </ul>
-                                        ) : (
-                                          <div className="text-sm font-medium text-emerald-700">
-                                            Nessun errore bloccante rilevato.
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    <div className="flex flex-wrap gap-3">
-                                      {doc.parse_status === "COMPLETATO_PROMOSSO" ? (
-                                        <span className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-500">
-                                          Documento già elaborato
-                                        </span>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            loadImportedDocumentDetail(String(doc.id));
-
-                                            if (normalizedType === "PROFORMA") {
-                                              setSelectedCondomini([]);
-                                              setCondominiSearch("");
-                                              setCondomini([]);
-                                              setIsAssociateModalOpen(true);
-                                              void loadCondomini();
-                                            } else if (normalizedType === "FATTURA") {
-                                              setSelectedFatturaCondominioId("");
-                                              setSelectedProformaIdsForFattura([]);
-                                              setCondominiSearch("");
-                                              setCondomini([]);
-                                              setIsCreateFatturaModalOpen(true);
-                                              void loadCondomini();
-                                              void loadProformasRows();
-                                            }
-                                          }}
-                                          className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                          {normalizedType === "PROFORMA"
-                                            ? "Approva e crea proforma"
-                                            : normalizedType === "FATTURA"
-                                            ? "Approva e crea fattura"
-                                            : "Azione non disponibile"}
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-sm text-slate-500">
-                Pagina {importedDocsPage} di {importedDocsTotalPages}
+                          {normalizedType === "PROFORMA"
+                            ? "Approva e crea proforma"
+                            : normalizedType === "FATTURA"
+                            ? "Approva e crea fattura"
+                            : "Azione non disponibile"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setImportedDocsPage((p) => Math.max(1, p - 1))}
-                  disabled={importedDocsPage <= 1 || loadingImportedDocs}
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Precedente
-                </button>
-
-                <button
-                  onClick={() =>
-                    setImportedDocsPage((p) =>
-                      Math.min(importedDocsTotalPages, p + 1)
-                    )
-                  }
-                  disabled={
-                    importedDocsPage >= importedDocsTotalPages || loadingImportedDocs
-                  }
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Successiva
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-      </section>
+            </td>
+          </tr>
+        ) : null}
+      </Fragment>
     );
   };
+
+  return (
+    <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-4 border-b border-slate-200 bg-blue-50/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-base font-bold text-slate-900">{title}</h3>
+          <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+        </div>
+
+        <div className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200">
+          {docs.length} document{docs.length === 1 ? "o" : "i"}
+        </div>
+      </div>
+
+      {loadingImportedDocs ? (
+        <div className="px-5 py-10 text-center">
+          <div className="mx-auto max-w-md">
+            <div className="text-sm font-semibold text-slate-700">
+              Caricamento documenti...
+            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              Sto caricando la pagina corrente.
+            </p>
+          </div>
+        </div>
+      ) : docs.length === 0 ? (
+        <div className="px-5 py-10 text-center">
+          <div className="mx-auto max-w-md">
+            <div className="text-sm font-semibold text-slate-700">
+              Nessun documento presente
+            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              In questa sezione non ci sono documenti che corrispondono al filtro corrente.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div ref={importedTableScrollRef} className="max-h-[620px] overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-100/95 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 backdrop-blur">
+                <tr className="border-b border-slate-200">
+                  <th className="w-[56px] px-4 py-3"></th>
+                  <th className="px-4 py-3">Numero</th>
+                  <th className="px-4 py-3">File</th>
+                  <th className="px-4 py-3">Tipo</th>
+                  <th className="px-4 py-3">Data</th>
+                  <th className="px-4 py-3">Importo</th>
+                  <th className="px-4 py-3">Stato</th>
+                  <th className="px-4 py-3 text-right">Azioni</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {activeDocs.length > 0 ? (
+                  activeDocs.map((doc, index) =>
+                    renderImportedDocRow(doc, index)
+                  )
+                ) : (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="px-4 py-8 text-center text-sm text-slate-500"
+                    >
+                      Nessun documento attivo da lavorare.
+                    </td>
+                  </tr>
+                )}
+
+                {promotedDocs.length > 0 && (
+                  <>
+                    <tr className="bg-slate-100">
+                      <td colSpan={8} className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowPromotedDocs((prev) => !prev);
+                          }}
+                          className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span>Documenti già elaborati</span>
+
+                            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
+                              {promotedDocs.length}
+                            </span>
+                          </span>
+
+                          <span
+                            className={`text-lg transition-transform duration-200 ${
+                              showPromotedDocs ? "rotate-90" : ""
+                            }`}
+                          >
+                            ›
+                          </span>
+                        </button>
+                      </td>
+                    </tr>
+
+                    {showPromotedDocs &&
+                      promotedDocs.map((doc, index) =>
+                        renderImportedDocRow(doc, index, true)
+                      )}
+                  </>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-slate-500">
+              Pagina {importedDocsPage} di {importedDocsTotalPages}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setImportedDocsPage((p) => Math.max(1, p - 1))}
+                disabled={importedDocsPage <= 1 || loadingImportedDocs}
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Precedente
+              </button>
+
+              <button
+                onClick={() =>
+                  setImportedDocsPage((p) =>
+                    Math.min(importedDocsTotalPages, p + 1)
+                  )
+                }
+                disabled={
+                  importedDocsPage >= importedDocsTotalPages || loadingImportedDocs
+                }
+                className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Successiva
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+};
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 quick-sand">
       <div className="mx-auto max-w-8xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
@@ -2346,109 +2354,109 @@ async function uploadProformaFiles() {
           <section className="grid gap-4 xl:grid-cols-3">
             
             {summaryCards.map((card) => (
-<article
-  key={card.key}
-  className="group relative overflow-hidden rounded-[30px] border border-slate-300/70 bg-gradient-to-b from-white via-slate-50 to-slate-100/80 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
->
-  <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${card.accent}`} />
+            <article
+              key={card.key}
+              className="group relative overflow-hidden rounded-[30px] border border-slate-300/70 bg-gradient-to-b from-white via-slate-50 to-slate-100/80 shadow-[0_12px_30px_rgba(15,23,42,0.08)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
+            >
+              <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${card.accent}`} />
 
-  <div className="p-5 sm:p-6">
-    {/* Header */}
-    <div className="flex items-start justify-between gap-4">
-      <div className="min-w-0">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-          {card.eyebrow}
-        </div>
+              <div className="p-5 sm:p-6">
+                {/* Header */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      {card.eyebrow}
+                    </div>
 
-        <h2 className="mt-3 text-lg font-bold tracking-tight text-slate-900">
-          {card.title}
-        </h2>
-      </div>
+                    <h2 className="mt-3 text-lg font-bold tracking-tight text-slate-900">
+                      {card.title}
+                    </h2>
+                  </div>
 
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-slate-300/70 bg-slate-200/80 text-2xl text-slate-700 shadow-inner">
-        {card.icon}
-      </div>
-    </div>
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-slate-300/70 bg-slate-200/80 text-2xl text-slate-700 shadow-inner">
+                    {card.icon}
+                  </div>
+                </div>
 
-    {/* Body */}
-    <div className="mt-7 border-t border-slate-200/80 pt-5">
-      <div className="grid gap-5 md:grid-cols-[1fr_220px] md:items-end">
-        {/* Total */}
-        <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            Totale
-          </div>
+                {/* Body */}
+                <div className="mt-7 border-t border-slate-200/80 pt-5">
+                  <div className="grid gap-5 md:grid-cols-[1fr_220px] md:items-end">
+                    {/* Total */}
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        Totale
+                      </div>
 
-          <div className="mt-2 text-4xl font-bold leading-none tracking-tight text-slate-900">
-            {loadingSummary ? (
-              <span className="animate-pulse text-slate-400">...</span>
-            ) : (
-              formatAmount(card.amount)
-            )}
-          </div>
-        </div>
+                      <div className="mt-2 text-4xl font-bold leading-none tracking-tight text-slate-900">
+                        {loadingSummary ? (
+                          <span className="animate-pulse text-slate-400">...</span>
+                        ) : (
+                          formatAmount(card.amount)
+                        )}
+                      </div>
+                    </div>
 
-        {/* Actions */}
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={() => handleCreateManualCard(card.key)}
-            className={`group inline-flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold transition ${card.border} ${card.text} bg-white shadow-sm hover:-translate-y-[1px] hover:bg-white hover:shadow-md active:scale-[0.99]`}
-          >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 transition group-hover:bg-slate-200">
-              <svg
-                viewBox="0 0 24 24"
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
-              </svg>
-            </span>
+                    {/* Actions */}
+                    <div className="flex flex-col gap-3">
+                      <button
+                        onClick={() => handleCreateManualCard(card.key)}
+                        className={`group inline-flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold transition ${card.border} ${card.text} bg-white shadow-sm hover:-translate-y-[1px] hover:bg-white hover:shadow-md active:scale-[0.99]`}
+                      >
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 transition group-hover:bg-slate-200">
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="h-4 w-4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+                          </svg>
+                        </span>
 
-            <span className="flex-1 text-left">
-              {card.key === "proforma"
-                ? "Nuovo proforma"
-                : card.key === "fatture"
-                ? "Nuova fattura"
-                : "Nuovo pagamento"}
-            </span>
-          </button>
+                        <span className="flex-1 text-left">
+                          {card.key === "proforma"
+                            ? "Nuovo proforma"
+                            : card.key === "fatture"
+                            ? "Nuova fattura"
+                            : "Nuovo pagamento"}
+                        </span>
+                      </button>
 
-          <button
-            onClick={() => handleOpenDetailSection(card.key)}
-            className="inline-flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-[1px] hover:bg-white hover:shadow-md active:scale-[0.99]"
-          >
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-slate-200">
-              <svg
-                viewBox="0 0 24 24"
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M3.75 12h16.5" strokeLinecap="round" />
-                <path
-                  d="M13.5 5.25L20.25 12 13.5 18.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
+                      <button
+                        onClick={() => handleOpenDetailSection(card.key)}
+                        className="inline-flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-[1px] hover:bg-white hover:shadow-md active:scale-[0.99]"
+                      >
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-slate-200">
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="h-4 w-4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                          >
+                            <path d="M3.75 12h16.5" strokeLinecap="round" />
+                            <path
+                              d="M13.5 5.25L20.25 12 13.5 18.75"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </span>
 
-            <span className="flex-1 text-left">Dettagli</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
+                        <span className="flex-1 text-left">Dettagli</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-  <div className="border-t border-slate-200 bg-slate-100/80 px-5 py-3 sm:px-6">
-    <div className="flex items-center justify-between text-xs text-slate-500">
-      <span>Panoramica aggiornata</span>
-    </div>
-  </div>
-</article>
+              <div className="border-t border-slate-200 bg-slate-100/80 px-5 py-3 sm:px-6">
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span>Panoramica aggiornata</span>
+                </div>
+              </div>
+            </article>
             ))}
           </section>
 
@@ -2759,6 +2767,20 @@ async function uploadProformaFiles() {
                         <option value="ANNULLATA">Annullata</option>
                       </select>
 
+                    <select
+                      value={fatturaRowsPerPage}
+                      onChange={(e) => {
+                        setFatturaRowsPerPage(Number(e.target.value));
+                        setFatturaPage(1);
+                      }}
+                      className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
+                    >
+                      <option value={5}>5 righe</option>
+                      <option value={10}>10 righe</option>
+                      <option value={20}>20 righe</option>
+                      <option value={50}>50 righe</option>
+                    </select>
+
                       <button
                         onClick={() => setActiveDetailSection(null)}
                         className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
@@ -2791,14 +2813,14 @@ async function uploadProformaFiles() {
                               Caricamento fatture...
                             </td>
                           </tr>
-                        ) : filteredFattureRows.length === 0 ? (
+                        ) : paginatedFatturaRows.length === 0 ? (
                           <tr>
                             <td colSpan={10} className="px-6 py-8 text-center text-slate-500">
                               Nessuna fattura trovata.
                             </td>
                           </tr>
                         ) : (
-                          filteredFattureRows.map((row: any) => (
+                          paginatedFatturaRows.map((row: any) => (
                             
                             <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
                               <td className="px-6 py-4 font-semibold text-slate-800">{row.import_numero || row.numero}</td>
@@ -2926,6 +2948,50 @@ async function uploadProformaFiles() {
                         )}
                       </tbody>
                     </table>
+                  {!loadingFatture && filteredFatturaRows.length > 0 ? (
+                    <div className="flex flex-col gap-4 border-t border-slate-200 px-5 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
+                      <div className="text-sm text-slate-500">
+                        Mostrando{" "}
+                        <span className="font-semibold text-slate-700">
+                          {(fatturaPage - 1) * fatturaRowsPerPage + 1}
+                        </span>{" "}
+                        -{" "}
+                        <span className="font-semibold text-slate-700">
+                          {Math.min(fatturaPage * fatturaRowsPerPage, filteredFatturaRows.length)}
+                        </span>{" "}
+                        di{" "}
+                        <span className="font-semibold text-slate-700">
+                          {filteredFatturaRows.length}
+                        </span>{" "}
+                        fatture
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => setFatturaPage((p) => Math.max(1, p - 1))}
+                          disabled={fatturaPage === 1}
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Precedente
+                        </button>
+
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">
+                          Pagina {fatturaPage} di {totalFatturaPages}
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            setFatturaPage((p) => Math.min(totalFatturaPages, p + 1))
+                          }
+                          disabled={fatturaPage === totalFatturaPages}
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Successiva
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   </div>
                 </section>
 
@@ -3086,7 +3152,15 @@ async function uploadProformaFiles() {
                                 </p>
                               </article>
                             </div>
-
+                             <article className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                  Descrizione
+                                </div>
+                                <div className="mt-3 text-2xl tracking-tight text-slate-900">
+                                  {selectedFatturaDetail.descrizione}
+                                </div>
+ 
+                              </article>
                             <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
                               <div className="flex flex-col gap-3 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
                                 <div>

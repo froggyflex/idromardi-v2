@@ -575,7 +575,7 @@ async function listFattureSimple() {
       f.updated_at,
       c.indirizzo
 
-    ORDER BY f.created_at DESC
+    ORDER BY import_numero DESC
     `
   );
 
