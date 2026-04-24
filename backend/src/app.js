@@ -19,6 +19,7 @@ const allowedOrigins = [
   "https://idromardi-v2.vercel.app",
   "http://localhost:5173",
   "http://localhost:3000",
+  "https://manage.idromardi.it"
 ];
 
 const corsOptions = {
