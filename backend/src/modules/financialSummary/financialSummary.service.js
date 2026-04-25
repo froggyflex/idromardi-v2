@@ -3309,36 +3309,68 @@ async function getFatturaPrintData(id) {
   return rows[0];
 }
 
-async function htmlToPdfBuffer(html) {
-  console.log("Resolved executablePath:", puppeteer.executablePath());
+let browserPromise = null;
 
-  const browser = await puppeteer.launch({
-     headless: "new",
-     args: [
+async function getBrowser() {
+  if (!browserPromise) {
+    browserPromise = puppeteer.launch({
+      headless: "new",
+      args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage"
-     ],
-  });
-  
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
+    });
+  }
+
+  return browserPromise;
+}
+
+
+async function htmlToPdfBuffer(html) {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
 
   try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    page.setDefaultNavigationTimeout(60000);
+    page.setDefaultTimeout(60000);
+
+    await page.setContent(html, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    // Wait for logos/images to finish loading
+    await page.evaluate(async () => {
+      const images = Array.from(document.images);
+
+      await Promise.all(
+        images.map((img) => {
+          if (img.complete && img.naturalWidth !== 0) {
+            return Promise.resolve();
+          }
+
+          return new Promise((resolve) => {
+            img.onload = resolve;
+            img.onerror = resolve;
+          });
+        })
+      );
+    });
 
     return await page.pdf({
       format: "A4",
       printBackground: true,
-      preferCSSPageSize: true,
       margin: {
-        top: "0mm",
-        right: "0mm",
-        bottom: "0mm",
-        left: "0mm",
+        top: "12mm",
+        right: "10mm",
+        bottom: "12mm",
+        left: "10mm",
       },
     });
   } finally {
-    await browser.close();
+    await page.close();
   }
 }
 
