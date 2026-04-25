@@ -1,11 +1,47 @@
- 
 const fs = require("fs");
 const crypto = require("crypto");
-//const { PDFParse } = require("pdf-parse");
+const path = require("path");
 const pdf = require("pdf-parse");
 const db = require("../../config/db");
-const { parse } = require("path");
 const puppeteer = require("puppeteer");
+
+const FRONTEND_BASE_URL =
+  process.env.FRONTEND_BASE_URL || "http://localhost:5173";
+
+const logoUrl = `${FRONTEND_BASE_URL}/images/logo_colorato.png`;
+ 
+function toFileUrl(filePath) {
+  return `file:///${filePath.replace(/\\/g, "/")}`;
+}
+
+function resolveLogoUrl(logoPathOrUrl) {
+  // 1. If database/env already gives full URL, use it
+  if (logoPathOrUrl?.startsWith("http://") || logoPathOrUrl?.startsWith("https://")) {
+    return logoPathOrUrl;
+  }
+
+  // 2. If database gives relative uploaded path
+  // example: /uploads/logos/company-1.png
+  if (logoPathOrUrl?.startsWith("/uploads/")) {
+    const absolutePath = path.resolve(__dirname, "../../../", `.${logoPathOrUrl}`);
+
+    if (fs.existsSync(absolutePath)) {
+      return toFileUrl(absolutePath);
+    }
+  }
+
+  // 3. Default fallback logo
+  const fallbackPath = path.resolve(
+    __dirname,
+    "../../../../frontend/public/images/logo_colorato.png"
+  );
+
+  if (fs.existsSync(fallbackPath)) {
+    return toFileUrl(fallbackPath);
+  }
+
+  return null;
+}
 
 function safeJsonParse(value, fallback = null) {
   try {
@@ -3828,6 +3864,7 @@ function buildFinancialDocumentPdfHtml(doc) {
   `;
 }
 
+
 function buildFinancialDocument({
   documentType,
   supplierName,
@@ -4062,9 +4099,11 @@ function buildFinancialDocument({
   `;
 }
 
+
 async function generateFatturaPdf(id) {
   const doc = await getFatturaPrintData(id);
-
+ 
+  console.log("test", resolveLogoUrl("public/images/logo_colorato.png"))
   const html = buildFinancialDocumentPdfHtml({
     documentType: "FATTURA",
     supplierName: "Idromardi l.t.d.",
@@ -4089,7 +4128,7 @@ async function generateFatturaPdf(id) {
     mobile: "+39 328 32.98.115",
     email: "info@idromardi.it",
     website: "www.idromardi.it",
-    logoUrl: "https://i.postimg.cc/d1NCb9Gk/background-removed-background-removed.png",
+    logoUrl: `${FRONTEND_BASE_URL}/images/image.png`,
   });
 
   return await htmlToPdfBuffer(html);
@@ -4122,7 +4161,7 @@ async function generateProformaPdf(id) {
     mobile: "+39 328 32.98.115",
     email: "info@idromardi.it",
     website: "www.idromardi.it",
-    logoUrl: "https://i.postimg.cc/2SDBbptC/idro-logo.jpg",
+    logoUrl: "../../uploads/logo_colorato.png",
   });
 
   return await htmlToPdfBuffer(html);
