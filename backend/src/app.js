@@ -72,7 +72,7 @@ app.use("/api", billingGroupsRoutes);
 app.use("/api", prospettoRoutes);
 app.use("/api/fatture", fattureRoutes);
 app.use("/api/financial-summary", financialSummaryRoutes);
-
+app.use("/images", express.static(path.join(__dirname, "../public/images")));
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({

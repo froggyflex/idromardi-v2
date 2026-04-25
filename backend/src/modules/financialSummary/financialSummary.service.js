@@ -5,10 +5,9 @@ const pdf = require("pdf-parse");
 const db = require("../../config/db");
 const puppeteer = require("puppeteer");
 
-const FRONTEND_BASE_URL =
-  process.env.FRONTEND_BASE_URL || "http://localhost:5173";
+const BASE_URL = process.env.BASE_URL;
 
-const logoUrl = `${FRONTEND_BASE_URL}/images/logo_colorato.png`;
+const logoUrl = `${BASE_URL}/images/image.png`;
  
 function toFileUrl(filePath) {
   return `file:///${filePath.replace(/\\/g, "/")}`;
@@ -4106,7 +4105,7 @@ function buildFinancialDocument({
 async function generateFatturaPdf(id) {
   const doc = await getFatturaPrintData(id);
  
-  console.log("test", resolveLogoUrl("public/images/logo_colorato.png"))
+   
   const html = buildFinancialDocumentPdfHtml({
     documentType: "FATTURA",
     supplierName: "Idromardi l.t.d.",
@@ -4131,7 +4130,7 @@ async function generateFatturaPdf(id) {
     mobile: "+39 328 32.98.115",
     email: "info@idromardi.it",
     website: "www.idromardi.it",
-    logoUrl: `${FRONTEND_BASE_URL}/images/image.png`,
+    logoUrl: logoUrl,
   });
 
   return await htmlToPdfBuffer(html);
