@@ -338,7 +338,7 @@ export default function FinancialSummaryPageTemplate() {
     descrizione: "",
   });
   const [registeringPayment, setRegisteringPayment] = useState(false);
-
+  const [printingId, setPrintingId] = useState<number | null>(null);
 
   const [paymentsRows, setPaymentsRows] = useState<PaymentRow[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
@@ -557,6 +557,15 @@ async function createManualFattura() {
     );
   } finally {
     setCreatingManualFattura(false);
+  }
+}
+
+async function handlePrint(id: number) {
+  try {
+    setPrintingId(id);
+    await printFatturaPdf(id as any);
+  } finally {
+    setPrintingId(null);
   }
 }
 
@@ -2914,29 +2923,52 @@ const renderImportedTableSection = (
                                       )}
                                     </button>
                                     <button
-                                      onClick={() => void printFatturaPdf((row.id))}
-                                      disabled={row.stato === "ANNULLATA" || row.fattura_numero != null}
-                                      title="Stampa fattura"
+                                      onClick={() => handlePrint(row.id)}
+                                      disabled={
+                                        row.stato === "ANNULLATA" ||
+                                        row.fattura_numero != null ||
+                                        printingId === row.id
+                                      }
                                       className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 shadow-sm transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
-                                      <svg
-                                        viewBox="0 0 24 24"
-                                        className="h-4 w-4"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                      >
-                                        <path
-                                          d="M7 9V4h10v5M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                        />
-                                        <path
-                                          d="M7 14h10v6H7z"
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                        />
-                                      </svg>
+                                      {printingId === row.id ? (
+                                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                                          <circle
+                                            cx="12"
+                                            cy="12"
+                                            r="10"
+                                            stroke="currentColor"
+                                            strokeWidth="3"
+                                            fill="none"
+                                            opacity="0.25"
+                                          />
+                                          <path
+                                            d="M22 12a10 10 0 00-10-10"
+                                            stroke="currentColor"
+                                            strokeWidth="3"
+                                            fill="none"
+                                          />
+                                        </svg>
+                                      ) : (
+                                        <svg
+                                          viewBox="0 0 24 24"
+                                          className="h-4 w-4"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          strokeWidth="2"
+                                        >
+                                          <path
+                                            d="M7 9V4h10v5M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                          <path
+                                            d="M7 14h10v6H7z"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      )}
                                     </button>
 
                                   </div>
