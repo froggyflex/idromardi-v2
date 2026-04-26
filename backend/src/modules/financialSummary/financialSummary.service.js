@@ -3855,22 +3855,7 @@ function buildFinancialDocumentPdfHtml(doc) {
           color: var(--muted);
           line-height: 1.25;
         }
-
-        .legal {
-          margin-top: 7mm;
-          padding-right: 20mm;
-          font-size: 6.3pt;
-          line-height: 1.2;
-          color: #555;
-        }
-
-        .page-no {
-          position: absolute;
-          right: 0;
-          bottom: 0;
-          font-size: 8.5pt;
-          color: #333;
-        }
+ 
 
         .recipient {
           position: absolute;
@@ -3889,6 +3874,215 @@ function buildFinancialDocumentPdfHtml(doc) {
           line-height: 1.4;
         }
 
+        .full-width-card {
+          grid-column: 1 / -1;
+        }
+
+        .full-width-card {
+  grid-column: 1 / -1;
+}
+
+.payment-box {
+  padding: 4mm 4.5mm;
+  background: #e2e2e2;
+}
+
+.payment-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8mm;
+  padding-bottom: 3mm;
+  margin-bottom: 3mm;
+  border-bottom: 0.35mm solid var(--line);
+}
+
+.payment-total-pill {
+  min-width: 36mm;
+  padding: 2.5mm 3.2mm;
+  border-radius: 2.5mm;
+  background: #f3f3f3;
+  border: 0.35mm solid var(--line);
+  text-align: right;
+}
+
+.payment-amount-value {
+  font-size: 16pt;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.payment-grid-clean {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr 0.8fr;
+  gap: 4.5mm;
+}
+
+.payment-cell {
+  min-width: 0;
+}
+
+.payment-main-text {
+  font-weight: 700;
+}
+
+.payment-iban {
+  font-size: 10.5pt;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  word-break: break-word;
+}
+
+.payment-strong {
+  font-size: 10pt;
+  font-weight: 800;
+}
+
+.footer {
+  margin-top: 7mm;
+  padding-top: 6mm;
+  border-top: 0.35mm solid var(--line);
+  position: relative;
+}
+
+.footer-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8mm;
+  align-items: flex-start;
+  margin-bottom: 4mm;
+}
+
+.footer-title {
+  font-size: 11pt;
+  font-weight: 800;
+  margin-bottom: 0.8mm;
+}
+
+.footer-caption {
+  font-size: 7.8pt;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.footer-brand {
+  max-width: 55mm;
+  text-align: right;
+  font-size: 8.4pt;
+  font-weight: 700;
+  color: #3f3f3f;
+}
+ 
+.legal {
+  margin-top: 0;
+  padding-right: 0;
+  font-size: 6.3pt;
+  line-height: 1.25;
+  color: #555;
+}
+
+.page-no {
+  position: static;
+  flex: 0 0 auto;
+  font-size: 8.5pt;
+  color: #333;
+}
+
+.icon {
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  flex: 0 0 10px;
+}
+
+.icon svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: #444;
+  stroke-width: 1.6;
+}
+
+.footer-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 3px;
+  margin-bottom: 1mm;
+}
+
+.footer-grid-professional {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr 1.25fr;
+  gap: 3.5mm;
+}
+
+.footer-card {
+  min-height: 22mm;
+  border-radius: 3mm;
+  background: #e8f2ff;
+  border: 0.35mm solid #b9d8ff;
+  padding: 3mm 3.2mm;
+}
+
+.footer-card:nth-child(2) {
+  background: #eef6ff;
+}
+
+.footer-card:nth-child(3) {
+  background: #e5f0ff;
+}
+
+.footer-card-label {
+  display: flex;
+  align-items: center;
+  gap: 1.6mm;
+  font-size: 7pt;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #315f9d;
+  margin-bottom: 1.7mm;
+}
+
+.footer-icon-badge {
+  width: 5mm;
+  height: 5mm;
+  border-radius: 999px;
+  background: #6cabf3;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7pt;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.footer-card-value {
+  font-size: 8pt;
+  line-height: 1.45;
+  color: #27374a;
+  word-break: break-word;
+}
+
+.phone-list div,
+.channel-list div {
+  margin-bottom: 0.7mm;
+  white-space: nowrap;
+}
+
+.footer-bottom {
+  display: flex;
+  justify-content: space-between;
+  gap: 8mm;
+  align-items: flex-end;
+  margin-top: 4mm;
+}
+
+ 
       </style>
     </head>
     <body>
@@ -4020,27 +4214,14 @@ function buildFinancialDocument({
                   : ""
               }
 
-              <section class="soft-card">
-                <div class="soft-title">Riferimenti</div>
-                <div class="meta-body">
-                  ${supplierSubtitle ? `${esc(supplierSubtitle)}<br />` : ""}
-                  ${legalAddress ? `<strong>Sede legale:</strong> ${esc(legalAddress)}<br />` : ""}
-                  ${operatingAddress ? `<strong>Sede operativa:</strong> ${esc(operatingAddress)}<br />` : ""}
-                  ${beneficiary ? `<strong>Intestazione:</strong> ${esc(beneficiary)}<br />` : ""}
-                  ${iban ? `<strong>IBAN:</strong> ${esc(iban)}<br />` : ""}
-                  ${swift ? `<strong>SWIFT:</strong> ${esc(swift)}<br />` : ""}
-                </div>
-              </section>
+
             </div>
 
             <aside class="right">
               <section class="pay-card main">
                 <div class="pay-main-head">Quanto devo pagare?</div>
                 <div class="pay-main-value">${amountText}</div>
-                <div class="pay-main-sub">
-                  <span>Documento</span>
-                  <strong>${esc(isProforma ? "Proforma" : "Fattura")}</strong>
-                </div>
+ 
               </section>
 
               <section class="pay-card">
@@ -4063,15 +4244,7 @@ function buildFinancialDocument({
                 </div>
               </section>
 
-              <section class="pay-card total">
-                <div class="pay-row">
-                  <div>
-                    <div class="pay-left-label">Totale documento</div>
-                    <div class="pay-left-sub">${esc(title)}</div>
-                  </div>
-                  <div class="pay-right-value">${amountText}</div>
-                </div>
-              </section>
+     
 
               <section class="deadline">
                 ${
@@ -4080,53 +4253,111 @@ function buildFinancialDocument({
                     : "Documento emesso a fini amministrativi e contabili."
                 }
               </section>
+
+
+
             </aside>
+
+<section class="soft-card full-width-card payment-box">
+  <div class="payment-header">
+    <div>
+      <div class="soft-title">Dati per il pagamento</div>
+      <div class="note-body">
+        Coordinate bancarie da utilizzare per il saldo del documento.
+      </div>
+    </div>
+
+    <div class="payment-total-pill">
+      <div class="meta-head">Importo</div>
+      <div class="payment-amount-value">${amountText}</div>
+    </div>
+  </div>
+
+  <div class="payment-grid-clean">
+    <div class="payment-cell">
+      <div class="meta-head">Beneficiario</div>
+      <div class="meta-body payment-main-text">
+        ${esc(textOrDash(beneficiary || supplierName))}
+      </div>
+    </div>
+
+    <div class="payment-cell iban-cell">
+      <div class="meta-head">IBAN</div>
+      <div class="payment-iban">${esc(textOrDash(iban))}</div>
+    </div>
+
+    ${
+      swift
+        ? `
+        <div class="payment-cell">
+          <div class="meta-head">SWIFT / BIC</div>
+          <div class="payment-strong">${esc(swift)}</div>
+        </div>
+      `
+        : ""
+    }
+  </div>
+</section>
           </section>
 
-          <footer class="footer">
-            <div class="footer-title">Contatti</div>
+<footer class="footer">
+  <div class="footer-top">
+    <div>
+      <div class="footer-title">Contatti</div>
+      <div class="footer-caption">Riferimenti aziendali e canali ufficiali</div>
+    </div>
 
-            <div class="footer-grid">
-              <div class="footer-item">
-                <div class="footer-icon">⌂</div>
-                <div>
-                  <div class="footer-head">Sede operativa</div>
-                  <div class="footer-sub">${esc(textOrDash(operatingAddress))}</div>
-                </div>
-              </div>
+    <div class="footer-brand">${esc(textOrDash(supplierName))}</div>
+  </div>
 
-              <div class="footer-item">
-                <div class="footer-icon">☎</div>
-                <div>
-                  <div class="footer-head">Contatti</div>
-                  <div class="footer-sub">
-                    ${phone1 ? esc(phone1) : ""}
-                    ${phone2 ? ` · ${esc(phone2)}` : ""}
-                    ${mobile ? ` · ${esc(mobile)}` : ""}
-                  </div>
-                </div>
-              </div>
+  <div class="footer-grid footer-grid-professional">
+    <div class="footer-card">
+      <div class="footer-card-label">
+        <span class="footer-icon-badge">⌂</span>
+        Indirizzo
+      </div>
+      <div class="footer-card-value">
+        ${esc(textOrDash(operatingAddress))}
+      </div>
+    </div>
 
-              <div class="footer-item">
-                <div class="footer-icon">@</div>
-                <div>
-                  <div class="footer-head">Canali</div>
-                  <div class="footer-sub">
-                    ${email ? esc(email) : "info@idromardi.it"}
-                    ${website ? `<br />${esc(website)}` : ""}
-                  </div>
-                </div>
-              </div>
-            </div>
+    <div class="footer-card">
+      <div class="footer-card-label">
+        <span class="footer-icon-badge">☎</span>
+        Telefono
+      </div>
+      <div class="footer-card-value phone-list">
+        ${phone1 ? `<div>${esc(phone1)}</div>` : ""}
+        ${phone2 ? `<div>${esc(phone2)}</div>` : ""}
+        ${mobile ? `<div>${esc(mobile)}</div>` : ""}
+      </div>
+    </div>
 
-            <div class="legal">
-              ${esc(textOrDash(supplierName))}
-              ${supplierVatNumber ? ` · P.IVA ${esc(supplierVatNumber)}` : ""}
-              ${legalAddress ? ` · ${esc(legalAddress)}` : ""}
-            </div>
+    <div class="footer-card footer-card-channels">
+      <div class="footer-card-label">
+        <span class="footer-icon-badge">@</span>
+        Canali ufficiali
+      </div>
 
-            <div class="page-no">Pag. 1</div>
-          </footer>
+      <div class="footer-card-value channel-list">
+        ${email ? `<div>${esc(email)}</div>` : "<div>info@idromardi.it</div>"}
+        ${website ? `<div>${esc(website)}</div>` : ""}
+        <div>facebook.com/idromardi</div>
+        <div>@idromardi_servizi</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-bottom">
+    <div class="legal">
+      ${esc(textOrDash(supplierName))}
+      ${supplierVatNumber ? ` · P.IVA ${esc(supplierVatNumber)}` : ""}
+      ${legalAddress ? ` · ${esc(legalAddress)}` : ""}
+    </div>
+
+    <div class="page-no">Pag. 1</div>
+  </div>
+</footer>
         </div>
       </article>
     </section>
