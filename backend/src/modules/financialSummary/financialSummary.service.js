@@ -3281,6 +3281,7 @@ async function getProformaPrintData(id) {
 }
 
 async function getFatturaPrintData(id) {
+
   const [rows] = await db.query(
     `
     SELECT
@@ -3291,7 +3292,10 @@ async function getFatturaPrintData(id) {
       f.descrizione,
       f.stato,
       f.condominio_id,
-      c.indirizzo
+      c.indirizzo,
+      c.cap,
+      c.citta,
+      c.iva
       
     FROM fatture f
     LEFT JOIN condomini_v2 c
@@ -3328,7 +3332,7 @@ async function getBrowser() {
 }
 
 
-async function htmlToPdfBuffer(html) {
+async function htmlToPdfBuffer(html, mode = "color") {
   const browser = await getBrowser();
   const page = await browser.newPage();
 
@@ -3358,6 +3362,63 @@ async function htmlToPdfBuffer(html) {
         })
       );
     });
+
+    if (mode === "bw") {
+      await page.addStyleTag({
+        content: `
+          * {
+            color: #000 !important;
+            text-shadow: none !important;
+            box-shadow: none !important;
+            filter: none !important;
+          }
+
+          body,
+          .sheet,
+          .sheet-inner,
+          .page {
+            background: #fff !important;
+          }
+
+          .soft-card,
+          .pay-card,
+          .payment-box,
+          .footer-card,
+          .chip-value,
+          .deadline,
+          .pay-card.main {
+            background: #fff !important;
+            border: 0.35mm solid #000 !important;
+          }
+
+          /* IMPORTANT: remove black fills */
+          .chip-label,
+          .footer-icon-badge {
+            background: #fff !important;
+            color: #000 !important;
+            border: 0.35mm solid #000 !important;
+          }
+
+          .pay-main-sub {
+            background: #fff !important;
+            border-top: 0.35mm solid #000 !important;
+          }
+
+          .logo-wrap img {
+            filter: grayscale(100%) contrast(160%) !important;
+          }
+
+          .meta-head,
+          .footer-card-label,
+          .footer-caption,
+          .footer-sub,
+          .legal {
+            color: #000 !important;
+          }
+        `,
+      });
+    }
+
 
     return await page.pdf({
       format: "A4",
@@ -4082,7 +4143,38 @@ function buildFinancialDocumentPdfHtml(doc) {
   margin-top: 4mm;
 }
 
- 
+ .recipient-block {
+  position: absolute;
+  top: 42mm;
+  right: 18mm;
+  width: 70mm;
+  text-align: left;
+}
+
+.recipient-heading {
+  font-size: 10pt;
+  color: #666;
+  margin-bottom: 2mm;
+}
+
+.recipient-name {
+  font-size: 13.5pt;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-bottom: 1.2mm;
+}
+
+.recipient-line {
+  font-size: 11pt;
+  line-height: 1.3;
+  color: #333;
+}
+
+.recipient-meta {
+  margin-top: 1.5mm;
+  font-size: 10pt;
+  color: #555;
+}
       </style>
     </head>
     <body>
@@ -4173,12 +4265,29 @@ function buildFinancialDocument({
 
           </section>
 
-          <div class="recipient period-dates">
-            <div class="label">Spett.le</div>
-            <div class="address">
-              ${esc(textOrDash(customerAddressLine1))}
-            </div>
-          </div>
+<div class="recipient-block">
+  <div class="recipient-heading">Spett.le</div>
+
+  <div class="recipient-name">
+    ${esc(textOrDash(customerName))}
+  </div>
+
+  <div class="recipient-line">
+    ${esc(textOrDash(customerAddressLine1))}
+  </div>
+
+  ${
+    customerAddressLine2
+      ? `<div class="recipient-line">${esc(customerAddressLine2)}</div>`
+      : ""
+  }
+
+  ${
+    customerVatOrCf
+      ? `<div class="recipient-meta">${esc(customerVatOrCf)}</div>`
+      : ""
+  }
+</div>
 
           <section class="content">
             <div class="left">
@@ -4258,46 +4367,46 @@ function buildFinancialDocument({
 
             </aside>
 
-<section class="soft-card full-width-card payment-box">
-  <div class="payment-header">
-    <div>
-      <div class="soft-title">Dati per il pagamento</div>
-      <div class="note-body">
-        Coordinate bancarie da utilizzare per il saldo del documento.
-      </div>
-    </div>
+            <section class="soft-card full-width-card payment-box">
+              <div class="payment-header">
+                <div>
+                  <div class="soft-title">Dati per il pagamento</div>
+                  <div class="note-body">
+                    Coordinate bancarie da utilizzare per il saldo del documento.
+                  </div>
+                </div>
 
-    <div class="payment-total-pill">
-      <div class="meta-head">Importo</div>
-      <div class="payment-amount-value">${amountText}</div>
-    </div>
-  </div>
+                <div class="payment-total-pill">
+                  <div class="meta-head">Importo</div>
+                  <div class="payment-amount-value">${amountText}</div>
+                </div>
+              </div>
 
-  <div class="payment-grid-clean">
-    <div class="payment-cell">
-      <div class="meta-head">Beneficiario</div>
-      <div class="meta-body payment-main-text">
-        ${esc(textOrDash(beneficiary || supplierName))}
-      </div>
-    </div>
+              <div class="payment-grid-clean">
+                <div class="payment-cell">
+                  <div class="meta-head">Beneficiario</div>
+                  <div class="meta-body payment-main-text">
+                    ${esc(textOrDash(beneficiary || supplierName))}
+                  </div>
+                </div>
 
-    <div class="payment-cell iban-cell">
-      <div class="meta-head">IBAN</div>
-      <div class="payment-iban">${esc(textOrDash(iban))}</div>
-    </div>
+                <div class="payment-cell iban-cell">
+                  <div class="meta-head">IBAN</div>
+                  <div class="payment-iban">${esc(textOrDash(iban))}</div>
+                </div>
 
-    ${
-      swift
-        ? `
-        <div class="payment-cell">
-          <div class="meta-head">SWIFT / BIC</div>
-          <div class="payment-strong">${esc(swift)}</div>
-        </div>
-      `
-        : ""
-    }
-  </div>
-</section>
+                ${
+                  swift
+                    ? `
+                    <div class="payment-cell">
+                      <div class="meta-head">SWIFT / BIC</div>
+                      <div class="payment-strong">${esc(swift)}</div>
+                    </div>
+                  `
+                    : ""
+                }
+              </div>
+            </section>
           </section>
 
 <footer class="footer">
@@ -4314,7 +4423,7 @@ function buildFinancialDocument({
     <div class="footer-card">
       <div class="footer-card-label">
         <span class="footer-icon-badge">⌂</span>
-        Indirizzo
+        Indirizzo postale
       </div>
       <div class="footer-card-value">
         ${esc(textOrDash(operatingAddress))}
@@ -4365,7 +4474,8 @@ function buildFinancialDocument({
 }
 
 
-async function generateFatturaPdf(id) {
+async function generateFatturaPdf(id, mode = "color") {
+
   const doc = await getFatturaPrintData(id);
  
    
@@ -4378,8 +4488,8 @@ async function generateFatturaPdf(id) {
     documentDate: doc.data_documento,
     customerName: doc.amministratore || "Amministrazione Condominio",
     customerAddressLine1: doc.indirizzo || "-",
-    customerAddressLine2: "",
-    customerVatOrCf: "",
+    customerAddressLine2: doc.cap && doc.citta ? `${doc.cap} - ${doc.citta}` : "",
+    customerVatOrCf: "C.F./P.Iva " + (doc.codice_fiscale || doc.iva || "-"),
     description: doc.descrizione || "Fattura manuale.",
     amount: doc.importo || 0,
     beneficiary: "Idromardi ltd",
@@ -4396,7 +4506,7 @@ async function generateFatturaPdf(id) {
     logoUrl: logoUrl,
   });
 
-  return await htmlToPdfBuffer(html);
+  return await htmlToPdfBuffer(html, mode);
 }
 
 async function generateProformaPdf(id) {
@@ -4429,7 +4539,7 @@ async function generateProformaPdf(id) {
     logoUrl: "../../uploads/logo_colorato.png",
   });
 
-  return await htmlToPdfBuffer(html);
+  return await htmlToPdfBuffer(html, mode);
 }
 
 async function resetToEmessa(id) {

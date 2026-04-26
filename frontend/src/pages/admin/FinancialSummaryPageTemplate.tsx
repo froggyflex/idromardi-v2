@@ -3,6 +3,8 @@ import api from "../../api/client";
 import { th } from "date-fns/locale/th";
 import { Fragment } from "react";
 
+type PrintMode = "color" | "bw";
+
 type SummaryResponse = {
   summary: {
     totaleInsolutoProforme: number;
@@ -282,7 +284,7 @@ export default function FinancialSummaryPageTemplate() {
   const [activeImportTab, setActiveImportTab] = useState<"PROFORMA" | "FATTURA">("FATTURA");
   const [selectedCondomini, setSelectedCondomini] = useState<{ id: string; indirizzo: string }[]>([]);
   const [fatturaCondominioSearch, setFatturaCondominioSearch] = useState("");
-
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [loadingCondomini, setLoadingCondomini] = useState(false);
 
 
@@ -310,7 +312,8 @@ export default function FinancialSummaryPageTemplate() {
   const [importedFattureDocs, setImportedFattureDocs] = useState<ImportedFatturaItem[]>([]);
   const [selectedImportedFatturaDoc, setSelectedImportedFatturaDoc] = useState<ImportedFatturaDetail | null>(null);
  
- 
+
+
   const [loadingImportedFattureDocs, setLoadingImportedFattureDocs] = useState(false);
   const [parsingFatturaImportId, setParsingFatturaImportId] = useState<string | null>(null);
 
@@ -339,6 +342,7 @@ export default function FinancialSummaryPageTemplate() {
   });
   const [registeringPayment, setRegisteringPayment] = useState(false);
   const [printingId, setPrintingId] = useState<number | null>(null);
+  const [openPrintMenuId, setOpenPrintMenuId] = useState<number | null>(null);
 
   const [paymentsRows, setPaymentsRows] = useState<PaymentRow[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
@@ -382,6 +386,25 @@ export default function FinancialSummaryPageTemplate() {
       (p: any) => !p.fattura_id && p.stato !== "ANNULLATA"
     );
   }, [proformasRows]);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+  function handleClickOutside(event: MouseEvent) {
+    if (
+      menuRef.current &&
+      !menuRef.current.contains(event.target as Node)
+    ) {
+      setOpenPrintMenuId(null);
+    }
+  }
+
+  if (openPrintMenuId !== null) {
+    document.addEventListener("mousedown", handleClickOutside);
+  }
+
+  return () => {
+    document.removeEventListener("mousedown", handleClickOutside);
+  };
+}, [openPrintMenuId]);
 
   const filteredAvailableProformasForManualFattura = useMemo(() => {
     const q = manualFatturaProformaSearch.trim().toLowerCase();
@@ -421,10 +444,11 @@ export default function FinancialSummaryPageTemplate() {
       );
     }
   }
-  async function printFatturaPdf(fatturaId: String) {
+  async function printFatturaPdf(fatturaId: String, mode: "color" | "bw") {
     try {
       const response = await api.get(`/financial-summary/fatture/${fatturaId}/print`, {
         responseType: "blob",
+        params: { mode },
       });
 
       const blob = new Blob([response.data], { type: "application/pdf" });
@@ -560,14 +584,16 @@ async function createManualFattura() {
   }
 }
 
-async function handlePrint(id: number) {
-  try {
-    setPrintingId(id);
-    await printFatturaPdf(id as any);
-  } finally {
-    setPrintingId(null);
+  async function handlePrint(id: number, mode: PrintMode) {
+    try {
+      setPrintingId(id);
+      setOpenPrintMenuId(null);
+
+      await printFatturaPdf(String(id), mode);
+    } finally {
+      setPrintingId(null);
+    }
   }
-}
 
   function rememberImportedTableScroll() {
     if (importedTableScrollRef.current) {
@@ -922,7 +948,20 @@ async function loadFatturaDetail(id: string) {
 
   const normalizeDocType = (doc: any) => String(doc.type || "").trim().toUpperCase();
 
- 
+  useEffect(() => {
+    function handleClickOutside() {
+      setOpenMenuId(null);
+    }
+
+    if (openMenuId !== null) {
+      window.addEventListener("click", handleClickOutside);
+    }
+
+    return () => {
+      window.removeEventListener("click", handleClickOutside);
+    };
+  }, [openMenuId]);
+
   useEffect(() => {
     function handleEsc(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -2922,54 +2961,114 @@ const renderImportedTableSection = (
                                         </svg>
                                       )}
                                     </button>
-                                    <button
-                                      onClick={() => handlePrint(row.id)}
-                                      disabled={
-                                        row.stato === "ANNULLATA" ||
-                                        row.fattura_numero != null ||
-                                        printingId === row.id
-                                      }
-                                      className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 shadow-sm transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+
+                                    <div
+                                      className="relative inline-flex"
+                                      ref={menuRef}
+                                      onClick={(e) => e.stopPropagation()}
                                     >
-                                      {printingId === row.id ? (
-                                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
-                                          <circle
-                                            cx="12"
-                                            cy="12"
-                                            r="10"
-                                            stroke="currentColor"
-                                            strokeWidth="3"
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setOpenPrintMenuId(openPrintMenuId === row.id ? null : row.id)
+                                        }
+                                        disabled={
+                                          row.stato === "ANNULLATA" ||
+                                          row.fattura_numero != null ||
+                                          printingId === row.id
+                                        }
+                                        title="Stampa fattura"
+                                        className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 shadow-sm transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        {printingId === row.id ? (
+                                          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                                            <circle
+                                              cx="12"
+                                              cy="12"
+                                              r="10"
+                                              stroke="currentColor"
+                                              strokeWidth="3"
+                                              fill="none"
+                                              opacity="0.25"
+                                            />
+                                            <path
+                                              d="M22 12a10 10 0 00-10-10"
+                                              stroke="currentColor"
+                                              strokeWidth="3"
+                                              fill="none"
+                                            />
+                                          </svg>
+                                        ) : (
+                                          <svg
+                                            viewBox="0 0 24 24"
+                                            className="h-4 w-4"
                                             fill="none"
-                                            opacity="0.25"
-                                          />
-                                          <path
-                                            d="M22 12a10 10 0 00-10-10"
                                             stroke="currentColor"
-                                            strokeWidth="3"
-                                            fill="none"
-                                          />
-                                        </svg>
-                                      ) : (
-                                        <svg
-                                          viewBox="0 0 24 24"
-                                          className="h-4 w-4"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          strokeWidth="2"
-                                        >
-                                          <path
-                                            d="M7 9V4h10v5M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                          <path
-                                            d="M7 14h10v6H7z"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                        </svg>
+                                            strokeWidth="2"
+                                          >
+                                            <path
+                                              d="M7 9V4h10v5M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                            />
+                                            <path
+                                              d="M7 14h10v6H7z"
+                                              strokeLinecap="round"
+                                              strokeLinejoin="round"
+                                            />
+                                          </svg>
+                                        )}
+                                      </button>
+
+                                      {openPrintMenuId === row.id && (
+                                        <div className="absolute right-0 top-11 z-50 w-48 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                                          <button
+                                            type="button"
+                                            onClick={() => handlePrint(row.id, "color")}
+                                            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-sky-50 hover:text-sky-700"
+                                          >
+                                            <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-sky-50 text-sky-700">
+                                              <svg
+                                                viewBox="0 0 24 24"
+                                                className="h-4 w-4"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2"
+                                              >
+                                                <path d="M7 9V4h10v5" strokeLinecap="round" strokeLinejoin="round" />
+                                                <path
+                                                  d="M6 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-1"
+                                                  strokeLinecap="round"
+                                                  strokeLinejoin="round"
+                                                />
+                                                <path d="M7 14h10v6H7z" strokeLinecap="round" strokeLinejoin="round" />
+                                              </svg>
+                                            </span>
+                                            <span>Stampa normale</span>
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => handlePrint(row.id, "bw")}
+                                            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                                          >
+                                            <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                                              <svg
+                                                viewBox="0 0 24 24"
+                                                className="h-4 w-4"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2"
+                                              >
+                                                <circle cx="12" cy="12" r="9" />
+                                                <path d="M12 3v18" strokeLinecap="round" />
+                                              </svg>
+                                            </span>
+                                            <span>Bianco e nero</span>
+                                          </button>
+                                        </div>
                                       )}
-                                    </button>
+                                    </div>
 
                                   </div>
 

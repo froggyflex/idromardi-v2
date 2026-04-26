@@ -492,8 +492,9 @@ async function printProformaPdf(req, res) {
 async function printFatturaPdf(req, res) {
   try {
     const { id } = req.params;
-
-    const pdfBuffer = await service.generateFatturaPdf(id);
+    const mode = req.query.mode === "bw" ? "bw" : "color";
+    
+    const pdfBuffer = await service.generateFatturaPdf(id, mode);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
