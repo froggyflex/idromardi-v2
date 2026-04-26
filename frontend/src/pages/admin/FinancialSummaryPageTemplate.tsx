@@ -387,22 +387,20 @@ export default function FinancialSummaryPageTemplate() {
     );
   }, [proformasRows]);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+
+useEffect(() => {
   function handleClickOutside(event: MouseEvent) {
-    if (
-      menuRef.current &&
-      !menuRef.current.contains(event.target as Node)
-    ) {
+    if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
       setOpenPrintMenuId(null);
     }
   }
 
   if (openPrintMenuId !== null) {
-    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
   }
 
   return () => {
-    document.removeEventListener("mousedown", handleClickOutside);
+    document.removeEventListener("click", handleClickOutside);
   };
 }, [openPrintMenuId]);
 
