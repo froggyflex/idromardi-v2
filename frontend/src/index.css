@@ -31,6 +31,15 @@
   }
 }
 
+@keyframes loading {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 @media print {
   .navbarside {
     display: none !important;

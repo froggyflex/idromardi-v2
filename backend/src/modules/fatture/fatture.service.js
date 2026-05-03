@@ -9,6 +9,7 @@ const fs = require("fs").promises;
 const fs1 = require("fs");
 const puppeteer = require("puppeteer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
+const { error } = require("console");
  
 // const db = require(... your existing db helper ...)
 
@@ -239,22 +240,223 @@ function deriveValoriFromLetture(letture = []) {
   };
 }
 
+exports.saveRipartizionePdfRecord = async ({
+  idUtenza,
+  condominioId,
+  periodKey,
+  filename,
+  filepath,
+  trimestreLabel,
+  dataLettura,
+}) => {
+  await db.query(
+    `
+    INSERT INTO ripartizione_pdfs
+      (id_utenza, condominio_id, period_key, filename, filepath, trimestre_label, data_lettura)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      condominio_id = VALUES(condominio_id),
+      filename = VALUES(filename),
+      filepath = VALUES(filepath),
+      trimestre_label = VALUES(trimestre_label),
+      data_lettura = VALUES(data_lettura),
+      created_at = CURRENT_TIMESTAMP
+    `,
+    [
+      idUtenza,
+      condominioId || null,
+      periodKey,
+      filename,
+      filepath,
+      trimestreLabel || null,
+      dataLettura || null,
+    ]
+  );
+};
 
-exports.exportRipartizionePdf = async ({
+function makeSafeDateFolder(dataLettura) {
+  if (!dataLettura) return "senza-data";
+
+  // handles "12/01/2026"
+  const parts = String(dataLettura).split("/");
+  if (parts.length === 3) {
+    const [dd, mm, yyyy] = parts;
+    return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  }
+
+  return String(dataLettura)
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+exports.getRipartizionePdfsByPeriod = async (periodKey) => {
+  const [rows] = await db.query(
+    `
+    SELECT *
+    FROM ripartizione_pdfs
+    WHERE period_key = ?
+    ORDER BY id_utenza ASC
+    `,
+    [periodKey]
+  );
+
+  return rows;
+};
+
+exports.listRipartizionePdfs = async () => {
+  const [rows] = await db.query(
+    `
+    SELECT
+      r.id,
+      r.id_utenza,
+      r.condominio_id,
+      r.period_key,
+      r.filename,
+      r.filepath,
+      r.trimestre_label,
+      r.data_lettura,
+      r.created_at,
+
+
+      u.Nome,
+      u.Cognome,
+      u.Interno,
+      u.Scala,
+      u.Isolato,
+      u.id_user
+
+    FROM ripartizione_pdfs r
+    LEFT JOIN utenze_v2 u
+      ON u.id = r.id_utenza
+
+    ORDER BY r.period_key DESC, u.id_user ASC
+    `
+  );
+
+  return rows;
+};
+
+exports.getRipartizionePdfById = async (id) => {
+  const [rows] = await db.query(
+    `
+    SELECT
+      id,
+      id_utenza,
+      condominio_id,
+      period_key,
+      filename,
+      filepath,
+      trimestre_label,
+      data_lettura,
+      created_at
+    FROM ripartizione_pdfs
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [id]
+  );
+
+  return rows[0] || null;
+};
+
+exports.exportRipartizioniPerUtenza = async ({
   righe,
   dettaglioByUtenza,
   trimestreLabel,
   dataLettura,
   logoUrl,
+  condominioId,
 }) => {
-
   if (!Array.isArray(righe) || righe.length === 0) {
-    const err = new Error("Nessuna riga disponibile per generare il PDF");
+    const err = new Error("Nessuna riga disponibile per generare i PDF");
     err.statusCode = 400;
     throw err;
   }
 
+  const rowsByUtenza = righe.reduce((acc, row) => {
+    const idUtenza =
+      row?.utenza?.id ||
+      row?.id_utenza ||
+      row?.idUtenza ||
+      row?.utenza_id;
 
+    if (!idUtenza) {
+      console.warn("Riga senza id utenza:", row);
+      return acc;
+    }
+
+    if (!acc[idUtenza]) acc[idUtenza] = [];
+    acc[idUtenza].push(row);
+
+    return acc;
+  }, {});
+
+  const periodFolder = makeSafeDateFolder(dataLettura);
+
+  const uploadDir = path.join(
+    process.cwd(),
+    "storage",
+    "ripartizioni",
+    periodFolder
+  );
+
+  await fs.mkdir(uploadDir, { recursive: true });
+
+  const savedFiles = [];
+
+  for (const [idUtenza, utenzaRighe] of Object.entries(rowsByUtenza)) {
+    const pdfBufferRaw = await generateRipartizionePdfBuffer({
+      righe: utenzaRighe,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+    });
+
+    const pdfBuffer = Buffer.from(pdfBufferRaw);
+
+    if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
+      console.log(
+        "Invalid PDF first bytes:",
+        pdfBuffer.slice(0, 80).toString()
+      );
+
+      throw new Error(`PDF non valido generato per utenza ${idUtenza}`);
+    }
+
+    const filename = `ripartizione_utenza_${idUtenza}.pdf`;
+    const relativePath = `/storage/ripartizioni/${periodFolder}/${filename}`;
+    const absolutePath = path.join(uploadDir, filename);
+
+    await fs.writeFile(absolutePath, pdfBuffer);
+
+    await exports.saveRipartizionePdfRecord({
+      idUtenza,
+      condominioId,
+      periodKey: periodFolder,
+      filename,
+      filepath: relativePath,
+      trimestreLabel,
+      dataLettura,
+    });
+
+    savedFiles.push({
+      idUtenza,
+      filename,
+      filepath: relativePath,
+      periodKey: periodFolder,
+    });
+  }
+
+  return savedFiles;
+};
+async function generateRipartizionePdfBuffer({
+  righe,
+  dettaglioByUtenza,
+  trimestreLabel,
+  dataLettura,
+  logoUrl,
+}) {
   const html = buildRipartizionePdfHtml({
     righe,
     dettaglioByUtenza,
@@ -289,18 +491,11 @@ exports.exportRipartizionePdf = async ({
       },
     });
 
-    return pdfBuffer;
-  } catch (error) {
-    console.error("exportRipartizionePdf error:", error);
-    const err = new Error("Errore durante la generazione del PDF");
-    err.statusCode = 500;
-    throw err;
+    return Buffer.from(pdfBuffer);
   } finally {
-    if (browser) {
-      await browser.close();
-    }
+    if (browser) await browser.close();
   }
-};
+}
 
 exports.parseImportedDocument = async (id) => {
   const rows = await db.query(

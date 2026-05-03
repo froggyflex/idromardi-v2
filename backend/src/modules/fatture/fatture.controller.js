@@ -1,4 +1,52 @@
 const service = require("./fatture.service");
+const fs = require("fs");
+const fsp = require("fs/promises");
+const path = require("path");
+const { PDFDocument } = require("pdf-lib");
+
+
+exports.viewRipartizionePdfPeriod = async (req, res, next) => {
+  try {
+    const { periodKey } = req.params;
+
+    const pdfs = await service.getRipartizionePdfsByPeriod(periodKey);
+
+    if (!pdfs.length) {
+      return res.status(404).json({ error: "Nessun PDF trovato per questo periodo." });
+    }
+
+    const mergedPdf = await PDFDocument.create();
+
+    for (const pdf of pdfs) {
+      const absolutePath = path.join(
+        process.cwd(),
+        pdf.filepath.replace(/^\/+/, "")
+      );
+
+      const fileBuffer = await fsp.readFile(absolutePath);
+      const sourcePdf = await PDFDocument.load(fileBuffer);
+      const copiedPages = await mergedPdf.copyPages(
+        sourcePdf,
+        sourcePdf.getPageIndices()
+      );
+
+      copiedPages.forEach((page) => mergedPdf.addPage(page));
+    }
+
+    const mergedBytes = await mergedPdf.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="ripartizioni_${periodKey}.pdf"`
+    );
+
+    return res.send(Buffer.from(mergedBytes));
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 exports.createOrLoadSession = async (req, res) => {
   try {
@@ -137,29 +185,97 @@ exports.uploadImportedDocument = async (req, res) => {
   }
 };
 
+exports.listRipartizionePdfs = async (req, res, next) => {
+  try {
+    const rows = await service.listRipartizionePdfs();
+
+    const grouped = rows.reduce((acc, row) => {
+      const period = row.period_key || "senza-periodo";
+
+      if (!acc[period]) {
+        acc[period] = [];
+      }
+
+      acc[period].push(row);
+
+      return acc;
+    }, {});
+
+    return res.json({
+      success: true,
+      periods: grouped,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.viewRipartizionePdf = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const pdf = await service.getRipartizionePdfById(id);
+
+    if (!pdf) {
+      return res.status(404).json({ error: "PDF non trovato." });
+    }
+
+    const absolutePath = path.join(
+      process.cwd(),
+      pdf.filepath.replace(/^\/+/, "")
+    );
+
+    if (!fs.existsSync(absolutePath)) {
+      return res.status(404).json({
+        error: "File PDF non trovato nello storage.",
+      });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${pdf.filename}"`
+    );
+
+    return res.sendFile(absolutePath);
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.exportRipartizionePdf = async (req, res, next) => {
   try {
-    const { righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl } = req.body;
-
-    const pdfBuffer = await service.exportRipartizionePdf({
+    const {
       righe,
       dettaglioByUtenza,
       trimestreLabel,
       dataLettura,
       logoUrl,
+      condominioId,
+    } = req.body;
+
+   
+    const result = await service.exportRipartizioniPerUtenza({
+      righe,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+      condominioId,
     });
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="bollette-ripartizione.pdf"'
-    );
-
-    return res.send(pdfBuffer);
+    return res.json({
+      success: true,
+      count: result.length,
+      files: result,
+    });
+    
+    
   } catch (error) {
     next(error);
   }
 };
+
 exports.parseImportedDocument = async (req, res) => {
   try {
     const { id } = req.params;

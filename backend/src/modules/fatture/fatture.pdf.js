@@ -682,7 +682,32 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
       </style>
     </head>
     <body>
-      ${pages.map((page) => page.map((r) => buildInvoice(r, dettaglioByUtenza[r?.utenza?.id], trimestreLabel, dataLettura, logoUrl)).join("")).join("")}
+      ${(pages || [])
+        .map((page) =>
+          page
+            .map((r) => {
+              const idUtenza =
+                r?.utenza?.id ||
+                r?.id_utenza ||
+                r?.idUtenza ||
+                r?.utenza_id;
+
+              const dettaglio =
+                dettaglioByUtenza?.[idUtenza] ||
+                dettaglioByUtenza?.[String(idUtenza)] ||
+                {};
+
+              return buildInvoice(
+                r,
+                dettaglio,
+                trimestreLabel,
+                dataLettura,
+                logoUrl
+              );
+            })
+            .join("")
+        )
+        .join("")}
     </body>
   </html>
   `;

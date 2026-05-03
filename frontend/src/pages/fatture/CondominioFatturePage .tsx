@@ -74,7 +74,10 @@ export default function CondominioFatturePage() {
     const [isCreateFatturaModalOpen, setIsCreateFatturaModalOpen] = useState(false);
     const [fatturaDate, setFatturaDate] = useState(new Date().toISOString().slice(0, 10));
     const [creatingFattura, setCreatingFattura] = useState(false);
-      
+    const [exportingRipartizioni, setExportingRipartizioni] = useState(false);
+    const [exportMessage, setExportMessage] = useState("");
+    const [pdfPage, setPdfPage] = useState(1);
+    const pdfPageSize = 20;
     const [expandedRows, setExpandedRows] = useState<Record<string | number, boolean>>({});
 
     const toggleRow = (rowKey: string | number) => {
@@ -156,7 +159,29 @@ export default function CondominioFatturePage() {
     const [dettaglioByUtenza, setDettaglioByUtenza]  = useState<Record<string, any[]>>({})
     const [importedDocYear, setImportedDocYear] = useState<number | null>(null);
 
-   
+    const [pdfPeriods, setPdfPeriods] = useState<Record<string, any[]>>({});
+    const [openPeriod, setOpenPeriod] = useState<string | null>(null);
+    const [pdfSearch, setPdfSearch] = useState("");
+
+    async function loadRipartizionePdfs() {
+      const { data } = await api.get("/fatture/ripartizione-pdfs");
+      setPdfPeriods(data.periods || {});
+    }
+
+    function viewSinglePdf(id: number) {
+      window.open(
+        `${api.defaults.baseURL}/fatture/ripartizione-pdfs/${id}/view`,
+        "_blank"
+      );
+    }
+
+    function viewPeriodPdf(periodKey: string) {
+      window.open(
+        `${api.defaults.baseURL}/fatture/ripartizione-pdfs/period/${periodKey}/view-all`,
+        "_blank"
+      );
+    }
+
    const years: any[] = [];
    years.length = 0; // clear array while keeping reference
    years.push(selectedImportedDoc?.data_fine_periodo ? new Date(selectedImportedDoc.data_fine_periodo).getFullYear() : new Date().getFullYear()); // current year
@@ -1017,6 +1042,7 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
     setGiorniAcconto(Number(session.giorni_acconto) ?? 0);
     setMcAcconto(Number(session.mcAcconto) ?? 0);
     setGiorniCasaInterni(session.giorni_interni ?? 0);
+
     setVarie(session.varie ?? 0);
    
 
@@ -1028,6 +1054,8 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
   setProviderId(session.id_casa_idrica || "");
   setCurrent(session.id_periodo_attuale || "");
   setPrevious(session.id_periodo_precedente || "");
+  setAnnoTariffa(importedDocYear ? String(importedDocYear) : "");
+    
 
 }, [session]);
 
@@ -1041,50 +1069,38 @@ const giorniCasaIdrica = daysBetween(
   periodoPrecedente?.data_lettura_casa_idrica,
   periodoAttuale?.data_lettura_casa_idrica
 );
+ 
 
+const logoUrl = `../../images/image.png`;
+//  "https://i.postimg.cc/2SDBbptC/idro-logo.jpg"
  
 const handleExportPdf = async () => {
- 
   try {
-    const response = await api.post(
-      "/fatture/export-ripartizione-pdf",
-      {
-        righe,
-        dettaglioByUtenza,
-        trimestreLabel: "07.25 - 01.2025",
-        dataLettura: "12/01/2026",
-        logoUrl: "https://i.postimg.cc/2SDBbptC/idro-logo.jpg",
-      },
-      {
-        responseType: "blob",
-      }
-    );
+    setExportingRipartizioni(true);
+    setExportMessage("Generazione PDF in corso...");
 
-    const blob = new Blob([response.data], { type: "application/pdf" });
-    const url = window.URL.createObjectURL(blob);
+    const { data } = await api.post("/fatture/export-ripartizione-pdf", {
+      righe,
+      dettaglioByUtenza,
+      trimestreLabel: "07.25 - 01.2025",
+      dataLettura: "12/01/2026",
+      logoUrl: "https://i.postimg.cc/2SDBbptC/idro-logo.jpg",
+      condominioId,
+    });
 
-    window.open(url, "_blank");
-
-    // optional cleanup with delay so the new tab has time to load it
-    setTimeout(() => {
-      window.URL.revokeObjectURL(url);
-    }, 10000);
+    setExportMessage(`Creati ${data.count} PDF di ripartizione.`);
   } catch (error: any) {
     console.error("Errore export PDF:", error);
-
-    let message = "Errore durante l'esportazione del PDF";
-
-    if (error?.response?.data instanceof Blob) {
-      try {
-        message = await error.response.data.text();
-      } catch {}
-    } else if (error?.message) {
-      message = error.message;
-    }
-
-    alert(message);
+    setExportMessage(
+      error?.response?.data?.error ||
+        error?.message ||
+        "Errore durante la generazione dei PDF."
+    );
+  } finally {
+    setExportingRipartizioni(false);
   }
 };
+
 const pages = chunkArray(righe, 2);
 const dettaglio = generale?.dettaglio ?? [];
 
@@ -1173,7 +1189,7 @@ const deltaOk = Math.abs(deltaTotali) < 0.5;
   const isGreen:any = totaleDocumentoConOneri? (totaleDocumentoConOneri <= totaleInterni) : false;
 
 return (
-    <div className="w-full px-6 py-6 space-y-6">
+    <div className=" ">
       <div className="screen-only">
       {/* SUMMARY */}
       <div className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b shadow-sm">
@@ -1296,328 +1312,243 @@ return (
           </div>
         </div>
       </div><abbr title=""></abbr>
+      
+      <br></br>
+      {/* IMPORT PIPELINE */}
+      <section className="rounded-[28px] border border-slate-200 bg-white shadow-sm overflow-hidden">
+        {/* HEADER */}
+        <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-5">
+          <h3 className="text-base font-bold text-slate-900">
+            Importazione documenti
+          </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Carica documenti provider e controlla lo stato di elaborazione.
+          </p>
+        </div>
 
-        {/* TOP BAR */}
-      <div className="space-y-6">
-        
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-          <div className="xl:col-span-5">
-            <div className="bg-white rounded-2xl shadow p-5 h-full">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-lg font-semibold text-slate-900">
-                    Importa Bolletta
+        {/* UPLOAD SECTION */}
+        <div className="border-b border-slate-200 px-6 py-5">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px_180px] lg:items-end">
+            <label className="block">
+              <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                File bolletta
+              </span>
+
+              <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 transition hover:border-slate-400 hover:bg-slate-100">
+                <svg
+                  className="h-5 w-5 shrink-0 text-slate-500"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M7 21h10a2 2 0 002-2V7l-5-5H7a2 2 0 00-2 2v15a2 2 0 002 2z"
+                  />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v5h5" />
+                </svg>
+
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-slate-800">
+                    {importFile ? importFile.name : "Seleziona un file PDF"}
                   </div>
-                  <div className="mt-1 text-sm text-slate-500 leading-relaxed">
-                    Carica un documento e preparalo per il parsing.
+                  <div className="text-xs text-slate-500">
+                    {importFile ? "Pronto per il caricamento" : "Nessun file selezionato"}
                   </div>
                 </div>
 
-                <div className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                  Upload
-                </div>
+                <input
+                  type="file"
+                  accept=".pdf"
+                  className="hidden"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                />
               </div>
+            </label>
 
-              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4">
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-700">
-                    File bolletta
-                  </label>
+            <label className="block">
+              <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                Provider
+              </span>
 
-                  <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-4 transition hover:border-slate-400">
-                    <input
-                      type="file"
-                      accept=".pdf,.png,.jpg,.jpeg,.json"
-                      className="block w-full text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800"
-                      onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+              <select
+                className="h-[58px] w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400"
+                value={importProviderId}
+                onChange={(e) => setImportProviderId(e.target.value)}
+              >
+                <option value="">Opzionale</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nome}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              onClick={uploadImportedInvoice}
+              disabled={!importFile || uploadingImport}
+              className="inline-flex h-[58px] items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {uploadingImport ? (
+                <>
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
                     />
-                    <div className="mt-2 text-xs text-slate-500">
-                      Formati supportati: PDF
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-700">
-                    Provider
-                  </label>
-                  <select
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
-                    value={importProviderId}
-                    onChange={(e) => setImportProviderId(e.target.value)}
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v8H4z"
+                    />
+                  </svg>
+                  Upload...
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth="2"
                   >
-                    <option value="">Provider opzionale</option>
-                    {providers.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.nome}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      Stato
-                    </div>
-                    <div className="mt-1 text-sm font-medium text-slate-800">
-                      {uploadingImport
-                        ? "Upload in corso..."
-                        : importFile
-                        ? "Pronto al caricamento"
-                        : "Nessun file selezionato"}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-3">
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                      File selezionato
-                    </div>
-                    <div className="mt-1 text-sm font-medium text-slate-800 truncate">
-                      {importFile ? importFile.name : "-"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 flex items-center justify-between gap-4 border-t pt-4">
-                <div className="text-xs text-slate-500 leading-relaxed max-w-[220px]">
-                  Dopo il caricamento, il documento apparirà nella lista importata.
-                </div>
-
-                <button
-                  onClick={uploadImportedInvoice}
-                  disabled={!importFile || uploadingImport}
-                  className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {uploadingImport ? "Upload in corso..." : "Carica documento"}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="xl:col-span-7">
-            <div className="bg-white rounded-2xl shadow p-5 h-full">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-lg font-semibold text-slate-900">
-                    Documenti Importati
-                  </div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    Seleziona un documento per lavorarci nel workspace.
-                  </div>
-                </div>
-
-                <div className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                  {importedDocs.length} {importedDocs.length === 1 ? "documento" : "documenti"}
-                </div>
-              </div>
-                      
-        {loadingImportedDocs ? (
-              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-                Caricamento documenti...
-              </div>
-            ) : importedDocs.length === 0 ? (
-              <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-                Nessun documento importato.
-              </div>
-            ) : (
-              <div className="mt-5">
-                <div
-                  ref={importedDocsScrollRef}
-                  onWheel={handleImportedDocsWheel}
-                  className="flex gap-4 overflow-x-auto overflow-y-hidden overscroll-contain pb-3 pr-1 snap-x snap-mandatory scroll-smooth cursor-grab active:cursor-grabbing"
-                >
-                  {importedDocs.map((doc: any) => (
-                    <div
-                      key={doc.id}
-                      className={`min-w-[320px] max-w-[320px] shrink-0 rounded-2xl border p-4 transition cursor-pointer snap-start shadow-sm ${
-                        selectedImportedDoc?.id === doc.id
-                          ? "border-blue-500 bg-blue-50"
-                          : "border-slate-200 bg-white hover:bg-slate-50"
-                      }`}
-                      onClick={() => loadImportedDocumentDetail(doc.id)}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-slate-900 truncate">
-                            {doc.numero_bolletta || doc.original_filename || "Documento"}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500 truncate">
-                            {doc.original_filename || "-"}
-                          </div>
-                        </div>
-
-                        <div className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-700">
-                          {doc.parse_status || "uploaded"}
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-2 gap-3">
-                        <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                            Totale
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-slate-900">
-                            € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
-                          </div>
-                        </div>
-
-                        <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                            Validazione
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-slate-900">
-                            {doc.validation_status || "pending"}
-                          </div>
-                        </div>
-                      </div>
-
-                      {doc.parse_status !== "parsed" && doc.parse_status !== "imported" && (
-                        <div className="mt-3 flex justify-end">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              parseImportedInvoice(doc.id);
-                            }}
-                            className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                          >
-                            Esegui parsing
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          
-              
-                <div className="bg-white rounded-2xl shadow p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-lg font-semibold text-slate-900">
-                Anteprima Documento Importato
-              </div>
-              <div className="mt-1 text-sm text-slate-500 leading-relaxed">
-                Lavora sul documento selezionato o crea una sessione manuale.
-              </div>
-            </div>
-
-            <div className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-              Operazioni
-            </div>
-          </div>
-
-          {selectedImportedDoc ? (
-            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  
-                  <div className="mt-1 text-sm text-slate-500">
-                    Controlla i dati estratti prima di collegare il documento a una sessione.
-                  </div>
-                </div>
-
-                <div className="rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
-                  {selectedImportedDoc.validation_status || "pending"}
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Numero Bolletta
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
-                    {selectedImportedDoc.numero_bolletta || "-"}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Codice Fornitura
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
-                    {selectedImportedDoc.codice_fornitura || "-"}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Totale Documento
-                  </div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">
-                    € {Number(selectedImportedDoc.importo_totale_da_pagare || 0).toFixed(2)}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Consumo
-                  </div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">
-                    {selectedImportedDoc.consumo_globale_mc ?? "-"} mc
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Stato Parsing
-                  </div>
-                  <div className="mt-1 text-sm font-medium text-slate-800">
-                    {selectedImportedDoc.parse_status || "-"}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                    Documento
-                  </div>
-                  <div className="mt-1 text-sm font-medium text-slate-800 truncate">
-                    {selectedImportedDoc.original_filename || "-"}
-                  </div>
-                </div>
-              </div>
-
-              {fatturaId && (
-                <div className="mt-5 flex justify-end border-t pt-4">
-                  <button
-                    onClick={() => linkImportedToCurrentSession(selectedImportedDoc.id, fatturaId)}
-                    className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700"
-                  >
-                    Collega alla sessione aperta
-                  </button>
-                </div>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 16V4m0 0l-4 4m4-4l4 4M4 20h16"
+                    />
+                  </svg>
+                  Carica
+                </>
               )}
+            </button>
+          </div>
+        </div>
+
+        {/* STATUS CARDS SECTION */}
+        <div className="px-6 py-5">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h4 className="text-sm font-bold text-slate-900">
+                Documenti caricati
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                Stato upload, parsing e validazione dei documenti importati.
+              </p>
+            </div>
+
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {importedDocs.length} documenti
+            </span>
+          </div>
+
+          {loadingImportedDocs ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              Caricamento documenti...
+            </div>
+          ) : importedDocs.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              Nessun documento caricato.
             </div>
           ) : (
-            <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500 text-center">
-              Seleziona un documento importato per vedere l’anteprima.
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+              {importedDocs.map((doc: any) => {
+                const status = doc.parse_status || "uploaded";
+
+                const statusClass =
+                  status === "imported"
+                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                    : status === "parsed"
+                    ? "bg-blue-50 text-blue-700 ring-blue-200"
+                    : "bg-slate-100 text-slate-700 ring-slate-200";
+
+                return (
+                  <article
+                    key={doc.id}
+                    className={`rounded-2xl border p-4 shadow-sm transition ${
+                      selectedImportedDoc?.id === doc.id
+                        ? "border-blue-500 bg-blue-50/50"
+                        : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => loadImportedDocumentDetail(doc.id)}
+                        className="min-w-0 text-left"
+                      >
+                        <div className="truncate text-sm font-bold text-slate-900">
+                          {doc.numero_bolletta || doc.original_filename || "Documento"}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-slate-500">
+                          {doc.original_filename || "-"}
+                        </div>
+                      </button>
+
+                      <span
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${statusClass}`}
+                      >
+                        {status}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                          Totale
+                        </div>
+                        <div className="mt-1 text-sm font-bold text-slate-900">
+                          € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                          Validazione
+                        </div>
+                        <div className="mt-1 text-sm font-bold text-slate-900">
+                          {doc.validation_status || "pending"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                      {status !== "parsed" && status !== "imported" && (
+                        <button
+                          type="button"
+                          onClick={() => parseImportedInvoice(doc.id)}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Parsing
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => loadImportedDocumentDetail(doc.id)}
+                        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                      >
+                        Dettagli
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
-
-        
         </div>
-            </div>
-          </div>
-        </div>
+      </section>
 
-
-      </div>
-
-        {/* SESSION CONTROL BAR */}
-        <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
-
-          <div className="grid grid-cols-12 gap-8">
- 
-          </div>
-            
-        </div>
-         
+  
+         <br></br>
 
       {/* DETAIL SECTION */}
 
@@ -2195,57 +2126,103 @@ return (
 
           {selectedImportedId !== null && (
             <>
-              <div className="flex items-center gap-3">
-                
-                {/* Export / Print */}
-                <button
-                  onClick={handleExportPdf}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="2"
+              <div className="space-y-6">
+                {/* ACTION BAR */}
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Export / Print */}
+                  <button
+                    onClick={handleExportPdf}
+                    disabled={exportingRipartizioni}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm transition
+                      ${
+                        exportingRipartizioni
+                          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                          : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+                      }`}
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 9V2h12v7M6 18h12v4H6z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 14h12" />
-                  </svg>
+                    {exportingRipartizioni ? (
+                      <>
+                        <svg
+                          className="h-4 w-4 animate-spin"
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                          />
+                          <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8v8H4z"
+                          />
+                        </svg>
+                        Generazione...
+                      </>
+                    ) : (
+                      <>
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-4 w-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 9V2h12v7M6 18h12v4H6z"
+                          />
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 14h12"
+                          />
+                        </svg>
+                        Genera bollette
+                      </>
+                    )}
+                  </button>
 
-                  Stampa bollette
-                </button>
-
-                {/* Create Fattura */}
-                <button
-                onClick={() => {
-                  setFatturaDate(new Date().toISOString().slice(0, 10));
-                  setIsCreateFatturaModalOpen(true);
-                }}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="2"
+                  {/* Create Fattura */}
+                  <button
+                    onClick={() => {
+                      setFatturaDate(new Date().toISOString().slice(0, 10));
+                      setIsCreateFatturaModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                  </svg>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    Registra fattura
+                  </button>
+                </div>
 
-                  Registra fattura
-                </button>
 
               </div>
 
               <div className="bg-white border rounded-2xl p-6">
-                            <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
-
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-xs border border-slate-200">
+                    <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
+                      <div className="overflow-x-auto">
+                          <table className="w-full text-xs border border-slate-200">
                                 <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
                                   <tr>
                                     <th className="p-2">ID</th>
@@ -2452,8 +2429,212 @@ return (
                                     </td>
                                   </tr>
                                 </tfoot>
-                              </table>
-                            </div>
+                          </table>
+                      </div>
+                     <br></br>                
+                    {/* GENERATED PDFS */}
+                    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-900">
+                            Bollette di ripartizione generate
+                          </h3>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Visualizza le bollette per periodo oppure apri un singolo PDF.
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={loadRipartizionePdfs}
+                          className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                        >
+                          Aggiorna
+                        </button>
+                      </div>
+
+                      {Object.entries(pdfPeriods).length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
+                          <p className="text-sm font-semibold text-slate-700">
+                            Nessuna bolletta generata.
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Clicca aggiorna se avevi già generato le bollette
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {Object.entries(pdfPeriods).map(([periodKey, files]) => {
+                            const isOpen = openPeriod === periodKey;
+
+                            const filteredFiles = (files as any[]).filter((file: any) => {
+                              
+                              const q = pdfSearch.toLowerCase().trim();
+
+                              if (!q) return true;
+                            
+                              return (
+                                String(file.Nome || "").toLowerCase().includes(q) ||
+                                String(file.Cognome || "").toLowerCase().includes(q) ||
+                                String(file.Interno || "").toLowerCase().includes(q) ||
+                                String(file.filename || "").toLowerCase().includes(q) ||
+                                String(file.data_lettura || "").toLowerCase().includes(q)
+                              );
+                            });
+
+                            const totalPdfPages = Math.max(1, Math.ceil(filteredFiles.length / pdfPageSize));
+
+                            const pagedFiles = filteredFiles.slice(
+                              (pdfPage - 1) * pdfPageSize,
+                              pdfPage * pdfPageSize
+                            );
+                            return (
+                              <div
+                                key={periodKey}
+                                className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/60"
+                              >
+                                {/* PERIOD HEADER */}
+                                <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenPeriod(isOpen ? null : periodKey)}
+                                    className="text-left"
+                                  >
+                                    <div className="text-sm font-bold text-slate-900">
+                                      Periodo {periodKey}
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      {(files as any[]).length} bollette generate
+                                    </div>
+                                  </button>
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => viewPeriodPdf(periodKey)}
+                                      className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                                    >
+                                      Visualizza PDF completo
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenPeriod(isOpen ? null : periodKey);
+                                        setPdfPage(1);
+                                      }}
+                                      className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                    >
+                                      {isOpen ? "Chiudi" : "Apri"}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* PERIOD BODY */}
+                                {isOpen && (
+                                  <div className="border-t border-slate-200 bg-white p-4">
+                                    <input
+                                      value={pdfSearch}
+                                      onChange={(e) => {
+                                        setPdfSearch(e.target.value);
+                                        setPdfPage(1);
+                                      }}
+                                      placeholder="Cerca per ID utenza, file o data..."
+                                      className="mb-4 w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none transition focus:border-slate-500"
+                                    />
+
+                                    <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
+                                      <table className="w-full text-sm">
+                                        <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                                          <tr>
+                                            <th className="px-4 py-3 text-left">Utenza</th>
+                                            <th className="px-4 py-3 text-left">Interno</th>
+                                            <th className="px-4 py-3 text-left">File</th>
+                                            <th className="px-4 py-3 text-left">Data lettura</th>
+                                            <th className="px-4 py-3 text-right">Azione</th>
+                                          </tr>
+                                        </thead>
+
+                                        <tbody>
+                                          
+                                          {pagedFiles.map((file: any) => (
+                                            <tr
+                                              key={file.id}
+                                              className="border-t border-slate-100 transition hover:bg-slate-50"
+                                            >
+                                              <td className="px-4 py-3 font-semibold text-slate-800">
+                                                {file.Nome} {file.Cognome ? `${file.Cognome}` : ""}
+                                              </td>
+                                              <td className="px-4 py-3 font-semibold text-slate-800">
+                                                {file.Interno}
+                                              </td>
+                                              <td className="px-4 py-3 text-slate-600">
+                                                {file.filename}
+                                              </td>
+
+                                              <td className="px-4 py-3 text-slate-600">
+                                                {file.data_lettura || "-"}
+                                              </td>
+
+                                              <td className="px-4 py-3 text-right">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => viewSinglePdf(file.id)}
+                                                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                                >
+                                                  Visualizza PDF
+                                                </button>
+                                              </td>
+                                            </tr>
+                                          ))}
+
+                                          {!filteredFiles.length && (
+                                            <tr>
+                                              <td
+                                                colSpan={4}
+                                                className="px-4 py-8 text-center text-sm text-slate-500"
+                                              >
+                                                Nessuna bolletta trovata.
+                                              </td>
+                                            </tr>
+                                          )}
+                                        </tbody>
+                                      </table>
+
+
+                                    </div>
+                                      <div className="mt-4 flex items-center justify-between text-sm">
+                                      <div className="text-slate-500">
+                                        Pagina {pdfPage} di {totalPdfPages} · {filteredFiles.length} bollette
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={pdfPage <= 1}
+                                          onClick={() => setPdfPage((p) => Math.max(1, p - 1))}
+                                          className="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          Precedente
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          disabled={pdfPage >= totalPdfPages}
+                                          onClick={() => setPdfPage((p) => Math.min(totalPdfPages, p + 1))}
+                                          className="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          Successiva
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
               </div></>
             )}
 
