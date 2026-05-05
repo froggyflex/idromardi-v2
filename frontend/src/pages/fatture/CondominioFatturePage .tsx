@@ -702,6 +702,7 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
       const res = await api.get(`/fatture/imported-documents/${id}`);
       setSelectedImportedDoc(res.data?.document[0] || null);
       setSelectedImportedId(id);
+      setAnnoTariffa(importedDocYear ? String(importedDocYear) : "");
 
       const payload =
                  typeof selectedImportedDoc?.parsed_payload_json === "string"
@@ -1054,7 +1055,7 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
   setProviderId(session.id_casa_idrica || "");
   setCurrent(session.id_periodo_attuale || "");
   setPrevious(session.id_periodo_precedente || "");
-  setAnnoTariffa(importedDocYear ? String(importedDocYear) : "");
+  
     
 
 }, [session]);

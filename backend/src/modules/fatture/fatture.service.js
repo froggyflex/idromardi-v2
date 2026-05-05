@@ -474,9 +474,12 @@ async function generateRipartizionePdfBuffer({
     });
 
     const page = await browser.newPage();
+    page.setDefaultNavigationTimeout(120000);
+    page.setDefaultTimeout(120000);
 
     await page.setContent(html, {
       waitUntil: "networkidle0",
+      timeout: 120000,
     });
 
     const pdfBuffer = await page.pdf({
