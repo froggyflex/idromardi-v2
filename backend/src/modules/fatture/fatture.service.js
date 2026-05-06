@@ -390,86 +390,103 @@ async function processRipartizionePdfJob({
   await fs.mkdir(uploadDir, { recursive: true });
 
   const entries = Object.entries(rowsByUtenza);
-  const limit = pLimit(3);
 
   let processed = 0;
   let saved = 0;
   let failed = 0;
 
-  await Promise.all(
-    entries.map(([idUtenza, utenzaRighe]) =>
-      limit(async () => {
-        try {
-          const dettaglio =
-            dettaglioByUtenza?.[idUtenza] ||
-            dettaglioByUtenza?.[String(idUtenza)] ||
-            {};
+  let browser;
 
-          const pdfBufferRaw = await generateRipartizionePdfBuffer({
-            righe: utenzaRighe,
-            dettaglioByUtenza: { [idUtenza]: dettaglio },
-            trimestreLabel,
-            dataLettura,
-            logoUrl,
-          });
+  try {
+    browser = await launchBrowser();
 
-          const pdfBuffer = Buffer.from(pdfBufferRaw);
+    for (const [idUtenza, utenzaRighe] of entries) {
+      try {
+        const dettaglio =
+          dettaglioByUtenza?.[idUtenza] ||
+          dettaglioByUtenza?.[String(idUtenza)] ||
+          {};
 
-          if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
-            throw new Error(`PDF non valido per utenza ${idUtenza}`);
-          }
+        const pdfBufferRaw = await generateRipartizionePdfBuffer({
+          browser,
+          righe: utenzaRighe,
+          dettaglioByUtenza: { [idUtenza]: dettaglio },
+          trimestreLabel,
+          dataLettura,
+          logoUrl,
+        });
 
-          const filename = `ripartizione_utenza_${idUtenza}.pdf`;
-          const relativePath = `/storage/ripartizioni/${periodKey}/${filename}`;
-          const absolutePath = path.join(uploadDir, filename);
+        const pdfBuffer = Buffer.from(pdfBufferRaw);
 
-          await fs.writeFile(absolutePath, pdfBuffer);
-
-          await exports.saveRipartizionePdfRecord({
-            idUtenza,
-            condominioId,
-            periodKey,
-            filename,
-            filepath: relativePath,
-            trimestreLabel,
-            dataLettura,
-          });
-
-          saved += 1;
-        } catch (error) {
-          failed += 1;
-          console.error(`Errore PDF utenza ${idUtenza}:`, error);
-        } finally {
-          processed += 1;
-
-          await db.query(
-            `
-            UPDATE ripartizione_pdf_jobs
-            SET processed = ?,
-                saved = ?,
-                failed = ?
-            WHERE id = ?
-            `,
-            [processed, saved, failed, jobId]
-          );
+        if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
+          throw new Error(`PDF non valido per utenza ${idUtenza}`);
         }
-      })
-    )
-  );
 
-  await db.query(
-    `
-    UPDATE ripartizione_pdf_jobs
-    SET status = 'done',
-        processed = ?,
-        saved = ?,
-        failed = ?
-    WHERE id = ?
-    `,
-    [processed, saved, failed, jobId]
-  );
+        const filename = `ripartizione_utenza_${idUtenza}.pdf`;
+        const relativePath = `/storage/ripartizioni/${periodKey}/${filename}`;
+        const absolutePath = path.join(uploadDir, filename);
+
+        await fs.writeFile(absolutePath, pdfBuffer);
+
+        await exports.saveRipartizionePdfRecord({
+          idUtenza,
+          condominioId,
+          periodKey,
+          filename,
+          filepath: relativePath,
+          trimestreLabel,
+          dataLettura,
+        });
+
+        saved += 1;
+      } catch (error) {
+        failed += 1;
+        console.error(`Errore PDF utenza ${idUtenza}:`, error);
+      } finally {
+        processed += 1;
+
+        await db.query(
+          `
+          UPDATE ripartizione_pdf_jobs
+          SET processed = ?,
+              saved = ?,
+              failed = ?
+          WHERE id = ?
+          `,
+          [processed, saved, failed, jobId]
+        );
+      }
+    }
+
+    await db.query(
+      `
+      UPDATE ripartizione_pdf_jobs
+      SET status = 'done',
+          processed = ?,
+          saved = ?,
+          failed = ?
+      WHERE id = ?
+      `,
+      [processed, saved, failed, jobId]
+    );
+  } catch (error) {
+    await db.query(
+      `
+      UPDATE ripartizione_pdf_jobs
+      SET status = 'error',
+          error_message = ?
+      WHERE id = ?
+      `,
+      [error?.message || "Errore generazione PDF", jobId]
+    );
+
+    throw error;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
 }
-
 exports.getRipartizionePdfJob = async (jobId) => {
   const [rows] = await db.query(
     `
@@ -702,6 +719,7 @@ exports.exportRipartizioniPerUtenza = async ({
   };
 };
 async function generateRipartizionePdfBuffer({
+  browser,
   righe,
   dettaglioByUtenza,
   trimestreLabel,
@@ -716,17 +734,16 @@ async function generateRipartizionePdfBuffer({
     logoUrl: logoUrl || "",
   });
 
-  let browser;
+  let page;
 
   try {
-    browser = await launchBrowser();
+    page = await browser.newPage();
 
-    const page = await browser.newPage();
     page.setDefaultNavigationTimeout(120000);
     page.setDefaultTimeout(120000);
 
     await page.setContent(html, {
-      waitUntil: "networkidle0",
+      waitUntil: "domcontentloaded",
       timeout: 120000,
     });
 
@@ -744,7 +761,7 @@ async function generateRipartizionePdfBuffer({
 
     return Buffer.from(pdfBuffer);
   } finally {
-    if (browser) await browser.close();
+    if (page) await page.close();
   }
 }
 
