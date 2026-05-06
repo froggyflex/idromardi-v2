@@ -158,10 +158,50 @@ export default function CondominioFatturePage() {
     const [parsingImportId, setParsingImportId] = useState<string | null>(null);
     const [dettaglioByUtenza, setDettaglioByUtenza]  = useState<Record<string, any[]>>({})
     const [importedDocYear, setImportedDocYear] = useState<number | null>(null);
+ 
+    const [exportJob, setExportJob] = useState<any>(null);
+
 
     const [pdfPeriods, setPdfPeriods] = useState<Record<string, any[]>>({});
     const [openPeriod, setOpenPeriod] = useState<string | null>(null);
     const [pdfSearch, setPdfSearch] = useState("");
+
+    const [importedSearch, setImportedSearch] = useState("");
+    
+    const [importedStatusFilter, setImportedStatusFilter] = useState("all");
+    const [importedPage, setImportedPage] = useState(1);
+    const importedPageSize = 12;
+
+    const filteredImportedDocs = importedDocs.filter((doc: any) => {
+      const status = doc.parse_status || "uploaded";
+
+      const search = importedSearch.toLowerCase().trim();
+
+      const matchesSearch =
+        !search ||
+        String(doc.numero_bolletta || "").toLowerCase().includes(search) ||
+        String(doc.original_filename || "").toLowerCase().includes(search) ||
+        String(doc.validation_status || "").toLowerCase().includes(search);
+
+      const matchesStatus =
+        importedStatusFilter === "all" || status === importedStatusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+
+    const importedTotalPages = Math.max(
+      1,
+      Math.ceil(filteredImportedDocs.length / importedPageSize)
+    );
+
+    const paginatedImportedDocs = filteredImportedDocs.slice(
+      (importedPage - 1) * importedPageSize,
+      importedPage * importedPageSize
+    );
+
+    useEffect(() => {
+      setImportedPage(1);
+    }, [importedSearch, importedStatusFilter]);
 
     async function loadRipartizionePdfs() {
       const { data } = await api.get("/fatture/ripartizione-pdfs");
@@ -695,34 +735,48 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
       console.error("Errore durante il parsing del payload per il QF:", err);
     }
   }
-  async function loadImportedDocumentDetail(id: string) {
+    async function loadImportedDocumentDetail(id: string) {
+      try {
+        setLoadingImportedDetail(true);
 
-    try {
-      setLoadingImportedDetail(true);
-      const res = await api.get(`/fatture/imported-documents/${id}`);
-      setSelectedImportedDoc(res.data?.document[0] || null);
-      setSelectedImportedId(id);
-      setAnnoTariffa(importedDocYear ? String(importedDocYear) : "");
+        const res = await api.get(`/fatture/imported-documents/${id}`);
 
-      const payload =
-                 typeof selectedImportedDoc?.parsed_payload_json === "string"
-                  ? JSON.parse(selectedImportedDoc.parsed_payload_json)
-                  : selectedImportedDoc?.parsed_payload_json;
+        const document = res.data?.document?.[0] || null;
 
-      setSelectedDoc(res.data?.document[0].importo_totale_da_pagare);
-      
-      assignStateFromParsedPayload(res.data?.document[0]?.parsed_payload_json);
-      setImportedDocYear(selectedImportedDoc?.data_fine_periodo ? new Date(selectedImportedDoc.data_fine_periodo).getFullYear() : new Date().getFullYear()  );
+        setSelectedImportedDoc(document);
+        setSelectedImportedId(id);
 
-      console.log("Imported document detail loaded:", selectedImportedDoc || null);
+        if (!document) {
+          setSelectedDoc(null);
+          setAnnoTariffa("");
+          setImportedDocYear(null);
+          return;
+        }
 
-      
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Errore caricamento documento importato");
-    } finally {
-      setLoadingImportedDetail(false);
+        const payload =
+          typeof document.parsed_payload_json === "string"
+            ? JSON.parse(document.parsed_payload_json)
+            : document.parsed_payload_json;
+
+        const year = document.data_fine_periodo
+          ? new Date(document.data_fine_periodo).getFullYear()
+          : new Date().getFullYear();
+
+        setImportedDocYear(year);
+        setAnnoTariffa(String(year));
+
+        setSelectedDoc(document.importo_totale_da_pagare);
+
+        assignStateFromParsedPayload(document.parsed_payload_json);
+
+        console.log("Imported document detail loaded:", document);
+        console.log("Parsed payload:", payload);
+      } catch (err: any) {
+        setError(err?.response?.data?.error || "Errore caricamento documento importato");
+      } finally {
+        setLoadingImportedDetail(false);
+      }
     }
-  }
   
     async function linkImportedToCurrentSession(importedId: string, sessionId: string) {
   
@@ -1071,16 +1125,57 @@ const giorniCasaIdrica = daysBetween(
   periodoAttuale?.data_lettura_casa_idrica
 );
  
+const pollRipartizioneJob = (jobId: number) => {
+  const interval = window.setInterval(async () => {
+    try {
+      const { data } = await api.get(`/fatture/export-ripartizione-pdf/jobs/${jobId}`);
+
+      setExportJob(data);
+
+      const total = Number(data.total || 0);
+      const processed = Number(data.processed || 0);
+      const failed = Number(data.failed || 0);
+
+      if (data.status === "processing") {
+        setExportMessage(`Generazione PDF: ${processed}/${total}`);
+      }
+
+      if (data.status === "done") {
+        window.clearInterval(interval);
+        setExportingRipartizioni(false);
+        setExportMessage(`PDF generati: ${processed}/${total}. Errori: ${failed}.`);
+
+        // optional: refresh generated PDF list
+        await loadRipartizionePdfs?.();
+      }
+
+      if (data.status === "error") {
+        window.clearInterval(interval);
+        setExportingRipartizioni(false);
+        setExportMessage(data.error_message || "Errore durante la generazione PDF.");
+      }
+    } catch (error: any) {
+      window.clearInterval(interval);
+      setExportingRipartizioni(false);
+      setExportMessage(
+        error?.response?.data?.error ||
+          error?.message ||
+          "Errore durante il controllo dello stato del job."
+      );
+    }
+  }, 1500);
+};
 
 const logoUrl = `../../images/image.png`;
 //  "https://i.postimg.cc/2SDBbptC/idro-logo.jpg"
- 
+
 const handleExportPdf = async () => {
   try {
     setExportingRipartizioni(true);
-    setExportMessage("Generazione PDF in corso...");
+    setExportMessage("Avvio generazione PDF...");
+    setExportJob(null);
 
-    const { data } = await api.post("/fatture/export-ripartizione-pdf", {
+    const { data } = await api.post("/fatture/export-ripartizione-pdf/start", {
       righe,
       dettaglioByUtenza,
       trimestreLabel: "07.25 - 01.2025",
@@ -1089,16 +1184,20 @@ const handleExportPdf = async () => {
       condominioId,
     });
 
-    setExportMessage(`Creati ${data.count} PDF di ripartizione.`);
+    if (!data.jobId) {
+      throw new Error("Job ID non ricevuto dal server.");
+    }
+
+    setExportMessage("Generazione PDF in corso...");
+    pollRipartizioneJob(data.jobId);
   } catch (error: any) {
-    console.error("Errore export PDF:", error);
+    console.error("Errore avvio export PDF:", error);
+    setExportingRipartizioni(false);
     setExportMessage(
       error?.response?.data?.error ||
         error?.message ||
-        "Errore durante la generazione dei PDF."
+        "Errore durante l'avvio della generazione PDF."
     );
-  } finally {
-    setExportingRipartizioni(false);
   }
 };
 
@@ -1186,8 +1285,7 @@ const totaleDocumentoConOneri = totaleDocumento + totaleOneri;
 const deltaTotali = totaleDocumentoConOneri - totaleInterni;
 
 const deltaOk = Math.abs(deltaTotali) < 0.5;
-
-  const isGreen:any = totaleDocumentoConOneri? (totaleDocumentoConOneri <= totaleInterni) : false;
+const isGreen:any = totaleDocumentoConOneri? (totaleDocumentoConOneri <= totaleInterni) : false;
 
 return (
     <div className=" ">
@@ -1312,246 +1410,8 @@ return (
             )}
           </div>
         </div>
-      </div><abbr title=""></abbr>
-      
-      <br></br>
-      {/* IMPORT PIPELINE */}
-      <section className="rounded-[28px] border border-slate-200 bg-white shadow-sm overflow-hidden">
-        {/* HEADER */}
-        <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-5">
-          <h3 className="text-base font-bold text-slate-900">
-            Importazione documenti
-          </h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Carica documenti provider e controlla lo stato di elaborazione.
-          </p>
-        </div>
-
-        {/* UPLOAD SECTION */}
-        <div className="border-b border-slate-200 px-6 py-5">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px_180px] lg:items-end">
-            <label className="block">
-              <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
-                File bolletta
-              </span>
-
-              <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 transition hover:border-slate-400 hover:bg-slate-100">
-                <svg
-                  className="h-5 w-5 shrink-0 text-slate-500"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M7 21h10a2 2 0 002-2V7l-5-5H7a2 2 0 00-2 2v15a2 2 0 002 2z"
-                  />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v5h5" />
-                </svg>
-
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-slate-800">
-                    {importFile ? importFile.name : "Seleziona un file PDF"}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    {importFile ? "Pronto per il caricamento" : "Nessun file selezionato"}
-                  </div>
-                </div>
-
-                <input
-                  type="file"
-                  accept=".pdf"
-                  className="hidden"
-                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                />
-              </div>
-            </label>
-
-            <label className="block">
-              <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
-                Provider
-              </span>
-
-              <select
-                className="h-[58px] w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400"
-                value={importProviderId}
-                onChange={(e) => setImportProviderId(e.target.value)}
-              >
-                <option value="">Opzionale</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nome}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <button
-              onClick={uploadImportedInvoice}
-              disabled={!importFile || uploadingImport}
-              className="inline-flex h-[58px] items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {uploadingImport ? (
-                <>
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v8H4z"
-                    />
-                  </svg>
-                  Upload...
-                </>
-              ) : (
-                <>
-                  <svg
-                    className="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M12 16V4m0 0l-4 4m4-4l4 4M4 20h16"
-                    />
-                  </svg>
-                  Carica
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* STATUS CARDS SECTION */}
-        <div className="px-6 py-5">
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <div>
-              <h4 className="text-sm font-bold text-slate-900">
-                Documenti caricati
-              </h4>
-              <p className="mt-1 text-xs text-slate-500">
-                Stato upload, parsing e validazione dei documenti importati.
-              </p>
-            </div>
-
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-              {importedDocs.length} documenti
-            </span>
-          </div>
-
-          {loadingImportedDocs ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-              Caricamento documenti...
-            </div>
-          ) : importedDocs.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-              Nessun documento caricato.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              {importedDocs.map((doc: any) => {
-                const status = doc.parse_status || "uploaded";
-
-                const statusClass =
-                  status === "imported"
-                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                    : status === "parsed"
-                    ? "bg-blue-50 text-blue-700 ring-blue-200"
-                    : "bg-slate-100 text-slate-700 ring-slate-200";
-
-                return (
-                  <article
-                    key={doc.id}
-                    className={`rounded-2xl border p-4 shadow-sm transition ${
-                      selectedImportedDoc?.id === doc.id
-                        ? "border-blue-500 bg-blue-50/50"
-                        : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={() => loadImportedDocumentDetail(doc.id)}
-                        className="min-w-0 text-left"
-                      >
-                        <div className="truncate text-sm font-bold text-slate-900">
-                          {doc.numero_bolletta || doc.original_filename || "Documento"}
-                        </div>
-                        <div className="mt-1 truncate text-xs text-slate-500">
-                          {doc.original_filename || "-"}
-                        </div>
-                      </button>
-
-                      <span
-                        className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${statusClass}`}
-                      >
-                        {status}
-                      </span>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-3">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                          Totale
-                        </div>
-                        <div className="mt-1 text-sm font-bold text-slate-900">
-                          € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                          Validazione
-                        </div>
-                        <div className="mt-1 text-sm font-bold text-slate-900">
-                          {doc.validation_status || "pending"}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
-                      {status !== "parsed" && status !== "imported" && (
-                        <button
-                          type="button"
-                          onClick={() => parseImportedInvoice(doc.id)}
-                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
-                        >
-                          Parsing
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => loadImportedDocumentDetail(doc.id)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
-                      >
-                        Dettagli
-                      </button>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </section>
-
-  
-         <br></br>
-
-      {/* DETAIL SECTION */}
+      </div> 
+            <br></br>
 
       {!fatturaId ? (
         <div className="bg-white p-6 rounded-xl shadow">
@@ -1639,213 +1499,343 @@ return (
           {/* ============================= */}
           {/* CONTROLLO CALCOLO + GENERALE */}
           {/* ============================= */}
-        <div className="rounded-[28px] border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-6 shadow-sm sm:p-7">
-          <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                Parametri calcolo e contatore generale
-              </h3>
-              <p className="mt-1 max-w-2xl text-sm text-slate-500">
-                Aggiorna il contatore generale e definisci i parametri principali utilizzati nel calcolo della sessione.
-              </p>
+        <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+  {/* HEADER */}
+  <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-6 py-5 sm:flex-row sm:items-start sm:justify-between">
+    <div>
+      <h3 className="text-xl font-bold tracking-tight text-slate-900">
+        Preparazione calcolo
+      </h3>
+      <p className="mt-1 max-w-2xl text-sm text-slate-500">
+        Carica il documento provider, controlla i documenti importati e aggiorna i parametri della sessione.
+      </p>
+    </div>
+
+    <div className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+      Configurazione calcolo
+    </div>
+  </div>
+
+  {/* IMPORT AREA - FULL WIDTH */}
+  <div className="border-b border-slate-200 px-6 py-5">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px_180px] lg:items-end">
+      <label className="block">
+        <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+          File bolletta
+        </span>
+
+        <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 transition hover:border-slate-400 hover:bg-slate-100">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-800">
+              {importFile ? importFile.name : "Seleziona un file PDF"}
             </div>
-
-            <div className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-              Configurazione calcolo
-            </div>
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-12">
-            {/* LEFT COLUMN */}
-            <div className="xl:col-span-5">
-              <div className="h-full rounded-[24px] border border-slate-300 bg-gradient-to-br from-slate-50 to-white p-5 shadow-sm ring-1 ring-slate-100">
-                <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                      Contatore generale
-                    </div>
-                    <h4 className="mt-1 text-base font-semibold text-slate-900">
-                      Valori di riferimento principali
-                    </h4>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Inserisci o aggiorna le letture del contatore generale prima del calcolo.
-                    </p>
-                  </div>
-
-                  <div className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">
-                    Consumo: {Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))} mc
-                  </div>
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Lettura attuale
-                    </label>
-                    <input
-                      type="number"
-                      className="h-11 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                      value={valAtt}
-                      onChange={(e) => setValAtt(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Lettura precedente
-                    </label>
-                    <input
-                      type="number"
-                      className="h-11 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 shadow-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                      value={valPrec}
-                      onChange={(e) => setValPrec(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <button
-                    onClick={saveGenerale}
-                    disabled={savingGenerale}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white shadow-md transition hover:-translate-y-[1px] hover:bg-slate-800 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Save size={16} />
-                    {savingGenerale ? "Salvando..." : "Salva generale"}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* RIGHT COLUMN */}
-            <div className="xl:col-span-7 space-y-6">
-              {/* CALCULATION PARAMETERS */}
-              <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="border-b border-slate-200 pb-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    Parametri di calcolo
-                  </div>
-                  <h4 className="mt-1 text-base font-semibold text-slate-900">
-                    Impostazioni operative
-                  </h4>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Definisci anno tariffa e giorni utilizzati per quota fissa, consumi, interni e acconto.
-                  </p>
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Anno tariffa
-                    </label>
-                    <select
-                      className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                      value={annoTariffa}
-                      onChange={(e) => setAnnoTariffa(e.target.value)}
-                    >
-                      <option value="">Anno Tariffa</option>
-                      {years.map((year) => (
-                        <option key={year} value={year}>
-                          {year === importedDocYear ? `Anno Corrente (${year})` : year}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Giorni QF
-                    </label>
-                    <input
-                      type="number"
-                      className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                      value={giorniQf}
-                      onChange={(e) => setGiorniQf(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Giorni consumi
-                    </label>
-                    <input
-                      type="number"
-                      className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                      value={giorniConsumi}
-                      onChange={(e) => setGiorniConsumi(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Giorni interni
-                    </label>
-                    <input
-                      type="number"
-                      className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                      value={giorniCasaInterni}
-                      onChange={(e) => setGiorniCasaInterni(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="flex flex-col">
-                    <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Giorni acconto
-                    </label>
-                    <input
-                      type="number"
-                      className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
-                      value={giorniAcconto}
-                      onChange={(e) => setGiorniAcconto(e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* ACCONTO / STORNO */}
-              {/* {Number(giorniAcconto) > 0 && (
-                <div className="rounded-[24px] border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-5 shadow-sm">
-                  <div className="border-b border-amber-100 pb-4">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
-                      Acconto e storno
-                    </div>
-                    <h4 className="mt-1 text-base font-semibold text-slate-900">
-                      Valori collegati all’acconto
-                    </h4>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Compila i metri cubi di acconto e l’eventuale storno da considerare nel calcolo.
-                    </p>
-                  </div>
-
-                  <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div className="flex flex-col">
-                      <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        MC acconto
-                      </label>
-                      <input
-                        type="number"
-                        className="h-11 rounded-xl border border-amber-200 bg-white px-3 text-sm font-medium text-slate-800 shadow-sm outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
-                        value={mcAcconto}
-                        onChange={(e) => setMcAcconto(Number(e.target.value))}
-                      />
-                    </div>
-
-                    <div className="flex flex-col">
-                      <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        MC storno
-                      </label>
-                      <input
-                        type="number"
-                        className="h-11 rounded-xl border border-amber-200 bg-white px-3 text-sm font-medium text-slate-800 shadow-sm outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
-                        value={mcStorno}
-                        onChange={(e) => setMcStorno(Number(e.target.value))}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )} */}
+            <div className="text-xs text-slate-500">
+              {importFile ? "Pronto per il caricamento" : "Nessun file selezionato"}
             </div>
           </div>
+
+          <input
+            type="file"
+            accept=".pdf"
+            className="hidden"
+            onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+          />
         </div>
+      </label>
+
+      <label className="block">
+        <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Provider
+        </span>
+
+        <select
+          className="h-[58px] w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400"
+          value={importProviderId}
+          onChange={(e) => setImportProviderId(e.target.value)}
+        >
+          <option value="">Opzionale</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.nome}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <button
+        onClick={uploadImportedInvoice}
+        disabled={!importFile || uploadingImport}
+        className="inline-flex h-[58px] items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {uploadingImport ? "Upload..." : "Carica"}
+      </button>
+    </div>
+  </div>
+
+  {/* MAIN SPLIT */}
+  <div className="grid grid-cols-1 gap-6 p-6 xl:grid-cols-2">
+    {/* LEFT - DOCUMENTI CARICATI */}
+    <div className="rounded-[24px] border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/70 px-5 py-4">
+        <div>
+          <h4 className="text-base font-bold text-slate-900">
+            Documenti caricati
+          </h4>
+          <p className="mt-1 text-xs text-slate-500">
+            Parsing e importazione dei documenti provider.
+          </p>
+        </div>
+
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+          {filteredImportedDocs.length} / {importedDocs.length}
+        </span>
+      </div>
+
+      <div className="border-b border-slate-200 p-4">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            value={importedSearch}
+            onChange={(e) => setImportedSearch(e.target.value)}
+            placeholder="Cerca documento o file..."
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          />
+
+          <select
+            value={importedStatusFilter}
+            onChange={(e) => setImportedStatusFilter(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          >
+            <option value="all">Tutti</option>
+            <option value="uploaded">Uploaded</option>
+            <option value="parsed">Parsed</option>
+            <option value="imported">Imported</option>
+          </select>
+        </div>
+      </div>
+
+      {loadingImportedDocs ? (
+        <div className="px-4 py-8 text-center text-sm text-slate-500">
+          Caricamento documenti...
+        </div>
+      ) : importedDocs.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-slate-500">
+          Nessun documento caricato.
+        </div>
+      ) : (
+        <>
+          <div className="max-h-[420px] overflow-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Documento
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Parsing
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Azioni
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {paginatedImportedDocs.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-sm text-slate-500">
+                      Nessun documento trovato.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedImportedDocs.map((doc: any) => {
+                    const status = doc.parse_status || "uploaded";
+
+                    const statusClass =
+                      status === "imported"
+                        ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                        : status === "parsed"
+                        ? "bg-blue-50 text-blue-700 ring-blue-200"
+                        : "bg-slate-100 text-slate-700 ring-slate-200";
+
+                    return (
+                      <tr
+                        key={doc.id}
+                        className={`transition ${
+                          selectedImportedDoc?.id === doc.id
+                            ? "bg-blue-50/70"
+                            : "hover:bg-slate-50"
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => loadImportedDocumentDetail(doc.id)}
+                            className="max-w-[260px] truncate text-left font-bold text-slate-900 hover:text-blue-700"
+                          >
+                            {doc.numero_bolletta || doc.original_filename || "Documento"}
+                          </button>
+
+                          <div className="mt-1 max-w-[260px] truncate text-xs text-slate-500">
+                            {doc.original_filename || "-"}
+                          </div>
+
+                          <div className="mt-1 text-xs font-semibold text-slate-700">
+                            € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${statusClass}`}
+                          >
+                            {status}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            {status !== "parsed" && status !== "imported" && (
+                              <button
+                                type="button"
+                                onClick={() => parseImportedInvoice(doc.id)}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                              >
+                                Parsing
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => loadImportedDocumentDetail(doc.id)}
+                              className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                            >
+                              Carica
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-4 py-3">
+            <div className="text-xs text-slate-500">
+              Pagina {importedPage} di {importedTotalPages}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={importedPage === 1}
+                onClick={() => setImportedPage((p) => Math.max(1, p - 1))}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Precedente
+              </button>
+
+              <button
+                type="button"
+                disabled={importedPage === importedTotalPages}
+                onClick={() => setImportedPage((p) => Math.min(importedTotalPages, p + 1))}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Successiva
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+
+    {/* RIGHT - IMPOSTAZIONI OPERATIVE */}
+    <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="border-b border-slate-200 pb-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          Parametri di calcolo
+        </div>
+        <h4 className="mt-1 text-base font-semibold text-slate-900">
+          Impostazioni operative
+        </h4>
+        <p className="mt-1 text-sm text-slate-500">
+          Definisci anno tariffa e giorni usati nel calcolo.
+        </p>
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col sm:col-span-2">
+          <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Anno tariffa
+          </label>
+          <select
+            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={annoTariffa}
+            onChange={(e) => setAnnoTariffa(e.target.value)}
+          >
+            <option value="">Anno Tariffa</option>
+            {years.map((year) => (
+              <option key={year} value={year}>
+                {year === importedDocYear ? `Anno Corrente (${year})` : year}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Giorni QF
+          </label>
+          <input
+            type="number"
+            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniQf}
+            onChange={(e) => setGiorniQf(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Giorni consumi
+          </label>
+          <input
+            type="number"
+            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniConsumi}
+            onChange={(e) => setGiorniConsumi(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Giorni interni
+          </label>
+          <input
+            type="number"
+            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniCasaInterni}
+            onChange={(e) => setGiorniCasaInterni(e.target.value)}
+          />
+        </div>
+
+        <div className="flex flex-col">
+          <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Giorni acconto
+          </label>
+          <input
+            type="number"
+            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            value={giorniAcconto}
+            onChange={(e) => setGiorniAcconto(e.target.value)}
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+ 
+
           {/* CALCULATION BREAKDOWN */}
           <div className="rounded-[28px] border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-6 shadow-sm sm:p-7">
             <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-start sm:justify-between">
@@ -2217,10 +2207,136 @@ return (
                   </button>
                 </div>
 
+                  {exportingRipartizioni && exportJob && (
+                    <div className="mt-3 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                      <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600">
+                        <span>{exportMessage}</span>
+                        <span>
+                          {exportJob.processed || 0}/{exportJob.total || 0}
+                        </span>
+                      </div>
+
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          className="h-full rounded-full bg-slate-900 transition-all duration-500"
+                          style={{
+                            width: `${
+                              exportJob.total
+                                ? Math.min(
+                                    100,
+                                    Math.round((Number(exportJob.processed || 0) / Number(exportJob.total)) * 100)
+                                  )
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+
+                      {Number(exportJob.failed || 0) > 0 && (
+                        <div className="mt-2 text-xs font-medium text-red-600">
+                          {exportJob.failed} PDF non generati.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!exportingRipartizioni && exportMessage && (
+                    <div className="mt-3 text-sm font-medium text-slate-600">
+                      {exportMessage}
+                    </div>
+                  )}
 
               </div>
 
               <div className="bg-white border rounded-2xl p-6">
+                {/* CONTATORE GENERALE RIBBON */}
+<div className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+  <div className="flex flex-col gap-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-4 py-4 text-white lg:flex-row lg:items-center lg:justify-between">
+    <div>
+      <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-300">
+        Contatore generale
+      </div>
+
+      <div className="mt-1 text-sm font-semibold">
+        Valori di riferimento per il calcolo dei contatori interni
+      </div>
+    </div>
+
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="rounded-xl bg-white/10 px-3 py-2 ring-1 ring-white/15">
+        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-300">
+          Lettura attuale
+        </div>
+        <input
+          type="number"
+          value={valAtt}
+          onChange={(e) => setValAtt(e.target.value)}
+          className="mt-1 w-28 rounded-lg border border-white/20 bg-white px-2 py-1 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-white/40"
+        />
+      </div>
+
+      <div className="rounded-xl bg-white/10 px-3 py-2 ring-1 ring-white/15">
+        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-300">
+          Lettura precedente
+        </div>
+        <input
+          type="number"
+          value={valPrec}
+          onChange={(e) => setValPrec(e.target.value)}
+          className="mt-1 w-28 rounded-lg border border-white/20 bg-white px-2 py-1 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-white/40"
+        />
+      </div>
+
+      <div className="rounded-xl bg-emerald-400/15 px-4 py-2 ring-1 ring-emerald-300/30">
+        <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-100">
+          Consumo generale
+        </div>
+        <div className="mt-1 text-lg font-black text-white">
+          {Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))} mc
+        </div>
+      </div>
+
+      <button
+        onClick={saveGenerale}
+        disabled={savingGenerale}
+        className="inline-flex h-11 items-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-900 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Save size={16} />
+        {savingGenerale ? "Salvando..." : "Salva"}
+      </button>
+    </div>
+  </div>
+
+  <div className="grid grid-cols-2 divide-x divide-slate-200 border-t border-slate-200 bg-slate-50 text-xs sm:grid-cols-4">
+    <div className="px-4 py-2">
+      <span className="font-bold text-slate-500">Interni:</span>{" "}
+      <span className="font-semibold text-slate-900">
+        {righe.length}
+      </span>
+    </div>
+
+    <div className="px-4 py-2">
+      <span className="font-bold text-slate-500">Consumo interni:</span>{" "}
+      <span className="font-semibold text-slate-900">
+        {totals.consumo.toFixed(0)} mc
+      </span>
+    </div>
+
+    <div className="px-4 py-2">
+      <span className="font-bold text-slate-500">Totale interni:</span>{" "}
+      <span className={`font-semibold ${isGreen ? "text-emerald-600" : "text-red-600"}`}>
+        € {totals.totaleInterni.toFixed(2)}
+      </span>
+    </div>
+
+    <div className="px-4 py-2">
+      <span className="font-bold text-slate-500">Stato:</span>{" "}
+      <span className={`font-semibold ${isGreen ? "text-emerald-600" : "text-red-600"}`}>
+        {isGreen ? "Allineato" : "Da verificare"}
+      </span>
+    </div>
+  </div>
+</div>
                     <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
                       <div className="overflow-x-auto">
                           <table className="w-full text-xs border border-slate-200">
@@ -2708,6 +2824,16 @@ return (
       
         </>
       )}
+
+      <br></br>
+
+
+  
+         <br></br>
+
+      {/* DETAIL SECTION */}
+
+
       </div>
       <div className="print-only">
               {pages.map((page, pageIndex) => (

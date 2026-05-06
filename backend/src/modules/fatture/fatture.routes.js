@@ -54,6 +54,11 @@ router.get(
   controller.viewRipartizionePdfPeriod
 );
 
+router.post("/export-ripartizione-pdf/start", controller.startRipartizionePdfJob);
+
+router.get("/export-ripartizione-pdf/jobs/:jobId", controller.getRipartizionePdfJob);
+
+
 
 
 module.exports = router;

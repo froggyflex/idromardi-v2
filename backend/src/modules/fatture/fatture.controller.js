@@ -243,6 +243,55 @@ exports.viewRipartizionePdf = async (req, res, next) => {
   }
 };
 
+exports.getRipartizionePdfJob = async (req, res, next) => {
+  try {
+    const { jobId } = req.params;
+
+    const job = await service.getRipartizionePdfJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        error: "Job non trovato.",
+      });
+    }
+
+    return res.json(job);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.startRipartizionePdfJob = async (req, res, next) => {
+  try {
+    const {
+      righe,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+      condominioId,
+    } = req.body;
+
+    const job = await service.startRipartizionePdfJob({
+      righe,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+      condominioId,
+    });
+
+    return res.json({
+      success: true,
+      jobId: job.id,
+      total: job.total,
+      status: job.status,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.exportRipartizionePdf = async (req, res, next) => {
   try {
     const {
@@ -254,7 +303,6 @@ exports.exportRipartizionePdf = async (req, res, next) => {
       condominioId,
     } = req.body;
 
-   
     const result = await service.exportRipartizioniPerUtenza({
       righe,
       dettaglioByUtenza,
@@ -266,11 +314,13 @@ exports.exportRipartizionePdf = async (req, res, next) => {
 
     return res.json({
       success: true,
-      count: result.length,
-      files: result,
+      total: result.total,
+      saved: result.saved,
+      failed: result.failed,
+      count: result.saved,
+      files: result.savedFiles,
+      errors: result.failedFiles,
     });
-    
-    
   } catch (error) {
     next(error);
   }
