@@ -1115,20 +1115,18 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
 }, [session]);
 
 
-const giorniOperatore = daysBetween(
-  periodoPrecedente?.data_lettura_operatore,
-  periodoAttuale?.data_lettura_operatore
-);
-
-const giorniCasaIdrica = daysBetween( 
-  periodoPrecedente?.data_lettura_casa_idrica,
-  periodoAttuale?.data_lettura_casa_idrica
-);
  
+const ripartizionePollRef = useRef<number | null>(null); 
 const pollRipartizioneJob = (jobId: number) => {
-  const interval = window.setInterval(async () => {
+  if (ripartizionePollRef.current) {
+    window.clearInterval(ripartizionePollRef.current);
+  }
+
+  ripartizionePollRef.current = window.setInterval(async () => {
     try {
-      const { data } = await api.get(`/fatture/export-ripartizione-pdf/jobs/${jobId}`);
+      const { data } = await api.get(
+        `/fatture/export-ripartizione-pdf/jobs/${jobId}`
+      );
 
       setExportJob(data);
 
@@ -1141,21 +1139,34 @@ const pollRipartizioneJob = (jobId: number) => {
       }
 
       if (data.status === "done") {
-        window.clearInterval(interval);
+        if (ripartizionePollRef.current) {
+          window.clearInterval(ripartizionePollRef.current);
+          ripartizionePollRef.current = null;
+        }
+
         setExportingRipartizioni(false);
         setExportMessage(`PDF generati: ${processed}/${total}. Errori: ${failed}.`);
 
-        // optional: refresh generated PDF list
         await loadRipartizionePdfs?.();
       }
 
       if (data.status === "error") {
-        window.clearInterval(interval);
+        if (ripartizionePollRef.current) {
+          window.clearInterval(ripartizionePollRef.current);
+          ripartizionePollRef.current = null;
+        }
+
         setExportingRipartizioni(false);
-        setExportMessage(data.error_message || "Errore durante la generazione PDF.");
+        setExportMessage(
+          data.error_message || "Errore durante la generazione PDF."
+        );
       }
     } catch (error: any) {
-      window.clearInterval(interval);
+      if (ripartizionePollRef.current) {
+        window.clearInterval(ripartizionePollRef.current);
+        ripartizionePollRef.current = null;
+      }
+
       setExportingRipartizioni(false);
       setExportMessage(
         error?.response?.data?.error ||
@@ -1165,6 +1176,14 @@ const pollRipartizioneJob = (jobId: number) => {
     }
   }, 1500);
 };
+
+useEffect(() => {
+  return () => {
+    if (ripartizionePollRef.current) {
+      window.clearInterval(ripartizionePollRef.current);
+    }
+  };
+}, []);
 
 const logoUrl = `../../images/image.png`;
 //  "https://i.postimg.cc/2SDBbptC/idro-logo.jpg"
