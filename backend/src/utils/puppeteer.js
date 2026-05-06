@@ -2,28 +2,23 @@
 const puppeteer = require("puppeteer");
 
 function getBrowserConfig() {
-  const isRender = !!process.env.RENDER;
+  const isRender = Boolean(process.env.RENDER);
 
-  if (isRender) {
-    return {
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-    };
-  }
-
-  // LOCAL
   return {
     headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+    ...(isRender && process.env.PUPPETEER_EXECUTABLE_PATH
+      ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
+      : {}),
   };
 }
 
 async function launchBrowser() {
-  const config = getBrowserConfig();
-  return puppeteer.launch(config);
+  return puppeteer.launch(getBrowserConfig());
 }
 
 module.exports = { launchBrowser };
