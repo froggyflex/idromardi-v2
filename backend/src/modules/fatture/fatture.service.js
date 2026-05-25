@@ -772,7 +772,6 @@ exports.parseImportedDocument = async (id) => {
   );
 
   const doc = rows[0][0];
-   
 
   if (!doc) {
     const err = new Error("Documento importato non trovato");
@@ -800,11 +799,38 @@ exports.parseImportedDocument = async (id) => {
     throw err;
   }
 
+  const originalName = doc.original_filename || doc.stored_filename;
+  const extension = path.extname(originalName).toLowerCase();
+
+  const allowedExtensions = [".pdf", ".txt"];
+
+  if (!allowedExtensions.includes(extension)) {
+    const err = new Error("Formato file non supportato. Sono accettati solo PDF o TXT.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const contentType =
+    extension === ".txt"
+      ? "text/plain"
+      : "application/pdf";
+
+  const documentType =
+    extension === ".txt"
+      ? "txt"
+      : "pdf";
+
   let parsedPayload;
 
   try {
     const form = new FormData();
-    form.append("file", fs1.createReadStream(filePath), doc.original_filename || doc.stored_filename);
+
+    form.append("file", fs1.createReadStream(filePath), {
+      filename: originalName,
+      contentType,
+    });
+
+    form.append("document_type", documentType);
 
     const aiResponse = await axios.post(
       "https://idromardi-ai-17229082190.europe-west1.run.app/extract/pdf",
@@ -813,7 +839,7 @@ exports.parseImportedDocument = async (id) => {
         headers: form.getHeaders(),
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
-        timeout: 400000  
+        timeout: 400000,
       }
     );
 
@@ -826,25 +852,30 @@ exports.parseImportedDocument = async (id) => {
     }
   } catch (e) {
     console.error("parseImportedDocument AI error:", e.response?.data || e.message);
-    const err = new Error("Errore durante il parsing del PDF");
+
+    const err = new Error(
+      `Errore durante il parsing del file ${documentType.toUpperCase()}`
+    );
     err.statusCode = 500;
     throw err;
   }
 
   const lettureSummary = deriveLettureSummary(parsedPayload.letture || []);
   const groupedLetture = groupLettureByTipo(parsedPayload.letture || []);
-  const tariffeSummary = summarizeTariffeAcquedotto(parsedPayload.componente_tariffa_acquedotto || []);
-  const depurazioneSum = summarizeImporto(parsedPayload.componente_tariffa_depurazione);
-  const fognaturaSum   = summarizeImporto(parsedPayload.componente_tariffa_fognatura);
-
-
+  const tariffeSummary = summarizeTariffeAcquedotto(
+    parsedPayload.componente_tariffa_acquedotto || []
+  );
+  const depurazioneSum = summarizeImporto(
+    parsedPayload.componente_tariffa_depurazione
+  );
+  const fognaturaSum = summarizeImporto(
+    parsedPayload.componente_tariffa_fognatura
+  );
 
   parsedPayload.letture_summary = lettureSummary || null;
   parsedPayload.grouped_letture = groupedLetture || null;
   parsedPayload.summaryTariffeAcquedotto = tariffeSummary || null;
   parsedPayload.totale_dep_fog = depurazioneSum + fognaturaSum;
- 
-
 
   const validation = buildParsedInvoiceValidation(parsedPayload);
 
@@ -918,7 +949,7 @@ exports.parseImportedDocument = async (id) => {
 
   return {
     ok: true,
-    document: updatedRows[0] || null,
+    document: updatedRows[0]?.[0] || null,
   };
 };
 

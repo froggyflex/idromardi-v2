@@ -170,7 +170,7 @@ export default function CondominioFatturePage() {
     
     const [importedStatusFilter, setImportedStatusFilter] = useState("all");
     const [importedPage, setImportedPage] = useState(1);
-    const importedPageSize = 12;
+    const importedPageSize = 3;
 
     const filteredImportedDocs = importedDocs.filter((doc: any) => {
       const status = doc.parse_status || "uploaded";
