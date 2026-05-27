@@ -117,6 +117,22 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
   const consumoAcconto = euro(r?.riga?.consumo_acconto);
 
   const totale = euro(r?.riga?.totale);
+  const dettaglioRipartizione =
+    getTiers(tiers) ||
+    `
+      <div class="mini-row">
+        <span>Consumo totale</span>
+        <strong>${esc(consumoTot)} mc</strong>
+      </div>
+      <div class="mini-row">
+        <span>Periodo</span>
+        <strong>${esc(trimestreLabel || "-")}</strong>
+      </div>
+      <div class="mini-row">
+        <span>Interno</span>
+        <strong>${interno}</strong>
+      </div>
+    `;
 
   return `
     <section class="page">
@@ -190,6 +206,7 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
                   ${moneyRow("Oneri", r?.riga?.imp_oneri)}
                   ${moneyRow("IVA", r?.riga?.imp_iva)}
                   ${qtyMoneyRow("Acconto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto)}
+                  ${moneyRow("Acconto dep./fog.", r?.riga?.depfog_acconto)}
                   ${moneyRow("Storno acconto", r?.riga?.storno_acconto)}
                   ${moneyRow("Arrotondamento", r?.riga?.imp_arr)}
                 </tbody>
@@ -203,7 +220,7 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
 
               <div class="mini-summary">
                  
-                 ${getTiers(tiers)} 
+                 ${dettaglioRipartizione} 
 
               </div>
             </section>
@@ -256,7 +273,7 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
       <style>
         @page {
           size: A4 portrait;
-          margin: 8mm;
+          margin: 6mm;
         }
 
         :root {
@@ -294,35 +311,37 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
 
         .page {
           page-break-after: always;
+          break-after: page;
         }
 
         .page:last-child {
           page-break-after: auto;
+          break-after: auto;
         }
 
         .invoice-sheet {
           width: 100%;
-          min-height: auto;
+          min-height: 0;
           background: var(--paper);
           border: 1px solid var(--line-strong);
-          border-radius: 14px;
+          border-radius: 8px;
           overflow: hidden;
-          box-shadow: 0 2mm 6mm var(--shadow);
+          box-shadow: none;
           display: flex;
           flex-direction: column;
         }
 
         .top-accent {
-          height: 5mm;
+          height: 3mm;
           background: linear-gradient(90deg, #0f3d91 0%, #1d4ed8 45%, #60a5fa 100%);
         }
 
         .invoice-header {
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
-          gap: 10mm;
-          padding: 5mm 6mm 3mm 6mm;
+          align-items: center;
+          gap: 8mm;
+          padding: 4mm 5mm 2.5mm 5mm;
         }
 
         .brand-block {
@@ -336,35 +355,35 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
           letter-spacing: 0.16em;
           font-weight: 800;
           color: var(--accent);
-          margin-bottom: 1.5mm;
+          margin-bottom: 1mm;
         }
 
         .doc-title {
           margin: 0;
-          font-size: 20pt;
+          font-size: 17pt;
           line-height: 1.05;
           font-weight: 800;
           color: var(--ink);
         }
 
         .doc-subtitle {
-          margin-top: 1mm;
-          font-size: 8pt;
+          margin-top: 0.7mm;
+          font-size: 7.5pt;
           color: var(--muted);
         }
 
         .brand-logo-block {
-          width: 44mm;
-          min-width: 44mm;
-          height: 18mm;
+          width: 54mm;
+          min-width: 54mm;
+          height: 20mm;
           display: flex;
           justify-content: flex-end;
-          align-items: flex-start;
+          align-items: center;
         }
 
         .brand-logo {
-          max-width: 100%;
-          max-height: 100%;
+          width: 100%;
+          height: 100%;
           object-fit: contain;
           display: block;
         }
@@ -384,14 +403,14 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .summary-band {
-          margin: 0 6mm 4mm 6mm;
-          padding: 3.5mm 4.5mm;
+          margin: 0 5mm 3mm 5mm;
+          padding: 3mm 4mm;
           border: 1px solid var(--line);
-          border-radius: 12px;
+          border-radius: 8px;
           background: linear-gradient(180deg, #fbfdff 0%, #f4f8fd 100%);
           display: grid;
-          grid-template-columns: 1fr 70mm;
-          gap: 6mm;
+          grid-template-columns: 1fr 58mm;
+          gap: 4mm;
           align-items: stretch;
         }
 
@@ -401,30 +420,30 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
           letter-spacing: 0.12em;
           font-weight: 700;
           color: var(--muted);
-          margin-bottom: 1.5mm;
+          margin-bottom: 1mm;
         }
 
         .summary-name {
-          font-size: 14pt;
+          font-size: 12.5pt;
           line-height: 1.1;
           font-weight: 800;
           color: var(--ink);
-          margin-bottom: 1.8mm;
+          margin-bottom: 1.2mm;
           word-break: break-word;
         }
 
         .summary-meta {
           display: flex;
           flex-direction: column;
-          gap: 1mm;
-          font-size: 8pt;
+          gap: 0.7mm;
+          font-size: 7.5pt;
           line-height: 1.35;
           color: var(--muted-2);
         }
 
         .summary-right {
           border-left: 1px solid #d8e4f1;
-          padding-left: 6mm;
+          padding-left: 4mm;
           display: flex;
           flex-direction: column;
           justify-content: center;
@@ -432,7 +451,7 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .summary-total-label {
-          font-size: 8pt;
+          font-size: 7.4pt;
           text-transform: uppercase;
           letter-spacing: 0.08em;
           font-weight: 700;
@@ -441,7 +460,7 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .summary-total-value {
-          font-size: 20pt;
+          font-size: 17pt;
           line-height: 1;
           font-weight: 800;
           color: var(--accent-2);
@@ -450,30 +469,34 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         .invoice-grid {
           flex: 1;
           display: grid;
-          grid-template-columns: 1.65fr 0.9fr;
-          gap: 4mm;
-          padding: 0 6mm 4mm 6mm;
+          grid-template-columns: 1.58fr 0.9fr;
+          gap: 3mm;
+          padding: 0 5mm 3mm 5mm;
+          align-items: start;
+          min-height: 0;
         }
 
         .main-column,
         .side-column {
           display: flex;
           flex-direction: column;
-          gap: 3mm;
+          gap: 2.2mm;
+          min-height: 0;
         }
 
         .panel {
           border: 1px solid var(--line);
-          border-radius: 12px;
+          border-radius: 8px;
           background: #ffffff;
           overflow: hidden;
+          box-shadow: 0 0.8mm 2mm rgba(15, 23, 42, 0.035);
         }
 
         .panel-title {
-          padding: 2.8mm 3.5mm 2.2mm 3.5mm;
+          padding: 2mm 3mm 1.7mm 3mm;
           border-bottom: 1px solid var(--line);
           background: var(--soft);
-          font-size: 7pt;
+          font-size: 6.6pt;
           text-transform: uppercase;
           letter-spacing: 0.14em;
           font-weight: 800;
@@ -482,8 +505,8 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
 
         .info-grid {
           display: grid;
-          gap: 2mm;
-          padding: 3mm;
+          gap: 1.6mm;
+          padding: 2.4mm;
         }
 
         .two-cols {
@@ -495,11 +518,11 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .info-row {
-          min-height: 13mm
+          min-height: 10mm;
           border: 1px solid var(--line);
-          border-radius: 10px;
+          border-radius: 7px;
           background: #ffffff;
-          padding: 2.2mm 2.6mm;
+          padding: 1.8mm 2mm;
         }
 
         .highlight-row {
@@ -508,17 +531,17 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .info-label {
-          font-size: 6.5pt;
+          font-size: 6pt;
           line-height: 1.15;
           font-weight: 800;
           text-transform: uppercase;
           letter-spacing: 0.08em;
           color: var(--muted);
-          margin-bottom: 1.1mm;
+          margin-bottom: 0.7mm;
         }
 
         .info-value {
-          font-size: 10.5pt;
+          font-size: 9.2pt;
           line-height: 1.2;
           font-weight: 700;
           color: var(--ink);
@@ -538,7 +561,7 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
           text-transform: uppercase;
           letter-spacing: 0.1em;
           text-align: left;
-          padding: 3.6mm 4.5mm;
+          padding: 2.1mm 3.2mm;
           border-bottom: 1px solid var(--line);
         }
 
@@ -548,11 +571,15 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .cost-table tbody td {
-          padding: 3.6mm 4.5mm;
+          padding: 2.12mm 3.2mm;
           border-bottom: 1px solid #e8eef5;
-          font-size: 9.6pt;
+          font-size: 8.4pt;
           color: var(--ink);
           vertical-align: middle;
+        }
+
+        .cost-table tbody tr:nth-child(even) td {
+          background: #fbfdff;
         }
 
         .cost-table tbody tr:last-child td {
@@ -572,8 +599,8 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .line-sub {
-          margin-top: 0.8mm;
-          font-size: 8.3pt;
+          margin-top: 0.4mm;
+          font-size: 7.2pt;
           color: var(--muted);
         }
 
@@ -582,21 +609,21 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         }
 
         .mini-summary {
-          padding: 4.5mm;
+          padding: 3mm;
           display: flex;
           flex-direction: column;
-          gap: 2.5mm;
+          gap: 1.4mm;
         }
 
         .mini-row {
           display: flex;
           justify-content: space-between;
-          gap: 4mm;
+          gap: 2.5mm;
           align-items: center;
-          font-size: 9pt;
-          line-height: 1.3;
+          font-size: 7.8pt;
+          line-height: 1.2;
           color: var(--muted-2);
-          padding-bottom: 2mm;
+          padding-bottom: 1.2mm;
           border-bottom: 1px dashed #d8e2ee;
         }
 
@@ -642,16 +669,16 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
 
         .note-text,
         .company-text {
-          padding: 4.5mm;
-          padding-top: 4mm;
-          font-size: 8.6pt;
-          line-height: 1.45;
+          padding: 3mm;
+          padding-top: 2.6mm;
+          font-size: 7.4pt;
+          line-height: 1.32;
           color: var(--muted-2);
         }
 
         .company-name {
-          padding: 4.5mm 4.5mm 0 4.5mm;
-          font-size: 12pt;
+          padding: 3mm 3mm 0 3mm;
+          font-size: 10pt;
           font-weight: 800;
           color: var(--ink);
         }
@@ -663,12 +690,12 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
         .invoice-footer {
           border-top: 1px solid var(--line);
           background: #fbfcfe;
-          padding: 4mm 9mm;
+          padding: 2.5mm 5mm;
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 5mm;
-          font-size: 7.6pt;
+          font-size: 6.8pt;
           line-height: 1.3;
           color: var(--muted);
         }

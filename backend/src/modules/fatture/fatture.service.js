@@ -13,6 +13,80 @@ const { error } = require("console");
 const pLimit = require("p-limit").default;
 // const db = require(... your existing db helper ...)
 
+const DEFAULT_AI_PARSER_BASE_URL =
+  "https://idromardi-ai-693191024735.europe-west1.run.app";
+
+function joinUrl(baseUrl, pathname) {
+  return `${String(baseUrl).replace(/\/+$/, "")}${pathname}`;
+}
+
+function getAiParserUrl(documentType) {
+  const explicitUrl =
+    documentType === "txt"
+      ? process.env.FATTURE_AI_TXT_PARSER_URL
+      : process.env.FATTURE_AI_PDF_PARSER_URL;
+
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const baseUrl = process.env.FATTURE_AI_PARSER_BASE_URL || DEFAULT_AI_PARSER_BASE_URL;
+  const pathname = documentType === "txt" ? "/extract/abc/txt" : "/extract/pdf";
+
+  return joinUrl(baseUrl, pathname);
+}
+
+function buildAiParserError(error, documentType, targetUrl) {
+  const status = error.response?.status;
+  const detail = error.response?.data?.detail || error.response?.data?.error;
+  const requestUrl = error.config?.url || targetUrl;
+
+  const parts = [`Errore durante il parsing del file ${documentType.toUpperCase()}`];
+
+  if (status) {
+    parts.push(`HTTP ${status}`);
+  }
+
+  if (detail) {
+    parts.push(String(detail));
+  }
+
+  if (requestUrl) {
+    parts.push(`endpoint: ${requestUrl}`);
+  }
+
+  const err = new Error(parts.join(" - "));
+  err.statusCode = status === 404 ? 502 : 500;
+  return err;
+}
+
+function formatExtractionErrors(errors) {
+  if (!Array.isArray(errors)) {
+    return [];
+  }
+
+  return errors
+    .map((item) => {
+      if (!item) {
+        return null;
+      }
+
+      if (typeof item === "string") {
+        return item;
+      }
+
+      return item.message || item.error || item.field || JSON.stringify(item);
+    })
+    .filter(Boolean);
+}
+
+function getOverallConfidence(confidence) {
+  const value = confidence?.overall;
+  const numericValue = Number(value);
+
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
 
 async function buildParsedInvoiceFromFile({ fileBuffer, input, mimeType }) {
  return {
@@ -289,21 +363,96 @@ function makeSafeDateFolder(dataLettura) {
     .replace(/-+/g, "-");
 }
 
-exports.getRipartizionePdfsByPeriod = async (periodKey) => {
+function getLogoColoratoDataUrl() {
+  const candidateDirs = [
+    path.join(__dirname, "..", "..", "..", "public", "images"),
+    path.join(process.cwd(), "backend", "public", "images"),
+    path.join(process.cwd(), "public", "images"),
+  ];
+
+  for (const imagesDir of candidateDirs) {
+    if (!fs1.existsSync(imagesDir)) {
+      continue;
+    }
+
+    const filename = fs1
+      .readdirSync(imagesDir)
+      .find((name) => /^logo_colorato\.(png|jpe?g|webp)$/i.test(name));
+
+    if (!filename) {
+      continue;
+    }
+
+    const ext = path.extname(filename).slice(1).toLowerCase();
+    const mimeType = ext === "jpg" ? "jpeg" : ext;
+    const filePath = path.join(imagesDir, filename);
+    const base64 = fs1.readFileSync(filePath).toString("base64");
+
+    return `data:image/${mimeType};base64,${base64}`;
+  }
+
+  return "";
+}
+
+function getRipartizioneLogoUrl(logoUrl) {
+  return getLogoColoratoDataUrl() || logoUrl || "";
+}
+
+function compareRipartizionePdfRows(a, b) {
+  const internoA = String(a?.Interno ?? "").trim();
+  const internoB = String(b?.Interno ?? "").trim();
+
+  if (internoA && !internoB) return -1;
+  if (!internoA && internoB) return 1;
+
+  const internoCompare = internoA.localeCompare(internoB, "it", {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  if (internoCompare !== 0) {
+    return internoCompare;
+  }
+
+  return Number(a?.id_user ?? a?.id_utenza ?? 0) - Number(b?.id_user ?? b?.id_utenza ?? 0);
+}
+
+exports.getRipartizionePdfsByPeriod = async (periodKey, condominioId = null) => {
+  const params = [periodKey];
+  const condominioFilter = condominioId ? "AND condominio_id = ?" : "";
+
+  if (condominioId) {
+    params.push(condominioId);
+  }
+
   const [rows] = await db.query(
     `
-    SELECT *
-    FROM ripartizione_pdfs
-    WHERE period_key = ?
-    ORDER BY id_utenza ASC
+    SELECT
+      r.*,
+      u.Interno,
+      u.id_user
+    FROM ripartizione_pdfs r
+    LEFT JOIN utenze_v2 u
+      ON u.id = r.id_utenza
+    WHERE r.period_key = ?
+      ${condominioFilter ? "AND r.condominio_id = ?" : ""}
+    ORDER BY r.id_utenza ASC
     `,
-    [periodKey]
+    params
   );
 
-  return rows;
+  return rows.sort(compareRipartizionePdfRows);
 };
 
-exports.listRipartizionePdfs = async () => {
+exports.listRipartizionePdfs = async ({ condominioId } = {}) => {
+  const params = [];
+  const where = [];
+
+  if (condominioId) {
+    where.push("r.condominio_id = ?");
+    params.push(condominioId);
+  }
+
   const [rows] = await db.query(
     `
     SELECT
@@ -329,14 +478,26 @@ exports.listRipartizionePdfs = async () => {
     LEFT JOIN utenze_v2 u
       ON u.id = r.id_utenza
 
-    ORDER BY r.period_key DESC, u.id_user ASC
-    `
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY r.period_key DESC, u.Interno ASC, u.id_user ASC
+    `,
+    params
   );
 
-  return rows;
+  return rows.sort((a, b) => {
+    const periodCompare = String(b?.period_key ?? "").localeCompare(String(a?.period_key ?? ""));
+    return periodCompare || compareRipartizionePdfRows(a, b);
+  });
 };
 
-exports.getRipartizionePdfById = async (id) => {
+exports.getRipartizionePdfById = async (id, condominioId = null) => {
+  const params = [id];
+  const condominioFilter = condominioId ? "AND condominio_id = ?" : "";
+
+  if (condominioId) {
+    params.push(condominioId);
+  }
+
   const [rows] = await db.query(
     `
     SELECT
@@ -351,9 +512,10 @@ exports.getRipartizionePdfById = async (id) => {
       created_at
     FROM ripartizione_pdfs
     WHERE id = ?
+      ${condominioFilter}
     LIMIT 1
     `,
-    [id]
+    params
   );
 
   return rows[0] || null;
@@ -731,7 +893,7 @@ async function generateRipartizionePdfBuffer({
     dettaglioByUtenza,
     trimestreLabel: trimestreLabel || "",
     dataLettura: dataLettura || "",
-    logoUrl: logoUrl || "",
+    logoUrl: getRipartizioneLogoUrl(logoUrl),
   });
 
   let page;
@@ -749,13 +911,14 @@ async function generateRipartizionePdfBuffer({
 
     const pdfBuffer = await page.pdf({
       format: "A4",
-      landscape: true,
+      landscape: false,
+      preferCSSPageSize: true,
       printBackground: true,
       margin: {
-        top: "8mm",
-        right: "8mm",
-        bottom: "8mm",
-        left: "8mm",
+        top: "6mm",
+        right: "6mm",
+        bottom: "6mm",
+        left: "6mm",
       },
     });
 
@@ -820,6 +983,7 @@ exports.parseImportedDocument = async (id) => {
       ? "txt"
       : "pdf";
 
+  let parserResponse;
   let parsedPayload;
 
   try {
@@ -830,10 +994,14 @@ exports.parseImportedDocument = async (id) => {
       contentType,
     });
 
-    form.append("document_type", documentType);
+    const parserUrl = getAiParserUrl(documentType);
+
+    if (documentType === "pdf") {
+      form.append("hydric_provider", process.env.FATTURE_AI_HYDRIC_PROVIDER || "abc");
+    }
 
     const aiResponse = await axios.post(
-      "https://idromardi-ai-17229082190.europe-west1.run.app/extract/pdf",
+      parserUrl,
       form,
       {
         headers: form.getHeaders(),
@@ -843,7 +1011,11 @@ exports.parseImportedDocument = async (id) => {
       }
     );
 
-    parsedPayload = aiResponse?.data?.data || aiResponse?.data;
+    parserResponse = aiResponse?.data;
+    parsedPayload =
+      parserResponse && Object.prototype.hasOwnProperty.call(parserResponse, "data")
+        ? parserResponse.data
+        : parserResponse;
 
     if (!parsedPayload || typeof parsedPayload !== "object") {
       const err = new Error("Risposta parser non valida");
@@ -851,15 +1023,17 @@ exports.parseImportedDocument = async (id) => {
       throw err;
     }
   } catch (e) {
-    console.error("parseImportedDocument AI error:", e.response?.data || e.message);
+    console.error("parseImportedDocument AI error:", {
+      status: e.response?.status,
+      data: e.response?.data,
+      url: e.config?.url,
+      message: e.message,
+    });
 
-    const err = new Error(
-      `Errore durante il parsing del file ${documentType.toUpperCase()}`
-    );
-    err.statusCode = 500;
-    throw err;
+    throw buildAiParserError(e, documentType, getAiParserUrl(documentType));
   }
 
+  const extractionErrors = formatExtractionErrors(parserResponse?.errors);
   const lettureSummary = deriveLettureSummary(parsedPayload.letture || []);
   const groupedLetture = groupLettureByTipo(parsedPayload.letture || []);
   const tariffeSummary = summarizeTariffeAcquedotto(
@@ -878,6 +1052,16 @@ exports.parseImportedDocument = async (id) => {
   parsedPayload.totale_dep_fog = depurazioneSum + fognaturaSum;
 
   const validation = buildParsedInvoiceValidation(parsedPayload);
+
+  if (parserResponse?.success === false) {
+    validation.errors.push(
+      ...(extractionErrors.length
+        ? extractionErrors
+        : ["Il parser non ha completato l'estrazione correttamente"])
+    );
+  } else if (extractionErrors.length) {
+    validation.warnings.push(...extractionErrors);
+  }
 
   const validationStatus =
     validation.errors?.length > 0
@@ -927,14 +1111,14 @@ exports.parseImportedDocument = async (id) => {
       parsedPayload?.anagrafica?.matricola_contatore || null,
       parsedPayload?.anagrafica?.intestatario || null,
       parsedPayload?.anagrafica?.indirizzo_fornitura || null,
-      parsedPayload?.fornitore_servizi || null,
+      parsedPayload?.fornitore_servizi || parsedPayload?.hydric_provider || null,
       parsedPayload?.bill_type || "unknown",
       toMysqlDate(firstPeriodo?.data_inizio) || null,
       toMysqlDate(lastPeriodo?.data_fine) || null,
       parsedPayload?.consumo_globale_mc ?? null,
       parsedPayload?.importo_totale_da_pagare ?? null,
-      "v1.0.0",
-      0.75,
+      parserResponse?.extraction_method || "v1.0.0",
+      getOverallConfidence(parserResponse?.confidence),
       validationStatus,
       JSON.stringify(parsedPayload),
       JSON.stringify(validation),
@@ -1975,7 +2159,18 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     conn.release();
   }
 }
-async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPrec = null, eurStorno = 0, totaleParsedWithOneri) {
+async function calculateInterni(
+  conn,
+  session,
+  generale,
+  tfCode,
+  annoAtt,
+  annoPrec = null,
+  eurStorno = 0,
+  totaleParsedWithOneri,
+  parsedOneriPerequazione = null,
+  parsedOneriPerequazioneAcconto = null
+) {
 
   console.log(generale);
   // ---------- helpers ----------
@@ -2029,6 +2224,17 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     }
 
     return floored.map((u) => sign * (u / factor));
+  };
+
+  const allocateEqualRounded = (total, items, decimals = 2) => {
+    if (!items.length) {
+      return [];
+    }
+
+    const factor = Math.pow(10, decimals);
+    const share = Math.round((n2(total) / items.length) * factor) / factor;
+
+    return items.map(() => share);
   };
 
   try {
@@ -2177,6 +2383,10 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
 
     const rows = [];
     let totaleOneri = 0;
+    const hasParsedOneri = parsedOneriPerequazione !== null || parsedOneriPerequazioneAcconto !== null;
+    const parsedOneriNormale = hasParsedOneri ? round2(n2(parsedOneriPerequazione)) : null;
+    const parsedOneriAcconto = hasParsedOneri ? round2(n2(parsedOneriPerequazioneAcconto)) : null;
+    let parsedOneriRemainder = 0;
 
     // -------------------------------------------------------------------
     // PASS 1: build base rows
@@ -2393,6 +2603,22 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     const moneyWeightFn = (r) => Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
     const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
 
+    if (hasParsedOneri) {
+      const oneriNormaleShares = allocateEqualRounded(
+        parsedOneriNormale,
+        primaries,
+        2
+      );
+
+      for (let i = 0; i < primaries.length; i++) {
+        const r = primaries[i];
+        const share = round2(oneriNormaleShares[i] || 0);
+
+        r.imp_oneri = round2(n2(r.imp_oneri) + share);
+        r.base_totale = round2(n2(r.base_totale) + share);
+      }
+    }
+
     const accEuroShares = allocateByWeight(totAccEuro, primaries, moneyWeightFn, 2);
     const impConsAccShares = allocateByWeight(
       totImpConsAcc > 0 ? totImpConsAcc : totAccEuro,
@@ -2403,14 +2629,19 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     const depFogAccShares = allocateByWeight(totDepFogAcc, primaries, moneyWeightFn, 2);
     const accMcShares = allocateByWeight(totConsAccMc, primaries, mcWeightFn, 3);
     const stornoCalcShares = allocateByWeight(totStornoCalcolato, primaries, moneyWeightFn, 2);
+    const oneriAccShares = hasParsedOneri
+      ? allocateEqualRounded(parsedOneriAcconto, primaries, 2)
+      : primaries.map(() => 0);
 
     for (let i = 0; i < primaries.length; i++) {
       const r = primaries[i];
+      const oneriAccShare = round2(oneriAccShares[i] || 0);
 
-      r.acconto = round2(accEuroShares[i] || 0);
+      r.acconto = round2(n2(accEuroShares[i] || 0) + oneriAccShare);
       r.imp_acconto = round2(impConsAccShares[i] || 0);
       r.depfog_acconto = round2(depFogAccShares[i] || 0);
       r.consumo_acconto = round3(accMcShares[i] || 0);
+      r.imp_oneri = round2(n2(r.imp_oneri) + oneriAccShare);
 
       // must be negative if it reduces the invoice
       r.storno_calcolato = round2(stornoCalcShares[i] || 0);
@@ -2420,9 +2651,16 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
         n2(r.base_totale) +
         n2(r.imp_acconto) +
         n2(r.depfog_acconto) +
+        oneriAccShare +
         n2(r.storno_calcolato)
       );
     }
+
+    totaleOneri = round2(rows.reduce((s, r) => s + n2(r.imp_oneri), 0));
+    parsedOneriRemainder = hasParsedOneri
+      ? round2(n2(parsedOneriNormale) + n2(parsedOneriAcconto) - totaleOneri)
+      : 0;
+    generale.totaleOneri = totaleOneri;
 
     // -------------------------------------------------------------------
     // PASS 2B: apply old open acconto credits from ledger (FIFO)
@@ -2450,6 +2688,20 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
 
     console.log(diff )
     applyTfToRows({ tfCode, diff, rows });
+
+    if (
+      hasParsedOneri &&
+      parsedOneriRemainder !== 0 &&
+      ["TF1", "NONE"].includes(upper(tfCode, "TF1"))
+    ) {
+      const remainderShares = allocateByWeight(parsedOneriRemainder, primaries, moneyWeightFn, 2);
+
+      for (let i = 0; i < primaries.length; i++) {
+        primaries[i].conguaglio = round2(
+          n2(primaries[i].conguaglio) + n2(remainderShares[i] || 0)
+        );
+      }
+    }
 
     // Apply conguaglio + rounding adjustment
     for (const r of rows) {
@@ -2603,7 +2855,17 @@ async function calculateInterni(conn, session, generale, tfCode, annoAtt, annoPr
     throw err;
   }
 }
-exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPrec = null, eurStorno = 0, parsedQF = 0, totaleParsedWithOneri = 0 }) {
+exports.calculateSession = async function ({
+  sessionId,
+  tfCode,
+  annoAtt,
+  annoPrec = null,
+  eurStorno = 0,
+  parsedQF = 0,
+  parsedOneriPerequazione = null,
+  parsedOneriPerequazioneAcconto = null,
+  totaleParsedWithOneri = 0,
+}) {
 
   assertUUID(sessionId, "sessionId");
 
@@ -2628,7 +2890,18 @@ exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPre
  
     session.consumoNorm = generaleResult.meta.consumoNorm;
 
-    const interniTotals = await calculateInterni(conn, session, g, tfCode, annoAtt, annoPrec, eurStorno, totaleParsedWithOneri);
+    const interniTotals = await calculateInterni(
+      conn,
+      session,
+      g,
+      tfCode,
+      annoAtt,
+      annoPrec,
+      eurStorno,
+      totaleParsedWithOneri,
+      parsedOneriPerequazione,
+      parsedOneriPerequazioneAcconto
+    );
     
     
     await conn.query(
@@ -2651,8 +2924,8 @@ exports.calculateSession = async function ({ sessionId, tfCode, annoAtt, annoPre
         0,
         g.qfTot,
         g.iva,
-        0,
-        g.totale,
+        interniTotals.totOneri,
+        round2(n2(g.totale) + n2(interniTotals.totOneri)),
         sessionId,
       ]
     );
@@ -2964,6 +3237,71 @@ exports.getImportedDocumentById = async function (id) {
   }
 
   return { ok: true, document: doc };
+}
+
+exports.deleteImportedDocument = async function (id) {
+  const conn = await db.getConnection();
+  let doc = null;
+
+  try {
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query(
+      `
+      SELECT id, stored_filename, original_filename
+      FROM imported_invoice_documents
+      WHERE id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [id]
+    );
+
+    doc = rows[0] || null;
+
+    if (!doc) {
+      const err = new Error("Documento importato non trovato");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    await conn.query(
+      `DELETE FROM imported_invoice_documents WHERE id = ?`,
+      [id]
+    );
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+
+  let deletedFile = false;
+
+  if (doc?.stored_filename) {
+    const uploadDir = path.resolve(process.cwd(), "..", "runtime_uploads", "fatture-import");
+    const filePath = path.resolve(uploadDir, doc.stored_filename);
+    const isInsideUploadDir =
+      filePath.toLowerCase().startsWith(`${uploadDir.toLowerCase()}${path.sep}`);
+
+    if (isInsideUploadDir && fs1.existsSync(filePath)) {
+      try {
+        fs1.unlinkSync(filePath);
+        deletedFile = true;
+      } catch (fileErr) {
+        console.error("Errore eliminazione file importato:", fileErr);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    deletedId: id,
+    deletedFile,
+    originalFilename: doc?.original_filename || null,
+  };
 }
 
 exports.updateImportedDocumentParsedResult = async function (id, payload) {

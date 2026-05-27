@@ -17,6 +17,7 @@ type Periodo = { id: string; period_year: number; period_month: number };
 type ImportedInvoiceDocument = {
     id: string;
     original_filename: string;
+    display_name?: string | null;
     numero_bolletta?: string | null;
     codice_fornitura?: string | null;
     fornitore_servizi?: string | null;
@@ -156,6 +157,7 @@ export default function CondominioFatturePage() {
     const [importFile, setImportFile] = useState<File | null>(null);
     const [uploadingImport, setUploadingImport] = useState(false);
     const [parsingImportId, setParsingImportId] = useState<string | null>(null);
+    const [deletingImportId, setDeletingImportId] = useState<string | null>(null);
     const [dettaglioByUtenza, setDettaglioByUtenza]  = useState<Record<string, any[]>>({})
     const [importedDocYear, setImportedDocYear] = useState<number | null>(null);
  
@@ -179,6 +181,7 @@ export default function CondominioFatturePage() {
 
       const matchesSearch =
         !search ||
+        getImportedDocumentName(doc).toLowerCase().includes(search) ||
         String(doc.numero_bolletta || "").toLowerCase().includes(search) ||
         String(doc.original_filename || "").toLowerCase().includes(search) ||
         String(doc.validation_status || "").toLowerCase().includes(search);
@@ -204,23 +207,73 @@ export default function CondominioFatturePage() {
     }, [importedSearch, importedStatusFilter]);
 
     async function loadRipartizionePdfs() {
-      const { data } = await api.get("/fatture/ripartizione-pdfs");
+      if (!condominioId) {
+        setPdfPeriods({});
+        return;
+      }
+
+      const { data } = await api.get("/fatture/ripartizione-pdfs", {
+        params: { condominioId },
+      });
       setPdfPeriods(data.periods || {});
     }
 
     function viewSinglePdf(id: number) {
+      const params = new URLSearchParams();
+
+      if (condominioId) {
+        params.set("condominioId", String(condominioId));
+      }
+
       window.open(
-        `${api.defaults.baseURL}/fatture/ripartizione-pdfs/${id}/view`,
+        `${api.defaults.baseURL}/fatture/ripartizione-pdfs/${id}/view?${params.toString()}`,
         "_blank"
       );
     }
 
     function viewPeriodPdf(periodKey: string) {
+      const params = new URLSearchParams();
+
+      if (condominioId) {
+        params.set("condominioId", String(condominioId));
+      }
+
       window.open(
-        `${api.defaults.baseURL}/fatture/ripartizione-pdfs/period/${periodKey}/view-all`,
+        `${api.defaults.baseURL}/fatture/ripartizione-pdfs/period/${periodKey}/view-all?${params.toString()}`,
         "_blank"
       );
     }
+
+    useEffect(() => {
+      if (!condominioId) {
+        setPdfPeriods({});
+        setOpenPeriod(null);
+        return;
+      }
+
+      let cancelled = false;
+
+      api
+        .get("/fatture/ripartizione-pdfs", {
+          params: { condominioId },
+        })
+        .then(({ data }) => {
+          if (!cancelled) {
+            setPdfPeriods(data.periods || {});
+            setOpenPeriod(null);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPdfPeriods({});
+            setOpenPeriod(null);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [condominioId]);
 
    const years: any[] = [];
    years.length = 0; // clear array while keeping reference
@@ -251,6 +304,58 @@ export default function CondominioFatturePage() {
     }
     return out;
   } 
+
+  function normalizeImportedDocuments(value: any): ImportedInvoiceDocument[] {
+    if (Array.isArray(value?.[0])) {
+      return value[0];
+    }
+
+    return Array.isArray(value) ? value : [];
+  }
+
+  function formatImportedDocDate(value?: string | null) {
+    if (!value) return "";
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    return date.toLocaleDateString("it-IT", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  }
+
+  function cleanImportedFilename(value?: string | null) {
+    if (!value) return "Documento";
+
+    return String(value)
+      .replace(/\.[^.]+$/, "")
+      .replace(/^file-\d+-\d+/i, "Documento")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Documento";
+  }
+
+  function getImportedDocumentName(doc: ImportedInvoiceDocument) {
+    if (doc.display_name?.trim()) {
+      return doc.display_name.trim();
+    }
+
+    if (doc.numero_bolletta || doc.data_inizio_periodo || doc.data_fine_periodo) {
+      const from = formatImportedDocDate(doc.data_inizio_periodo);
+      const to = formatImportedDocDate(doc.data_fine_periodo);
+      const period = from && to ? `Periodo ${from} - ${to}` : `Periodo ${from || to}`;
+      const number = doc.numero_bolletta ? `Bolletta n. ${doc.numero_bolletta}` : "";
+
+      return [period, number].filter(Boolean).join(" · ");
+    }
+
+    return cleanImportedFilename(doc.original_filename);
+  }
+
   async function parseImportedInvoice(id: string) {
     try {
       setParsingImportId(id);
@@ -266,6 +371,42 @@ export default function CondominioFatturePage() {
       setParsingImportId(null);
     }
   }
+
+  async function deleteImportedInvoice(doc: ImportedInvoiceDocument) {
+    const label = doc.numero_bolletta || doc.original_filename || "questo documento";
+    const importedNote =
+      doc.parse_status === "imported"
+        ? "\n\nIl documento risulta gia importato: verra rimosso da questa lista, non dalla fattura gia creata."
+        : "";
+
+    const confirmed = window.confirm(
+      `Eliminare ${label}?${importedNote}`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingImportId(doc.id);
+      setError(null);
+
+      await api.delete(`/fatture/imported-documents/${doc.id}`);
+
+      setImportedDocs((current) => current.filter((item) => item.id !== doc.id));
+
+      if (selectedImportedDoc?.id === doc.id) {
+        setSelectedImportedDoc(null);
+        setSelectedImportedId(null);
+        setSelectedDoc(null);
+        setAnnoTariffa("");
+        setImportedDocYear(null);
+      }
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore eliminazione documento");
+    } finally {
+      setDeletingImportId(null);
+    }
+  }
+
   async function uploadImportedInvoice() {
     if (!condominioId || !importFile) return;
 
@@ -301,7 +442,7 @@ export default function CondominioFatturePage() {
     try {
       setLoadingImportedDocs(true);
       const res = await api.get(`/fatture/imported-documents/condominio/${condominioId}`);
-      setImportedDocs(res.data?.items[0] || []);
+      setImportedDocs(normalizeImportedDocuments(res.data?.items));
       console.log("Imported documents loaded:", res.data?.items || []);
 
     } catch (err: any) {
@@ -420,6 +561,19 @@ function parseOneriPerequazioneFromPayload(
   } catch (err) {
     console.error("Errore durante il parsing degli oneri di perequazione:", err);
     return 0;
+  }
+}
+
+function hasOneriPerequazioneRows(payloadJson?: string | null): boolean {
+  if (!payloadJson) return false;
+
+  try {
+    const payload =
+      typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
+
+    return Array.isArray(payload?.oneri_perequazione) && payload.oneri_perequazione.length > 0;
+  } catch (err) {
+    return false;
   }
 }
 
@@ -807,7 +961,7 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
       setProviders(pRes.data || []);
       setPeriodi(perRes.data || []);
       setSessions(sRes.data || []);
-      setImportedDocs(iRes.data?.items || []);
+      setImportedDocs(normalizeImportedDocuments(iRes.data?.items));
       loadImportedDocuments();
 
        
@@ -973,13 +1127,25 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
 
       try {
         await saveParams();
+
+        const parsedHasOneri = hasOneriPerequazioneRows(
+          selectedImportedDoc?.parsed_payload_json
+        );
   
         const res = await api.post(`/fatture/sessioni/${fatturaId}/calcola`, {
           tfCode,
           annoTariffa: Number(annoTariffa) || null,
           eurStorno: eurStorno? Number(eurStorno) : null,
           parsedQF: parsedQF !== null ? Number(parsedQF) : null,
-          totaleParsedWithOneri: totaleDocumentoConOneri? Number(totaleDocumentoConOneri):0
+          parsedOneriPerequazione: parsedHasOneri ? Number(oneriPerequazione || 0) : null,
+          parsedOneriPerequazioneAcconto: parsedHasOneri
+            ? Number(oneriPerequazioneAcconto || 0)
+            : null,
+          totaleParsedWithOneri: parsedHasOneri
+            ? Number(totaleDocumento || 0)
+            : totaleDocumentoConOneri
+            ? Number(totaleDocumentoConOneri)
+            : 0
         }); 
         // console.log("Calcolo response:", res.data);
         //await loadDetail();
@@ -1185,8 +1351,11 @@ useEffect(() => {
   };
 }, []);
 
-const logoUrl = `../../images/image.png`;
-//  "https://i.postimg.cc/2SDBbptC/idro-logo.jpg"
+const configuredApiBaseUrl = String(api.defaults.baseURL || "");
+const apiBaseUrl = configuredApiBaseUrl.startsWith("http")
+  ? configuredApiBaseUrl.replace(/\/api\/?$/, "")
+  : "";
+const logoUrl = apiBaseUrl ? `${apiBaseUrl}/images/logo_colorato.png` : "";
 
 const handleExportPdf = async () => {
   try {
@@ -1199,7 +1368,7 @@ const handleExportPdf = async () => {
       dettaglioByUtenza,
       trimestreLabel: "07.25 - 01.2025",
       dataLettura: "12/01/2026",
-      logoUrl: "https://i.postimg.cc/2SDBbptC/idro-logo.jpg",
+      logoUrl: logoUrl || undefined,
       condominioId,
     });
 
@@ -1246,6 +1415,7 @@ const totals = useMemo(() => {
       acc.cong += Number(row.conguaglio || 0);
       acc.oneri += Number(row.imp_oneri || 0);
       acc.acconto += Number(row.acconto || 0);
+      acc.accontoDepFog += Number(row.depfog_acconto || 0);
       acc.storno += Number(row.storno_acconto || 0);
       acc.totConsAcc += Number(row.consumo_acconto || 0);
       acc.iva += Number(row.imp_iva || 0);
@@ -1263,6 +1433,7 @@ const totals = useMemo(() => {
       cong: 0,
       oneri: 0,
       acconto: 0,
+      accontoDepFog: 0,
       storno: 0,
       totConsAcc: 0,
       iva: 0,
@@ -1298,13 +1469,117 @@ const totals = useMemo(() => {
 
 const totaleDocumento = Number(selectedImportedDoc?.importo_totale_da_pagare ?? 0);
 const totaleOneri = Number(totals?.oneri ?? 0);
+const selectedDocHasParsedOneri = hasOneriPerequazioneRows(
+  selectedImportedDoc?.parsed_payload_json
+);
+const totaleParsedOneriPereq = Number(oneriPerequazione || 0) + Number(oneriPerequazioneAcconto || 0);
+const displayedOneriPereqShare = useMemo(() => {
+  if (!selectedDocHasParsedOneri) return 0;
+
+  const chargeableRows = righe.filter((r: any) => Number(r?.riga?.imp_oneri || 0) !== 0);
+  if (!chargeableRows.length) return 0;
+
+  return Math.round((totaleParsedOneriPereq / chargeableRows.length) * 100) / 100;
+}, [righe, selectedDocHasParsedOneri, totaleParsedOneriPereq]);
 
 const totaleInterni = Number(totals?.totaleInterni ?? 0);
-const totaleDocumentoConOneri = totaleDocumento + totaleOneri;
+const totaleDocumentoConOneri = selectedDocHasParsedOneri
+  ? totaleDocumento
+  : totaleDocumento + totaleOneri;
 const deltaTotali = totaleDocumentoConOneri - totaleInterni;
 
 const deltaOk = Math.abs(deltaTotali) < 0.5;
 const isGreen:any = totaleDocumentoConOneri? (totaleDocumentoConOneri <= totaleInterni) : false;
+
+const getRowOneriPerequazione = (row: any) =>
+  selectedDocHasParsedOneri && Number(row?.riga?.imp_oneri || 0) !== 0
+    ? displayedOneriPereqShare
+    : 0;
+
+const getRowOneri = (row: any) =>
+  selectedDocHasParsedOneri
+    ? Math.max(0, Number(row?.riga?.imp_oneri ?? 0) - getRowOneriPerequazione(row))
+    : Number(row?.riga?.imp_oneri ?? 0);
+
+const getDisplayedRowTotal = (row: any) => {
+  return getExpectedRowTotal(row);
+};
+
+const roundMoney = (value: number) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const getExpectedRowTotal = (row: any) => {
+  const r = row?.riga || {};
+
+  return roundMoney(
+    Number(r.imp_acquedotto || 0) +
+      Number(r.imp_fognatura || 0) +
+      Number(r.imp_depurazione || 0) +
+      Number(r.imp_qf || 0) +
+      getRowOneri(row) +
+      getRowOneriPerequazione(row) +
+      Number(r.imp_iva || 0) +
+      Number(r.conguaglio || 0) +
+      Number(r.imp_arr || 0) +
+      Number(r.imp_acconto || 0) +
+      Number(r.depfog_acconto || 0) +
+      Number(r.storno_acconto || 0)
+  );
+};
+
+const getRowTotalDelta = (row: any) =>
+  roundMoney(getDisplayedRowTotal(row) - getExpectedRowTotal(row));
+
+const isRowTotalOk = (row: any) => Math.abs(getRowTotalDelta(row)) <= 0.01;
+
+const getRowStornoMc = (row: any) => {
+  const rowStornoEuro = Number(row?.riga?.storno_acconto || 0);
+  const totalStornoEuro = Number(totals?.storno || 0);
+  const totalStornoMc = Number(mcStorno || 0);
+
+  if (!rowStornoEuro || !totalStornoEuro || !totalStornoMc) {
+    return 0;
+  }
+
+  return (rowStornoEuro / totalStornoEuro) * totalStornoMc;
+};
+
+const totaleOneriPereqVisibile = righe.reduce(
+  (sum: number, row: any) => sum + getRowOneriPerequazione(row),
+  0
+);
+const totaleOneriVisibile = righe.reduce(
+  (sum: number, row: any) => sum + getRowOneri(row),
+  0
+);
+const totaleInterniVisibile = righe.reduce(
+  (sum: number, row: any) => sum + getDisplayedRowTotal(row),
+  0
+);
+
+const totalAudit = useMemo(() => {
+  const rowErrors = righe.filter((row: any) => row?.riga && !isRowTotalOk(row));
+  const expectedRowsTotal = roundMoney(
+    righe.reduce((sum: number, row: any) => sum + getExpectedRowTotal(row), 0)
+  );
+  const storedRowsTotal = roundMoney(
+    righe.reduce((sum: number, row: any) => sum + Number(row?.riga?.totale || 0), 0)
+  );
+  const displayedRowsTotal = roundMoney(
+    righe.reduce((sum: number, row: any) => sum + getDisplayedRowTotal(row), 0)
+  );
+
+  return {
+    rowErrors,
+    expectedRowsTotal,
+    storedRowsTotal,
+    displayedRowsTotal,
+    rowsOk: rowErrors.length === 0,
+    totalsOk:
+      Math.abs(expectedRowsTotal - storedRowsTotal) <= 0.01 &&
+      Math.abs(displayedRowsTotal - totaleInterniVisibile) <= 0.01,
+  };
+}, [righe, selectedDocHasParsedOneri, displayedOneriPereqShare, totaleInterniVisibile]);
 
 return (
     <div className=" ">
@@ -1546,7 +1821,7 @@ return (
         <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 transition hover:border-slate-400 hover:bg-slate-100">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-800">
-              {importFile ? importFile.name : "Seleziona un file PDF"}
+              {importFile ? importFile.name : "Seleziona un file"}
             </div>
             <div className="text-xs text-slate-500">
               {importFile ? "Pronto per il caricamento" : "Nessun file selezionato"}
@@ -1555,7 +1830,7 @@ return (
 
           <input
             type="file"
-            accept=".pdf"
+            accept=".pdf,.txt"
             className="hidden"
             onChange={(e) => setImportFile(e.target.files?.[0] || null)}
           />
@@ -1647,7 +1922,7 @@ return (
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
-                    Documento
+                    Nome documento
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
                     Parsing
@@ -1668,6 +1943,7 @@ return (
                 ) : (
                   paginatedImportedDocs.map((doc: any) => {
                     const status = doc.parse_status || "uploaded";
+                    const documentName = getImportedDocumentName(doc);
 
                     const statusClass =
                       status === "imported"
@@ -1691,11 +1967,11 @@ return (
                             onClick={() => loadImportedDocumentDetail(doc.id)}
                             className="max-w-[260px] truncate text-left font-bold text-slate-900 hover:text-blue-700"
                           >
-                            {doc.numero_bolletta || doc.original_filename || "Documento"}
+                            {documentName}
                           </button>
 
                           <div className="mt-1 max-w-[260px] truncate text-xs text-slate-500">
-                            {doc.original_filename || "-"}
+                            File: {doc.original_filename || "-"}
                           </div>
 
                           <div className="mt-1 text-xs font-semibold text-slate-700">
@@ -1729,6 +2005,17 @@ return (
                               className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
                             >
                               Carica
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => deleteImportedInvoice(doc)}
+                              disabled={deletingImportId === doc.id}
+                              title="Elimina documento"
+                              aria-label="Elimina documento"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </button>
                           </div>
                         </td>
@@ -2085,7 +2372,7 @@ return (
                         Dovuto incasso
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        Totale ente + oneri
+                        {selectedDocHasParsedOneri ? "Totale documento con oneri parser" : "Totale ente + oneri"}
                       </div>
                       <div className="mt-2 text-2xl font-bold text-slate-900">
                         € {totaleDocumentoConOneri.toFixed(2)}
@@ -2356,7 +2643,24 @@ return (
     </div>
   </div>
 </div>
-                    <h3 className="font-semibold mb-4">Situazione Contatori Interni </h3>
+                    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <h3 className="font-semibold">Situazione Contatori Interni</h3>
+
+                      <div
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
+                          totalAudit.rowsOk && totalAudit.totalsOk
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        Righe:{" "}
+                        {totalAudit.rowsOk
+                          ? `OK (${righe.filter((row: any) => row?.riga).length}/${righe.filter((row: any) => row?.riga).length})`
+                          : `${totalAudit.rowErrors.length} da verificare`}{" "}
+                        · Totali:{" "}
+                        {totalAudit.totalsOk ? "OK" : "Da verificare"}
+                      </div>
+                    </div>
                       <div className="overflow-x-auto">
                           <table className="w-full text-xs border border-slate-200">
                                 <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
@@ -2380,7 +2684,8 @@ return (
                                     <th className="p-2">Oneri <br></br>Pereq.</th>
                                     <th className="p-2">IVA</th>
                                     <th className="p-2">Acconto<br></br>MC/EUR</th>
-                                    <th className="p-2">Storno<br></br>EUR</th>
+                                    <th className="p-2">Acconto<br></br>Dep/Fog</th>
+                                    <th className="p-2">Storno<br></br>MC/EUR</th>
                                     <th className="p-2">Arr</th>
                                     <th className="p-2 font-semibold">Totale</th>
                                   </tr>
@@ -2389,7 +2694,7 @@ return (
                                 <tbody>
                                   {righe.length === 0 && (
                                     <tr>
-                                      <td colSpan={21} className="p-4 text-center text-slate-400">
+                                      <td colSpan={22} className="p-4 text-center text-slate-400">
                                         Nessun dato disponibile
                                       </td>
                                     </tr>
@@ -2419,7 +2724,10 @@ return (
                                       <Fragment key={rowKey}>
                                         <tr
                                           onClick={() => toggleRow(rowKey)}
-                                          className={`border-t cursor-pointer transition-colors ${isExpanded
+                                          className={`border-t cursor-pointer transition-colors ${
+                                            !isRowTotalOk(r)
+                                              ? "bg-amber-50 hover:bg-amber-100"
+                                              : isExpanded
                                               ? "bg-sky-50"
                                               : idx % 2 === 0
                                                 ? "bg-white hover:bg-slate-100"
@@ -2449,8 +2757,12 @@ return (
                                           <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
                                           <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
                                           <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
-                                          <td className="p-2 text-center">{r.riga?.imp_oneri ?? 0}</td>
-                                          <td className="p-2 text-center">0</td>
+                                          <td className="p-2 text-center">
+                                            {getRowOneri(r).toFixed(2)}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {getRowOneriPerequazione(r).toFixed(2)}
+                                          </td>
                                           <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
                                           <td className="p-2 text-center">
                                             {Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc
@@ -2458,15 +2770,22 @@ return (
                                             {Number(r.riga?.imp_acconto ?? 0).toFixed(2)}
                                           </td>
                                           <td className="p-2 text-center">
+                                            {Number(r.riga?.depfog_acconto ?? 0).toFixed(2)}
+                                          </td>
+                                          <td className="p-2 text-center">
+                                            {getRowStornoMc(r).toFixed(2)}mc
+                                            <br />
                                             {Number(r.riga?.storno_acconto ?? 0).toFixed(2)}
                                           </td>
                                           <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
-                                          <td className="p-2 text-center font-semibold">{r.riga?.totale ?? 0}</td>
+                                          <td className="p-2 text-center font-semibold">
+                                            {getDisplayedRowTotal(r).toFixed(2)}
+                                          </td>
                                         </tr>
 
                                         {isExpanded && (
                                           <tr className="border-t bg-sky-50">
-                                            <td colSpan={21} className="p-4">
+                                            <td colSpan={22} className="p-4">
                                               <div className="grid grid-cols-1 gap-4 md:grid-cols-1">
                                                 <div className="rounded-lg border border-slate-200 bg-white p-3">
                                                   <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -2548,20 +2867,25 @@ return (
                                     <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totals.oneri.toFixed(2)}</td>
-                                    <td className="p-2 text-center">0.00</td>
+                                    <td className="p-2 text-center">{totaleOneriVisibile.toFixed(2)}</td>
+                                    <td className="p-2 text-center">{totaleOneriPereqVisibile.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
                                     <td className="p-2 text-center">
                                       {totals.totConsAcc.toFixed(2)}mc
                                       <br />
-                                      {totals.acconto.toFixed(2)}
+                                      {righe.reduce((sum: number, row: any) => sum + Number(row?.riga?.imp_acconto || 0), 0).toFixed(2)}
                                     </td>
-                                    <td className="p-2 text-center">{totals.storno.toFixed(2)}</td>
+                                    <td className="p-2 text-center">{totals.accontoDepFog.toFixed(2)}</td>
+                                    <td className="p-2 text-center">
+                                      {Number(mcStorno || 0).toFixed(2)}mc
+                                      <br />
+                                      {totals.storno.toFixed(2)}
+                                    </td>
                                     <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
                                     <td
                                       className={`p-2 text-center font-bold ${isGreen ? "text-green-600" : "text-red-600"}`}
                                     >
-                                      {totals.totaleInterni.toFixed(2)}
+                                      {totaleInterniVisibile.toFixed(2)}
                                     </td>
                                   </tr>
                                 </tfoot>

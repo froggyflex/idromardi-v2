@@ -8,8 +8,9 @@ const { PDFDocument } = require("pdf-lib");
 exports.viewRipartizionePdfPeriod = async (req, res, next) => {
   try {
     const { periodKey } = req.params;
+    const { condominioId } = req.query;
 
-    const pdfs = await service.getRipartizionePdfsByPeriod(periodKey);
+    const pdfs = await service.getRipartizionePdfsByPeriod(periodKey, condominioId);
 
     if (!pdfs.length) {
       return res.status(404).json({ error: "Nessun PDF trovato per questo periodo." });
@@ -108,6 +109,8 @@ exports.calculateSession = async (req, res) => {
       annoAtt: req.body?.annoTariffa,
       eurStorno: req.body?.eurStorno,
       parsedQF: req.body?.parsedQF,
+      parsedOneriPerequazione: req.body?.parsedOneriPerequazione,
+      parsedOneriPerequazioneAcconto: req.body?.parsedOneriPerequazioneAcconto,
       totaleParsedWithOneri: req.body?.totaleParsedWithOneri
      });
         
@@ -187,7 +190,9 @@ exports.uploadImportedDocument = async (req, res) => {
 
 exports.listRipartizionePdfs = async (req, res, next) => {
   try {
-    const rows = await service.listRipartizionePdfs();
+    const rows = await service.listRipartizionePdfs({
+      condominioId: req.query.condominioId,
+    });
 
     const grouped = rows.reduce((acc, row) => {
       const period = row.period_key || "senza-periodo";
@@ -213,8 +218,9 @@ exports.listRipartizionePdfs = async (req, res, next) => {
 exports.viewRipartizionePdf = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { condominioId } = req.query;
 
-    const pdf = await service.getRipartizionePdfById(id);
+    const pdf = await service.getRipartizionePdfById(id, condominioId);
 
     if (!pdf) {
       return res.status(404).json({ error: "PDF non trovato." });
@@ -365,6 +371,17 @@ exports.getImportedDocumentById = async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("getImportedDocumentById error:", err);
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.deleteImportedDocument = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await service.deleteImportedDocument(id);
+    res.json(result);
+  } catch (err) {
+    console.error("deleteImportedDocument error:", err);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 };

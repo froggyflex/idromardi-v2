@@ -38,6 +38,7 @@ router.post("/imported-documents/upload", upload.single("file"), controller.uplo
 router.post("/imported-documents", controller.createImportedDocument);
 router.get("/imported-documents/condominio/:condominioId", controller.listImportedDocumentsByCondominio);
 router.get("/imported-documents/:id", controller.getImportedDocumentById);
+router.delete("/imported-documents/:id", controller.deleteImportedDocument);
 
 router.post("/imported-documents/:id/parse", controller.parseImportedDocument);
 router.put("/imported-documents/:id/parsed-result", controller.updateImportedDocumentParsedResult);
