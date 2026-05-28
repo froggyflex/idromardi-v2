@@ -8,9 +8,35 @@ const { PDFDocument } = require("pdf-lib");
 exports.viewRipartizionePdfPeriod = async (req, res, next) => {
   try {
     const { periodKey } = req.params;
-    const { condominioId } = req.query;
+    const { condominioId, fatturaId } = req.query;
 
-    const pdfs = await service.getRipartizionePdfsByPeriod(periodKey, condominioId);
+    if (fatturaId) {
+      let generated = null;
+
+      try {
+        generated = await service.getLatestGeneratedDocument({
+          condominioId,
+          fatturaId,
+          documentType: "bollette_complete",
+        });
+      } catch (error) {
+        console.warn("Archivio documenti generati non disponibile:", error?.message);
+      }
+
+      if (generated) {
+        const buffer = await service.getGeneratedDocumentBuffer(generated);
+
+        res.setHeader("Content-Type", generated.mime_type || "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="${generated.filename}"`
+        );
+
+        return res.send(buffer);
+      }
+    }
+
+    const pdfs = await service.getRipartizionePdfsByPeriod(periodKey, condominioId, fatturaId);
 
     if (!pdfs.length) {
       return res.status(404).json({ error: "Nessun PDF trovato per questo periodo." });
@@ -192,6 +218,7 @@ exports.listRipartizionePdfs = async (req, res, next) => {
   try {
     const rows = await service.listRipartizionePdfs({
       condominioId: req.query.condominioId,
+      fatturaId: req.query.fatturaId,
     });
 
     const grouped = rows.reduce((acc, row) => {
@@ -218,9 +245,9 @@ exports.listRipartizionePdfs = async (req, res, next) => {
 exports.viewRipartizionePdf = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { condominioId } = req.query;
+    const { condominioId, fatturaId } = req.query;
 
-    const pdf = await service.getRipartizionePdfById(id, condominioId);
+    const pdf = await service.getRipartizionePdfById(id, condominioId, fatturaId);
 
     if (!pdf) {
       return res.status(404).json({ error: "PDF non trovato." });
@@ -276,6 +303,7 @@ exports.startRipartizionePdfJob = async (req, res, next) => {
       dataLettura,
       logoUrl,
       condominioId,
+      fatturaId,
     } = req.body;
 
     const job = await service.startRipartizionePdfJob({
@@ -285,6 +313,7 @@ exports.startRipartizionePdfJob = async (req, res, next) => {
       dataLettura,
       logoUrl,
       condominioId,
+      fatturaId,
     });
 
     return res.json({
@@ -307,6 +336,7 @@ exports.exportRipartizionePdf = async (req, res, next) => {
       dataLettura,
       logoUrl,
       condominioId,
+      fatturaId,
     } = req.body;
 
     const result = await service.exportRipartizioniPerUtenza({
@@ -316,6 +346,7 @@ exports.exportRipartizionePdf = async (req, res, next) => {
       dataLettura,
       logoUrl,
       condominioId,
+      fatturaId,
     });
 
     return res.json({
@@ -372,6 +403,51 @@ exports.getImportedDocumentById = async (req, res) => {
   } catch (err) {
     console.error("getImportedDocumentById error:", err);
     res.status(err.statusCode || 500).json({ error: err.message });
+  }
+};
+
+exports.listGeneratedDocuments = async (req, res, next) => {
+  try {
+    const rows = await service.listGeneratedDocuments({
+      condominioId: req.query.condominioId,
+      fatturaId: req.query.fatturaId,
+      utenzaId: req.query.idUtenza || req.query.utenzaId,
+      documentTypes: req.query.documentTypes,
+      latestPerType:
+        req.query.latestPerType === "1" || req.query.latestPerType === "true",
+    });
+
+    return res.json({
+      success: true,
+      documents: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.viewGeneratedDocument = async (req, res, next) => {
+  try {
+    const document = await service.getGeneratedDocumentById(req.params.id, {
+      condominioId: req.query.condominioId,
+      utenzaId: req.query.idUtenza || req.query.utenzaId,
+    });
+
+    if (!document) {
+      return res.status(404).json({ error: "Documento non trovato." });
+    }
+
+    const buffer = await service.getGeneratedDocumentBuffer(document);
+
+    res.setHeader("Content-Type", document.mime_type || "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${document.filename}"`
+    );
+
+    return res.send(buffer);
+  } catch (error) {
+    next(error);
   }
 };
 

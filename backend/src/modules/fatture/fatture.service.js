@@ -11,10 +11,35 @@ const { launchBrowser } = require("../../utils/puppeteer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const pLimit = require("p-limit").default;
+const { PDFDocument } = require("pdf-lib");
+const {
+  getGeneratedDocumentById,
+  getLatestGeneratedDocument,
+  getPdfFromR2,
+  listGeneratedDocuments,
+  saveGeneratedDocument,
+} = require("../../utils/generatedDocuments");
 // const db = require(... your existing db helper ...)
 
 const DEFAULT_AI_PARSER_BASE_URL =
   "https://idromardi-ai-693191024735.europe-west1.run.app";
+let ripartizionePdfColumns = null;
+
+async function getRipartizionePdfColumns() {
+  if (ripartizionePdfColumns) return ripartizionePdfColumns;
+
+  const [columns] = await db.query(
+    `
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'ripartizione_pdfs'
+    `
+  );
+
+  ripartizionePdfColumns = new Set(columns.map((row) => row.COLUMN_NAME));
+  return ripartizionePdfColumns;
+}
 
 function joinUrl(baseUrl, pathname) {
   return `${String(baseUrl).replace(/\/+$/, "")}${pathname}`;
@@ -317,34 +342,56 @@ function deriveValoriFromLetture(letture = []) {
 exports.saveRipartizionePdfRecord = async ({
   idUtenza,
   condominioId,
+  fatturaId,
   periodKey,
   filename,
   filepath,
   trimestreLabel,
   dataLettura,
 }) => {
+  const columns = await getRipartizionePdfColumns();
+  const insertColumns = [
+    "id_utenza",
+    "condominio_id",
+    "period_key",
+    "filename",
+    "filepath",
+    "trimestre_label",
+    "data_lettura",
+  ];
+  const values = [
+    idUtenza,
+    condominioId || null,
+    periodKey,
+    filename,
+    filepath,
+    trimestreLabel || null,
+    dataLettura || null,
+  ];
+  const updateColumns = [
+    "condominio_id",
+    "filename",
+    "filepath",
+    "trimestre_label",
+    "data_lettura",
+  ];
+
+  if (columns.has("id_fattura")) {
+    insertColumns.splice(2, 0, "id_fattura");
+    values.splice(2, 0, fatturaId || null);
+    updateColumns.splice(1, 0, "id_fattura");
+  }
+
   await db.query(
     `
     INSERT INTO ripartizione_pdfs
-      (id_utenza, condominio_id, period_key, filename, filepath, trimestre_label, data_lettura)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (${insertColumns.join(", ")})
+    VALUES (${values.map(() => "?").join(", ")})
     ON DUPLICATE KEY UPDATE
-      condominio_id = VALUES(condominio_id),
-      filename = VALUES(filename),
-      filepath = VALUES(filepath),
-      trimestre_label = VALUES(trimestre_label),
-      data_lettura = VALUES(data_lettura),
+      ${updateColumns.map((column) => `${column} = VALUES(${column})`).join(",\n      ")},
       created_at = CURRENT_TIMESTAMP
     `,
-    [
-      idUtenza,
-      condominioId || null,
-      periodKey,
-      filename,
-      filepath,
-      trimestreLabel || null,
-      dataLettura || null,
-    ]
+    values
   );
 };
 
@@ -399,30 +446,34 @@ function getRipartizioneLogoUrl(logoUrl) {
 }
 
 function compareRipartizionePdfRows(a, b) {
-  const internoA = String(a?.Interno ?? "").trim();
-  const internoB = String(b?.Interno ?? "").trim();
+  const rowA = Number(a?.id_user ?? a?.id_utenza ?? 0);
+  const rowB = Number(b?.id_user ?? b?.id_utenza ?? 0);
 
-  if (internoA && !internoB) return -1;
-  if (!internoA && internoB) return 1;
+  if (rowA !== rowB) {
+    return rowA - rowB;
+  }
 
-  const internoCompare = internoA.localeCompare(internoB, "it", {
+  return String(a?.id_utenza ?? "").localeCompare(String(b?.id_utenza ?? ""), "it", {
     numeric: true,
     sensitivity: "base",
   });
-
-  if (internoCompare !== 0) {
-    return internoCompare;
-  }
-
-  return Number(a?.id_user ?? a?.id_utenza ?? 0) - Number(b?.id_user ?? b?.id_utenza ?? 0);
 }
 
-exports.getRipartizionePdfsByPeriod = async (periodKey, condominioId = null) => {
+exports.getRipartizionePdfsByPeriod = async (periodKey, condominioId = null, fatturaId = null) => {
+  const columns = await getRipartizionePdfColumns();
+  if (fatturaId && !columns.has("id_fattura")) {
+    return [];
+  }
+
   const params = [periodKey];
   const condominioFilter = condominioId ? "AND condominio_id = ?" : "";
+  const fatturaFilter = fatturaId ? "AND r.id_fattura = ?" : "";
 
   if (condominioId) {
     params.push(condominioId);
+  }
+  if (fatturaId) {
+    params.push(fatturaId);
   }
 
   const [rows] = await db.query(
@@ -436,7 +487,8 @@ exports.getRipartizionePdfsByPeriod = async (periodKey, condominioId = null) => 
       ON u.id = r.id_utenza
     WHERE r.period_key = ?
       ${condominioFilter ? "AND r.condominio_id = ?" : ""}
-    ORDER BY r.id_utenza ASC
+      ${fatturaFilter}
+    ORDER BY u.id_user ASC, r.id_utenza ASC
     `,
     params
   );
@@ -444,7 +496,12 @@ exports.getRipartizionePdfsByPeriod = async (periodKey, condominioId = null) => 
   return rows.sort(compareRipartizionePdfRows);
 };
 
-exports.listRipartizionePdfs = async ({ condominioId } = {}) => {
+exports.listRipartizionePdfs = async ({ condominioId, fatturaId } = {}) => {
+  const columns = await getRipartizionePdfColumns();
+  if (fatturaId && !columns.has("id_fattura")) {
+    return [];
+  }
+
   const params = [];
   const where = [];
 
@@ -453,12 +510,18 @@ exports.listRipartizionePdfs = async ({ condominioId } = {}) => {
     params.push(condominioId);
   }
 
+  if (fatturaId) {
+    where.push("r.id_fattura = ?");
+    params.push(fatturaId);
+  }
+
   const [rows] = await db.query(
     `
     SELECT
       r.id,
       r.id_utenza,
       r.condominio_id,
+      ${columns.has("id_fattura") ? "r.id_fattura," : ""}
       r.period_key,
       r.filename,
       r.filepath,
@@ -479,7 +542,7 @@ exports.listRipartizionePdfs = async ({ condominioId } = {}) => {
       ON u.id = r.id_utenza
 
     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-    ORDER BY r.period_key DESC, u.Interno ASC, u.id_user ASC
+    ORDER BY r.period_key DESC, u.id_user ASC, r.id_utenza ASC
     `,
     params
   );
@@ -490,12 +553,21 @@ exports.listRipartizionePdfs = async ({ condominioId } = {}) => {
   });
 };
 
-exports.getRipartizionePdfById = async (id, condominioId = null) => {
+exports.getRipartizionePdfById = async (id, condominioId = null, fatturaId = null) => {
+  const columns = await getRipartizionePdfColumns();
+  if (fatturaId && !columns.has("id_fattura")) {
+    return null;
+  }
+
   const params = [id];
   const condominioFilter = condominioId ? "AND condominio_id = ?" : "";
+  const fatturaFilter = fatturaId ? "AND id_fattura = ?" : "";
 
   if (condominioId) {
     params.push(condominioId);
+  }
+  if (fatturaId) {
+    params.push(fatturaId);
   }
 
   const [rows] = await db.query(
@@ -504,6 +576,7 @@ exports.getRipartizionePdfById = async (id, condominioId = null) => {
       id,
       id_utenza,
       condominio_id,
+      ${columns.has("id_fattura") ? "id_fattura," : ""}
       period_key,
       filename,
       filepath,
@@ -513,6 +586,7 @@ exports.getRipartizionePdfById = async (id, condominioId = null) => {
     FROM ripartizione_pdfs
     WHERE id = ?
       ${condominioFilter}
+      ${fatturaFilter}
     LIMIT 1
     `,
     params
@@ -531,6 +605,7 @@ async function processRipartizionePdfJob({
   dataLettura,
   logoUrl,
   condominioId,
+  fatturaId,
   periodKey,
 }) {
   await db.query(
@@ -556,6 +631,7 @@ async function processRipartizionePdfJob({
   let processed = 0;
   let saved = 0;
   let failed = 0;
+  const savedPdfParts = [];
 
   let browser;
 
@@ -593,11 +669,35 @@ async function processRipartizionePdfJob({
         await exports.saveRipartizionePdfRecord({
           idUtenza,
           condominioId,
+          fatturaId,
           periodKey,
           filename,
           filepath: relativePath,
           trimestreLabel,
           dataLettura,
+        });
+
+        await saveGeneratedDocument({
+          condominioId,
+          fatturaId,
+          utenzaId: idUtenza,
+          documentType: "bolletta_utente",
+          filename,
+          periodLabel: trimestreLabel || periodKey,
+          buffer: pdfBuffer,
+          replace: Boolean(fatturaId),
+          metadata: {
+            periodKey,
+            periodLabel: trimestreLabel || periodKey,
+            trimestreLabel,
+            dataLettura,
+            idUtenza,
+          },
+        });
+
+        savedPdfParts.push({
+          idUtenza,
+          buffer: pdfBuffer,
         });
 
         saved += 1;
@@ -618,6 +718,28 @@ async function processRipartizionePdfJob({
           [processed, saved, failed, jobId]
         );
       }
+    }
+
+    if (savedPdfParts.length > 0) {
+      const orderedParts = savedPdfParts.sort((a, b) => {
+        const aRow = rowsByUtenza[a.idUtenza]?.[0];
+        const bRow = rowsByUtenza[b.idUtenza]?.[0];
+        const aOrder = Number(aRow?.utenza?.id_user ?? a.idUtenza ?? 0);
+        const bOrder = Number(bRow?.utenza?.id_user ?? b.idUtenza ?? 0);
+        return aOrder - bOrder;
+      });
+      const completeBuffer = await mergePdfBuffers(orderedParts.map((item) => item.buffer));
+
+      await saveGeneratedDocument({
+        condominioId,
+        fatturaId,
+        documentType: "bollette_complete",
+        filename: `bollette_ripartizione_${periodKey}.pdf`,
+        periodLabel: trimestreLabel || periodKey,
+        buffer: completeBuffer,
+        replace: Boolean(fatturaId),
+        metadata: { periodKey, periodLabel: trimestreLabel || periodKey, trimestreLabel, dataLettura },
+      });
     }
 
     await db.query(
@@ -701,6 +823,7 @@ exports.startRipartizionePdfJob = async ({
   dataLettura,
   logoUrl,
   condominioId,
+  fatturaId,
 }) => {
   if (!Array.isArray(righe) || righe.length === 0) {
     const err = new Error("Nessuna riga disponibile per generare i PDF");
@@ -731,6 +854,7 @@ exports.startRipartizionePdfJob = async ({
     dataLettura,
     logoUrl,
     condominioId,
+    fatturaId,
     periodKey,
   }).catch(async (error) => {
     console.error("Errore job ripartizione PDF:", error);
@@ -760,6 +884,7 @@ exports.exportRipartizioniPerUtenza = async ({
   dataLettura,
   logoUrl,
   condominioId,
+  fatturaId,
 }) => {
   if (!Array.isArray(righe) || righe.length === 0) {
     const err = new Error("Nessuna riga disponibile per generare i PDF");
@@ -842,6 +967,7 @@ exports.exportRipartizioniPerUtenza = async ({
           await exports.saveRipartizionePdfRecord({
             idUtenza,
             condominioId,
+            fatturaId,
             periodKey: periodFolder,
             filename,
             filepath: relativePath,
@@ -3238,6 +3364,26 @@ exports.getImportedDocumentById = async function (id) {
 
   return { ok: true, document: doc };
 }
+
+async function mergePdfBuffers(buffers) {
+  const mergedPdf = await PDFDocument.create();
+
+  for (const buffer of buffers) {
+    const sourcePdf = await PDFDocument.load(buffer);
+    const copiedPages = await mergedPdf.copyPages(
+      sourcePdf,
+      sourcePdf.getPageIndices()
+    );
+    copiedPages.forEach((page) => mergedPdf.addPage(page));
+  }
+
+  return Buffer.from(await mergedPdf.save());
+}
+
+exports.getLatestGeneratedDocument = getLatestGeneratedDocument;
+exports.getGeneratedDocumentById = getGeneratedDocumentById;
+exports.getGeneratedDocumentBuffer = async (document) => getPdfFromR2(document.r2_key);
+exports.listGeneratedDocuments = listGeneratedDocuments;
 
 exports.deleteImportedDocument = async function (id) {
   const conn = await db.getConnection();

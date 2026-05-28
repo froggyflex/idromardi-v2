@@ -165,6 +165,7 @@ export default function CondominioFatturePage() {
 
 
     const [pdfPeriods, setPdfPeriods] = useState<Record<string, any[]>>({});
+    const [generatedDocuments, setGeneratedDocuments] = useState<any[]>([]);
     const [openPeriod, setOpenPeriod] = useState<string | null>(null);
     const [pdfSearch, setPdfSearch] = useState("");
 
@@ -207,15 +208,33 @@ export default function CondominioFatturePage() {
     }, [importedSearch, importedStatusFilter]);
 
     async function loadRipartizionePdfs() {
-      if (!condominioId) {
+      if (!condominioId || !fatturaId) {
         setPdfPeriods({});
         return;
       }
 
       const { data } = await api.get("/fatture/ripartizione-pdfs", {
-        params: { condominioId },
+        params: { condominioId, fatturaId },
       });
       setPdfPeriods(data.periods || {});
+    }
+
+    async function loadGeneratedDocuments() {
+      if (!condominioId || !fatturaId) {
+        setGeneratedDocuments([]);
+        return;
+      }
+
+      const { data } = await api.get("/fatture/generated-documents", {
+        params: {
+          condominioId,
+          fatturaId,
+          documentTypes: "prospetto,bollette_complete",
+          latestPerType: 1,
+        },
+      });
+
+      setGeneratedDocuments(data.documents || []);
     }
 
     function viewSinglePdf(id: number) {
@@ -223,6 +242,10 @@ export default function CondominioFatturePage() {
 
       if (condominioId) {
         params.set("condominioId", String(condominioId));
+      }
+
+      if (fatturaId) {
+        params.set("fatturaId", String(fatturaId));
       }
 
       window.open(
@@ -238,14 +261,31 @@ export default function CondominioFatturePage() {
         params.set("condominioId", String(condominioId));
       }
 
+      if (fatturaId) {
+        params.set("fatturaId", String(fatturaId));
+      }
+
       window.open(
         `${api.defaults.baseURL}/fatture/ripartizione-pdfs/period/${periodKey}/view-all?${params.toString()}`,
         "_blank"
       );
     }
 
+    function viewGeneratedDocument(id: string) {
+      const params = new URLSearchParams();
+
+      if (condominioId) {
+        params.set("condominioId", String(condominioId));
+      }
+
+      window.open(
+        `${api.defaults.baseURL}/fatture/generated-documents/${id}/view?${params.toString()}`,
+        "_blank"
+      );
+    }
+
     useEffect(() => {
-      if (!condominioId) {
+      if (!condominioId || !fatturaId) {
         setPdfPeriods({});
         setOpenPeriod(null);
         return;
@@ -255,7 +295,7 @@ export default function CondominioFatturePage() {
 
       api
         .get("/fatture/ripartizione-pdfs", {
-          params: { condominioId },
+          params: { condominioId, fatturaId },
         })
         .then(({ data }) => {
           if (!cancelled) {
@@ -273,7 +313,11 @@ export default function CondominioFatturePage() {
       return () => {
         cancelled = true;
       };
-    }, [condominioId]);
+    }, [condominioId, fatturaId]);
+
+    useEffect(() => {
+      loadGeneratedDocuments().catch(() => setGeneratedDocuments([]));
+    }, [condominioId, fatturaId]);
 
    const years: any[] = [];
    years.length = 0; // clear array while keeping reference
@@ -1103,6 +1147,9 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
     // Open in new tab
     const url = `/fatture/${fatturaId}/prospetto.pdf`;
     window.open(api.defaults.baseURL + url, "_blank");
+    window.setTimeout(() => {
+      loadGeneratedDocuments().catch(() => undefined);
+    }, 2500);
   }
 
 
@@ -1314,6 +1361,7 @@ const pollRipartizioneJob = (jobId: number) => {
         setExportMessage(`PDF generati: ${processed}/${total}. Errori: ${failed}.`);
 
         await loadRipartizionePdfs?.();
+        await loadGeneratedDocuments?.();
       }
 
       if (data.status === "error") {
@@ -1370,6 +1418,7 @@ const handleExportPdf = async () => {
       dataLettura: "12/01/2026",
       logoUrl: logoUrl || undefined,
       condominioId,
+      fatturaId,
     });
 
     if (!data.jobId) {
@@ -2487,6 +2536,32 @@ return (
                     )}
                   </button>
 
+                  <button
+                    onClick={() => fatturaId && onStampaProspetto(String(fatturaId))}
+                    disabled={!fatturaId}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm transition ${
+                      !fatturaId
+                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                        : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+                    }`}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
+                      />
+                    </svg>
+                    Genera prospetto
+                  </button>
+
                   {/* Create Fattura */}
                   <button
                     onClick={() => {
@@ -2892,6 +2967,88 @@ return (
                           </table>
                       </div>
                      <br></br>                
+                    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-900">
+                            Documenti generati salvati
+                          </h3>
+                          <p className="mt-1 text-sm text-slate-500">
+                            Prospetto e bollette complete salvati su archivio permanente.
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={loadGeneratedDocuments}
+                          className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                        >
+                          Aggiorna
+                        </button>
+                      </div>
+
+                      {generatedDocuments.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
+                          <p className="text-sm font-semibold text-slate-700">
+                            Nessun documento salvato.
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Genera un prospetto o le bollette per archiviarli.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="overflow-hidden rounded-xl border border-slate-200">
+                          <table className="w-full text-sm">
+                            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                              <tr>
+                                <th className="px-4 py-3 text-left">Tipo</th>
+                                <th className="px-4 py-3 text-left">Periodo</th>
+                                <th className="px-4 py-3 text-left">File</th>
+                                <th className="px-4 py-3 text-left">Data</th>
+                                <th className="px-4 py-3 text-right">Azione</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {generatedDocuments.map((doc: any) => (
+                                <tr
+                                  key={doc.id}
+                                  className="border-t border-slate-100 transition hover:bg-slate-50"
+                                >
+                                  <td className="px-4 py-3 font-semibold text-slate-800">
+                                    {doc.document_type === "prospetto"
+                                      ? "Prospetto"
+                                      : doc.document_type === "bollette_complete"
+                                        ? "Bollette complete"
+                                        : doc.document_type}
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-600">
+                                    {doc.period_label || "-"}
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-600">
+                                    {doc.filename}
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-600">
+                                    {doc.created_at
+                                      ? new Date(doc.created_at).toLocaleString("it-IT")
+                                      : "-"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() => viewGeneratedDocument(doc.id)}
+                                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                    >
+                                      Visualizza PDF
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </section>
+
+                    <br></br>
                     {/* GENERATED PDFS */}
                     <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                       <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

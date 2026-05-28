@@ -44,6 +44,12 @@ router.post("/imported-documents/:id/parse", controller.parseImportedDocument);
 router.put("/imported-documents/:id/parsed-result", controller.updateImportedDocumentParsedResult);
 router.post("/imported-documents/:id/link-session", controller.linkImportedDocumentToSession);
 router.post("/export-ripartizione-pdf",controller.exportRipartizionePdf);
+router.get("/generated-documents", controller.listGeneratedDocuments);
+router.get("/generated-documents/:id/view", controller.viewGeneratedDocument);
+router.get("/utenze/:idUtenza/generated-documents", (req, res, next) => {
+  req.query.idUtenza = req.params.idUtenza;
+  controller.listGeneratedDocuments(req, res, next);
+});
 router.get("/ripartizione-pdfs", controller.listRipartizionePdfs);
 
 router.get(
