@@ -1449,6 +1449,53 @@ const quotaFissa = Number(parsedQF ?? session?.tot_qf ?? 0);
 const ivaBase = impConsumo + depFogValue + quotaFissa;
 const varieValue = Number(varie || 0);
 
+const numberOrNull = (value: any) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getLiveLetturaAttuale = (row: any) =>
+  numberOrNull(row?.attuale?.valore_lettura) ??
+  numberOrNull(row?.riga?.lettura_attuale);
+
+const getLiveLetturaPrecedente = (row: any) =>
+  numberOrNull(row?.precedente?.valore_lettura) ??
+  numberOrNull(row?.riga?.lettura_precedente);
+
+const getLiveStatoAttuale = (row: any) =>
+  row?.attuale?.stato_lettura ?? row?.riga?.stato_attuale ?? "-";
+
+const getLiveRowConsumption = (row: any) => {
+  const attuale = getLiveLetturaAttuale(row);
+  const precedente = getLiveLetturaPrecedente(row);
+
+  if (attuale !== null && precedente !== null) {
+    return attuale - precedente;
+  }
+
+  return Number(row?.riga?.consumo_totale || 0);
+};
+
+const hasStaleCalculatedReadings = (row: any) => {
+  const riga = row?.riga;
+  if (!riga) return false;
+
+  const liveAttuale = numberOrNull(row?.attuale?.valore_lettura);
+  const livePrecedente = numberOrNull(row?.precedente?.valore_lettura);
+
+  const savedAttuale = numberOrNull(riga?.lettura_attuale);
+  const savedPrecedente = numberOrNull(riga?.lettura_precedente);
+  const liveStato = row?.attuale?.stato_lettura ?? null;
+  const savedStato = riga?.stato_attuale ?? null;
+
+  return (
+    (liveAttuale !== null && savedAttuale !== null && liveAttuale !== savedAttuale) ||
+    (livePrecedente !== null && savedPrecedente !== null && livePrecedente !== savedPrecedente) ||
+    (liveStato !== null && savedStato !== null && liveStato !== savedStato)
+  );
+};
+
 
 
 const totals = useMemo(() => {
@@ -1456,7 +1503,7 @@ const totals = useMemo(() => {
     (acc: any, r: any) => {
       const row = r.riga || {};
 
-      acc.consumo += Number(row.consumo_totale || 0);
+      acc.consumo += getLiveRowConsumption(r);
       acc.acq += Number(row.imp_acquedotto || 0);
       acc.fog += Number(row.imp_fognatura || 0);
       acc.dep += Number(row.imp_depurazione || 0);
@@ -2780,6 +2827,7 @@ return (
                                     
                                     const rowKey = r.id ?? idx;
                                     const isExpanded = !!expandedRows[rowKey];
+                                    const staleReadings = hasStaleCalculatedReadings(r);
 
                                     const utenzaKey = String(r.utenza?.id ?? "").trim();
 
@@ -2800,7 +2848,9 @@ return (
                                         <tr
                                           onClick={() => toggleRow(rowKey)}
                                           className={`border-t cursor-pointer transition-colors ${
-                                            !isRowTotalOk(r)
+                                            staleReadings
+                                              ? "bg-orange-50 hover:bg-orange-100"
+                                              : !isRowTotalOk(r)
                                               ? "bg-amber-50 hover:bg-amber-100"
                                               : isExpanded
                                               ? "bg-sky-50"
@@ -2811,21 +2861,26 @@ return (
                                           <td className="p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
                                           <td className="p-2 text-center">
                                             {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                                            {staleReadings && (
+                                              <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">
+                                                Da ricalcolare
+                                              </div>
+                                            )}
                                           </td>
                                           <td className="p-2 text-center">{r.utenza?.Isolato ?? ""}</td>
                                           <td className="p-2 text-center">{r.utenza?.Scala ?? ""}</td>
                                           <td className="p-2 text-center">{r.utenza?.Interno ?? ""}</td>
                                           <td className="p-2 text-center">
-                                            {r.riga?.lettura_attuale ?? r.attuale?.valore_lettura ?? "-"}
+                                            {getLiveLetturaAttuale(r) ?? "-"}
                                           </td>
                                           <td className="p-2 text-center">
-                                            {r.riga?.lettura_precedente ?? r.precedente?.valore_lettura ?? "-"}
+                                            {getLiveLetturaPrecedente(r) ?? "-"}
                                           </td>
                                           <td className="p-2 text-center">
-                                            {r.riga?.stato_attuale ?? r.attuale?.stato_lettura ?? "-"}
+                                            {getLiveStatoAttuale(r)}
                                           </td>
                                           <td className="p-2 text-center">
-                                            {Number(r.riga?.consumo_totale ?? 0).toFixed(0)}
+                                            {Number(getLiveRowConsumption(r) ?? 0).toFixed(0)}
                                           </td>
                                           <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
                                           <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
@@ -2996,42 +3051,32 @@ return (
                           </p>
                         </div>
                       ) : (
-                        <div className="overflow-hidden rounded-xl border border-slate-200">
-                          <table className="w-full text-sm">
-                            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                              <tr>
-                                <th className="px-4 py-3 text-left">Tipo</th>
-                                <th className="px-4 py-3 text-left">Periodo</th>
-                                <th className="px-4 py-3 text-left">File</th>
-                                <th className="px-4 py-3 text-left">Data</th>
-                                <th className="px-4 py-3 text-right">Azione</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {generatedDocuments.map((doc: any) => (
-                                <tr
-                                  key={doc.id}
-                                  className="border-t border-slate-100 transition hover:bg-slate-50"
-                                >
-                                  <td className="px-4 py-3 font-semibold text-slate-800">
-                                    {doc.document_type === "prospetto"
-                                      ? "Prospetto"
-                                      : doc.document_type === "bollette_complete"
-                                        ? "Bollette complete"
-                                        : doc.document_type}
-                                  </td>
-                                  <td className="px-4 py-3 text-slate-600">
-                                    {doc.period_label || "-"}
-                                  </td>
-                                  <td className="px-4 py-3 text-slate-600">
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          {generatedDocuments.map((doc: any) => {
+                            const tipo =
+                              doc.document_type === "prospetto"
+                                ? "Prospetto"
+                                : doc.document_type === "bollette_complete"
+                                  ? "Bollette complete"
+                                  : doc.document_type;
+
+                            return (
+                              <div
+                                key={doc.id}
+                                className="flex min-w-0 items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-semibold text-slate-800">{tipo}</span>
+                                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                      {doc.period_label || "-"}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 truncate text-sm text-slate-600">
                                     {doc.filename}
-                                  </td>
-                                  <td className="px-4 py-3 text-slate-600">
-                                    {doc.created_at
-                                      ? new Date(doc.created_at).toLocaleString("it-IT")
-                                      : "-"}
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
+                                  </div>
+                                </div>
+                                <div className="shrink-0">
                                     <button
                                       type="button"
                                       onClick={() => viewGeneratedDocument(doc.id)}
@@ -3039,11 +3084,10 @@ return (
                                     >
                                       Visualizza PDF
                                     </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </section>
@@ -3093,8 +3137,7 @@ return (
                                 String(file.Nome || "").toLowerCase().includes(q) ||
                                 String(file.Cognome || "").toLowerCase().includes(q) ||
                                 String(file.Interno || "").toLowerCase().includes(q) ||
-                                String(file.filename || "").toLowerCase().includes(q) ||
-                                String(file.data_lettura || "").toLowerCase().includes(q)
+                                String(file.filename || "").toLowerCase().includes(q)
                               );
                             });
 
@@ -3155,69 +3198,51 @@ return (
                                         setPdfSearch(e.target.value);
                                         setPdfPage(1);
                                       }}
-                                      placeholder="Cerca per ID utenza, file o data..."
+                                      placeholder="Cerca per utenza, interno o file..."
                                       className="mb-4 w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none transition focus:border-slate-500"
                                     />
 
-                                    <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
-                                      <table className="w-full text-sm">
-                                        <thead className="sticky top-0 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                                          <tr>
-                                            <th className="px-4 py-3 text-left">Utenza</th>
-                                            <th className="px-4 py-3 text-left">Interno</th>
-                                            <th className="px-4 py-3 text-left">File</th>
-                                            <th className="px-4 py-3 text-left">Data lettura</th>
-                                            <th className="px-4 py-3 text-right">Azione</th>
-                                          </tr>
-                                        </thead>
+                                    <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
+                                      <div className="sticky top-0 grid grid-cols-[minmax(180px,260px)_80px_minmax(240px,420px)_150px] gap-4 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                        <div>Utenza</div>
+                                        <div>Interno</div>
+                                        <div>File</div>
+                                        <div className="text-right">Azione</div>
+                                      </div>
 
-                                        <tbody>
-                                          
-                                          {pagedFiles.map((file: any) => (
-                                            <tr
-                                              key={file.id}
-                                              className="border-t border-slate-100 transition hover:bg-slate-50"
-                                            >
-                                              <td className="px-4 py-3 font-semibold text-slate-800">
-                                                {file.Nome} {file.Cognome ? `${file.Cognome}` : ""}
-                                              </td>
-                                              <td className="px-4 py-3 font-semibold text-slate-800">
-                                                {file.Interno}
-                                              </td>
-                                              <td className="px-4 py-3 text-slate-600">
-                                                {file.filename}
-                                              </td>
-
-                                              <td className="px-4 py-3 text-slate-600">
-                                                {file.data_lettura || "-"}
-                                              </td>
-
-                                              <td className="px-4 py-3 text-right">
-                                                <button
-                                                  type="button"
-                                                  onClick={() => viewSinglePdf(file.id)}
-                                                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                                                >
-                                                  Visualizza PDF
-                                                </button>
-                                              </td>
-                                            </tr>
-                                          ))}
-
-                                          {!filteredFiles.length && (
-                                            <tr>
-                                              <td
-                                                colSpan={4}
-                                                className="px-4 py-8 text-center text-sm text-slate-500"
+                                      <div className="divide-y divide-slate-100">
+                                        {pagedFiles.map((file: any) => (
+                                          <div
+                                            key={file.id}
+                                            className="grid grid-cols-[minmax(180px,260px)_80px_minmax(240px,420px)_150px] items-center gap-4 px-4 py-3 text-sm transition hover:bg-slate-50"
+                                          >
+                                            <div className="truncate font-semibold text-slate-800">
+                                              {file.Nome} {file.Cognome ? `${file.Cognome}` : ""}
+                                            </div>
+                                            <div className="font-semibold text-slate-800">
+                                              {file.Interno}
+                                            </div>
+                                            <div className="truncate text-slate-600">
+                                              {file.filename}
+                                            </div>
+                                            <div className="text-right">
+                                              <button
+                                                type="button"
+                                                onClick={() => viewSinglePdf(file.id)}
+                                                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                                               >
-                                                Nessuna bolletta trovata.
-                                              </td>
-                                            </tr>
-                                          )}
-                                        </tbody>
-                                      </table>
+                                                Visualizza PDF
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))}
 
-
+                                        {!filteredFiles.length && (
+                                          <div className="px-4 py-8 text-center text-sm text-slate-500">
+                                            Nessuna bolletta trovata.
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
                                       <div className="mt-4 flex items-center justify-between text-sm">
                                       <div className="text-slate-500">

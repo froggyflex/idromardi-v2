@@ -18,6 +18,134 @@ import { it } from "date-fns/locale/it";
 
 registerLocale("it", it);
 
+function formatManualDate(date: Date | null): string {
+  if (!date) return "";
+
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+
+  return `${day}/${month}/${year}`;
+}
+
+function parseManualDate(value: string): Date | null {
+  const text = value.trim();
+  if (!text) return null;
+
+  let day: number;
+  let month: number;
+  let year: number;
+
+  const european = text.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/);
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+
+  if (european) {
+    day = Number(european[1]);
+    month = Number(european[2]);
+    year = Number(european[3]);
+  } else if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  } else {
+    return null;
+  }
+
+  if (year < 100) {
+    year += year >= 70 ? 1900 : 2000;
+  }
+
+  const parsed = new Date(year, month - 1, day, 12, 0, 0);
+  const valid =
+    parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day;
+
+  return valid ? parsed : null;
+}
+
+type ManualDatePickerProps = {
+  selected: Date | null;
+  onChange: (date: Date | null) => void;
+  disabled?: boolean;
+  placeholder?: string;
+};
+
+function ManualDatePicker({
+  selected,
+  onChange,
+  disabled = false,
+  placeholder = "gg/mm/aaaa",
+}: ManualDatePickerProps) {
+  const [text, setText] = useState(formatManualDate(selected));
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setText(formatManualDate(selected));
+    setHasError(false);
+  }, [selected]);
+
+  function commitManualValue(value: string) {
+    const nextText = value.trim();
+
+    if (!nextText) {
+      setText("");
+      setHasError(false);
+      onChange(null);
+      return;
+    }
+
+    const parsed = parseManualDate(nextText);
+
+    if (!parsed) {
+      setHasError(true);
+      return;
+    }
+
+    setText(formatManualDate(parsed));
+    setHasError(false);
+    onChange(parsed);
+  }
+
+  return (
+    <div>
+      <DatePicker
+        selected={selected}
+        onChange={(date: Date | null) => {
+          setText(formatManualDate(date));
+          setHasError(false);
+          onChange(date);
+        }}
+        onChangeRaw={(event) => {
+          const value = (event?.target as HTMLInputElement | null)?.value ?? "";
+          setText(value);
+          setHasError(false);
+        }}
+        onBlur={() => commitManualValue(text)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitManualValue(text);
+          }
+        }}
+        value={text}
+        locale="it"
+        dateFormat="dd/MM/yyyy"
+        placeholderText={placeholder}
+        className={`input w-full ${hasError ? "border-red-400 ring-2 ring-red-100" : ""}`}
+        disabled={disabled}
+        isClearable={!disabled}
+        shouldCloseOnSelect
+      />
+      {hasError && (
+        <div className="mt-1 text-xs font-medium text-red-600">
+          Usa il formato gg/mm/aaaa.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LetturePage() {
 
   /* ---------------- PARAMS ---------------- */
@@ -199,6 +327,46 @@ export default function LetturePage() {
 
   /* ---------------- GRID UPDATE ---------------- */
 
+  function latestHistory(row: GridRow) {
+    return row.history?.[0] ?? null;
+  }
+
+  function formatPeriodLabel(history: GridRow["history"][number] | null) {
+    if (!history) return "-";
+
+    const month = monthNames[Number(history.period_month) - 1] ?? history.period_month;
+    return `${month} ${history.period_year}`;
+  }
+
+  function isEvidentState(value?: string | null) {
+    return ["Y", "C"].includes(String(value || "").toUpperCase());
+  }
+
+  function stateBadgeClass(value?: string | null) {
+    const code = String(value || "").toUpperCase();
+
+    if (code === "Y") {
+      return "border-red-200 bg-red-50 text-red-700";
+    }
+
+    if (code === "C") {
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    }
+
+    return "border-slate-200 bg-slate-100 text-slate-600";
+  }
+
+  function getPossibleConsumption(row: GridRow) {
+    const previous = latestHistory(row)?.valore_lettura;
+    const current = row.current.valore;
+
+    if (previous === null || previous === undefined || current === null || current === undefined) {
+      return "";
+    }
+
+    return String(Number(current) - Number(previous));
+  }
+
   function updateRow(index:number, field:"valore" | "stato", value:string) {
 
     const updated = [...grid];
@@ -212,6 +380,20 @@ export default function LetturePage() {
     setGrid(updated);
     setDirty(true);
 
+  }
+
+  function updateConsumption(index: number, value: string) {
+    const updated = [...grid];
+    const previous = latestHistory(updated[index])?.valore_lettura;
+
+    if (previous === null || previous === undefined || value === "") {
+      updated[index].current.valore = null;
+    } else {
+      updated[index].current.valore = Number(previous) + Number(value);
+    }
+
+    setGrid(updated);
+    setDirty(true);
   }
 
   /* ---------------- SAVE ---------------- */
@@ -313,12 +495,9 @@ export default function LetturePage() {
             Apri periodo
           </label>
 
-          <DatePicker
+          <ManualDatePicker
             selected={triggerDate}
             onChange={(date: Date | null) => setTriggerDate(date)}
-            locale="it"
-            dateFormat="dd/MM/yyyy"
-            className="input w-full"
             disabled={loading}
           />
         </div>
@@ -358,15 +537,12 @@ export default function LetturePage() {
               Lettura Operatore
             </label>
 
-            <DatePicker
+            <ManualDatePicker
               selected={dataOperatore}
               onChange={(date: Date | null) => {
                 setDataOperatore(date);
                 setDirty(true);
               }}
-              locale="it"
-              dateFormat="dd/MM/yyyy"
-              className="input w-full"
               disabled={loading || session?.stato === "CHIUSA"}
             />
           </div>
@@ -378,15 +554,12 @@ export default function LetturePage() {
               Casa Idrica
             </label>
 
-            <DatePicker
+            <ManualDatePicker
               selected={dataCasa}
               onChange={(date: Date | null) => {
                 setDataCasa(date);
                 setDirty(true);
               }}
-              locale="it"
-              dateFormat="dd/MM/yyyy"
-              className="input w-full"
               disabled={loading || session?.stato === "CHIUSA"}
             />
           </div>
@@ -425,145 +598,153 @@ export default function LetturePage() {
 
       <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden">
         <div className="overflow-auto max-h-[calc(100vh-260px)]">
-          <table className="w-full min-w-[1200px] text-sm border-separate border-spacing-0">
+          <table className="w-full min-w-[1400px] text-sm border-separate border-spacing-0">
             <thead className="sticky top-0 z-20 bg-slate-100">
               <tr className="text-slate-700">
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
                   Id
                 </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
-                  Utente
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Utente / Contatore
                 </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
                   Interno
                 </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
-                  Scala
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Lettura attuale
                 </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
-                  Matricola Cont.
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Consumo
                 </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0  ">
-                  Valore Attuale
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Stato attuale
                 </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0 ">
-                  Stato
-                </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0  ">
-                  Periodo Prec.
-                </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0  ">
-                  Valore Prec.
-                </th>
-                <th className="p-3 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0  ">
-                  Stato Prec.
-                </th>
+                {[1, 2, 3, 4].map((slot) => (
+                  <th
+                    key={slot}
+                    className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-50 sticky top-0"
+                  >
+                    Prec. {slot}
+                  </th>
+                ))}
               </tr>
             </thead>
 
             <tbody>
-              {grid.map((row, i) => (
-                <tr
-                  key={row.utenza.id}
-                  className="odd:bg-white even:bg-slate-50/50 hover:bg-blue-50 transition-colors"
-                >
-                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 font-medium whitespace-nowrap">
-                    {row.utenza.id_user}
-                  </td>
+              {grid.map((row, i) => {
+                const previous = latestHistory(row);
+                const hasEvidentHistory = row.history.some((h) =>
+                  isEvidentState(h.stato_lettura)
+                );
+                const currentStateEvident = isEvidentState(row.current.stato);
 
-                  <td className="p-3 align-top border-b border-slate-100">
-                    <div className="font-medium text-slate-800 leading-tight">
-                      {row.utenza.Nome} {row.utenza.Cognome}
-                    </div>
-                  </td>
+                return (
+                  <tr
+                    key={row.utenza.id}
+                    className={`transition-colors hover:bg-blue-50 ${
+                      hasEvidentHistory || currentStateEvident
+                        ? "bg-amber-50/50"
+                        : "odd:bg-white even:bg-slate-50/50"
+                    }`}
+                  >
+                    <td className="px-3 py-2 align-middle border-b border-slate-100 text-slate-700 font-medium whitespace-nowrap">
+                      {row.utenza.id_user}
+                    </td>
 
-                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 whitespace-nowrap">
-                    {row.utenza.Interno || "-"}
-                  </td>
-                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 whitespace-nowrap">
-                    {row.utenza.Scala || "-"}
-                  </td>
-                  <td className="p-3 align-top border-b border-slate-100 text-slate-700 whitespace-nowrap">
-                    {row.utenza.Matricola_Contatore || "-"}
-                  </td>
-                  <td className="p-3 align-top border-b border-slate-100">
-                    <input
-                      type="number"
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
-                      disabled={session.stato === "CHIUSA"}
-                      value={row.current.valore ?? ""}
-                      onChange={(e) => updateRow(i, "valore", e.target.value)}
-                      placeholder="Inserisci valore"
-                    />
-                  </td>
+                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                      <div className="font-semibold text-slate-800 leading-tight">
+                        {row.utenza.Nome} {row.utenza.Cognome}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                        <span>Scala {row.utenza.Scala || "-"}</span>
+                        <span>Mat. {row.utenza.Matricola_Contatore || "-"}</span>
+                      </div>
+                    </td>
 
-                  <td className="p-3 align-top border-b border-slate-100">
-                    <select
-                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
-                      disabled={session.stato === "CHIUSA"}
-                      value={row.current.stato}
-                      onChange={(e) => updateRow(i, "stato", e.target.value)}
-                    >
-                      {states.map((s) => (
-                        <option key={s.codice} value={s.codice}>
-                          {s.codice} - {s.descrizione}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
+                    <td className="px-3 py-2 align-middle border-b border-slate-100 text-slate-700 whitespace-nowrap">
+                      {row.utenza.Interno || "-"}
+                    </td>
 
-                  <td className="p-3 align-top border-b border-slate-100 text-xs text-slate-500">
-                    <div className="space-y-1">
-                      {row.history.length > 0 ? (
-                        row.history.map((h, idx) => (
-                          <div
-                            key={idx}
-                            className="rounded-md bg-slate-100 px-2 py-1 whitespace-nowrap"
-                          >
-                            {h.period_month}/{h.period_year}
-                          </div>
-                        ))
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
-                    </div>
-                  </td>
+                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                      <input
+                        type="number"
+                        className="h-9 w-28 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
+                        disabled={session.stato === "CHIUSA"}
+                        value={row.current.valore ?? ""}
+                        onChange={(e) => updateRow(i, "valore", e.target.value)}
+                        placeholder="Lettura"
+                      />
+                    </td>
 
-                  <td className="p-3 align-top border-b border-slate-100 text-xs text-slate-500">
-                    <div className="space-y-1">
-                      {row.history.length > 0 ? (
-                        row.history.map((h, idx) => (
-                          <div
-                            key={idx}
-                            className="rounded-md bg-slate-100 px-2 py-1 whitespace-nowrap"
-                          >
-                            {h.valore_lettura ?? "-"}
-                          </div>
-                        ))
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
-                    </div>
-                  </td>
+                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                      <input
+                        type="number"
+                        className="h-9 w-24 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
+                        disabled={session.stato === "CHIUSA" || !previous}
+                        value={getPossibleConsumption(row)}
+                        onChange={(e) => updateConsumption(i, e.target.value)}
+                        placeholder="mc"
+                      />
+                    </td>
 
-                  <td className="p-3 align-top border-b border-slate-100 text-xs text-slate-500">
-                    <div className="space-y-1">
-                      {row.history.length > 0 ? (
-                        row.history.map((h, idx) => (
-                          <div
-                            key={idx}
-                            className="rounded-md bg-slate-100 px-2 py-1 whitespace-nowrap"
-                          >
-                            {h.stato_lettura || "-"}
-                          </div>
-                        ))
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                      <select
+                        className={`h-9 w-36 rounded-lg border bg-white px-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400 ${
+                          currentStateEvident ? "border-amber-300 bg-amber-50 font-bold text-amber-800" : "border-slate-300"
+                        }`}
+                        disabled={session.stato === "CHIUSA"}
+                        value={row.current.stato}
+                        onChange={(e) => updateRow(i, "stato", e.target.value)}
+                      >
+                        {states.map((s) => (
+                          <option key={s.codice} value={s.codice}>
+                            {s.codice} - {s.descrizione}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+
+                    {[0, 1, 2, 3].map((slot) => {
+                      const history = row.history?.[slot] ?? null;
+                      const state = history?.stato_lettura || "-";
+
+                      return (
+                        <td
+                          key={slot}
+                          className="px-3 py-2 align-middle border-b border-slate-100"
+                        >
+                          {history ? (
+                            <div
+                              className={`rounded-lg border px-2 py-1 ${
+                                isEvidentState(state)
+                                  ? "border-amber-200 bg-amber-50"
+                                  : "border-slate-200 bg-white"
+                              }`}
+                            >
+                              <div className="text-[11px] font-semibold text-slate-500">
+                                {formatPeriodLabel(history)}
+                              </div>
+                              <div className="mt-0.5 flex items-center justify-between gap-2">
+                                <span className="text-sm font-bold text-slate-900">
+                                  {history.valore_lettura ?? "-"}
+                                </span>
+                                <span
+                                  className={`inline-flex min-w-8 items-center justify-center rounded-full border px-2 py-0.5 text-xs font-bold ${stateBadgeClass(state)}`}
+                                  title={isEvidentState(state) ? "Stato precedente da verificare" : undefined}
+                                >
+                                  {state}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-slate-400">-</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
