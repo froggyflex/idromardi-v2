@@ -29,7 +29,7 @@ function formatManualDate(date: Date | null): string {
 }
 
 function parseManualDate(value: string): Date | null {
-  const text = value.trim();
+  const text = normalizeDateText(value);
   if (!text) return null;
 
   let day: number;
@@ -64,6 +64,21 @@ function parseManualDate(value: string): Date | null {
   return valid ? parsed : null;
 }
 
+function normalizeDateText(value: string): string {
+  const text = value.trim();
+  const digits = text.replace(/\D/g, "");
+
+  if (/^\d{8}$/.test(digits)) {
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  }
+
+  if (/^\d{6}$/.test(digits)) {
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/20${digits.slice(4)}`;
+  }
+
+  return text;
+}
+
 type ManualDatePickerProps = {
   selected: Date | null;
   onChange: (date: Date | null) => void;
@@ -86,7 +101,7 @@ function ManualDatePicker({
   }, [selected]);
 
   function commitManualValue(value: string) {
-    const nextText = value.trim();
+    const nextText = normalizeDateText(value);
 
     if (!nextText) {
       setText("");
@@ -128,14 +143,25 @@ function ManualDatePicker({
             commitManualValue(text);
           }
         }}
+        onFocus={(event) => {
+          const input = event.target as HTMLInputElement;
+          window.setTimeout(() => input.select(), 0);
+        }}
         value={text}
         locale="it"
         dateFormat="dd/MM/yyyy"
+        showMonthDropdown
+        showYearDropdown
+        dropdownMode="select"
+        scrollableYearDropdown
+        yearDropdownItemNumber={20}
         placeholderText={placeholder}
         className={`input w-full ${hasError ? "border-red-400 ring-2 ring-red-100" : ""}`}
         disabled={disabled}
         isClearable={!disabled}
         shouldCloseOnSelect
+        showPopperArrow={false}
+        calendarStartDay={1}
       />
       {hasError && (
         <div className="mt-1 text-xs font-medium text-red-600">
