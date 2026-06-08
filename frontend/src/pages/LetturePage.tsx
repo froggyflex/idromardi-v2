@@ -393,6 +393,17 @@ export default function LetturePage() {
     return String(Number(current) - Number(previous));
   }
 
+  function getHistoryAverage(row: GridRow) {
+    const values = (row.history || [])
+      .slice(0, 4)
+      .map((history) => Number(history.consumo_storico))
+      .filter((value) => Number.isFinite(value));
+
+    if (!values.length) return null;
+
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  }
+
   function updateRow(index:number, field:"valore" | "stato", value:string) {
 
     const updated = [...grid];
@@ -624,7 +635,7 @@ export default function LetturePage() {
 
       <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden">
         <div className="overflow-auto max-h-[calc(100vh-260px)]">
-          <table className="w-full min-w-[1400px] text-sm border-separate border-spacing-0">
+          <table className="w-full min-w-[1520px] text-sm border-separate border-spacing-0">
             <thead className="sticky top-0 z-20 bg-slate-100">
               <tr className="text-slate-700">
                 <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
@@ -645,6 +656,9 @@ export default function LetturePage() {
                 <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
                   Stato attuale
                 </th>
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Media 4
+                </th>
                 {[1, 2, 3, 4].map((slot) => (
                   <th
                     key={slot}
@@ -663,6 +677,7 @@ export default function LetturePage() {
                   isEvidentState(h.stato_lettura)
                 );
                 const currentStateEvident = isEvidentState(row.current.stato);
+                const historyAverage = getHistoryAverage(row);
 
                 return (
                   <tr
@@ -730,9 +745,32 @@ export default function LetturePage() {
                       </select>
                     </td>
 
+                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                      <div className="rounded-lg border border-slate-200 bg-white px-2 py-1">
+                        <div className="text-[11px] font-semibold text-slate-500">
+                          Consumo medio
+                        </div>
+                        <div className="text-sm font-bold text-slate-900">
+                          {historyAverage === null ? "-" : `${historyAverage.toFixed(1)} mc`}
+                        </div>
+                      </div>
+                    </td>
+
                     {[0, 1, 2, 3].map((slot) => {
                       const history = row.history?.[slot] ?? null;
                       const state = history?.stato_lettura || "-";
+                      const historicalConsumption =
+                        history?.consumo_storico === null ||
+                        history?.consumo_storico === undefined ||
+                        history?.consumo_storico === ""
+                          ? null
+                          : Number(history.consumo_storico);
+                      const consumptionLabel =
+                        history?.consumo_source === "fatturato"
+                          ? "Fatturato"
+                          : history?.consumo_source === "calcolato"
+                          ? "Calcolato"
+                          : "Consumo";
 
                       return (
                         <td
@@ -741,7 +779,7 @@ export default function LetturePage() {
                         >
                           {history ? (
                             <div
-                              className={`rounded-lg border px-2 py-1 ${
+                              className={`rounded-lg border px-2 py-1.5 ${
                                 isEvidentState(state)
                                   ? "border-amber-200 bg-amber-50"
                                   : "border-slate-200 bg-white"
@@ -759,6 +797,14 @@ export default function LetturePage() {
                                   title={isEvidentState(state) ? "Stato precedente da verificare" : undefined}
                                 >
                                   {state}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                                {consumptionLabel}:{" "}
+                                <span className="text-slate-800">
+                                  {historicalConsumption === null || !Number.isFinite(historicalConsumption)
+                                    ? "-"
+                                    : `${historicalConsumption.toFixed(1)} mc`}
                                 </span>
                               </div>
                             </div>

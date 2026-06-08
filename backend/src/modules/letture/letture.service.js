@@ -237,6 +237,15 @@ exports.getSessionGrid = async function ({ sessionId }) {
                 l.stato_lettura,
                 s.period_year,
                 s.period_month,
+                (
+                  SELECT fr.consumo_totale
+                  FROM fatture_sessioni fs
+                  JOIN fatture_righe fr ON fr.id_fattura = fs.id
+                  WHERE fs.id_periodo_attuale = s.id
+                    AND fr.id_utenza = l.id_utenza
+                  ORDER BY fs.updated_at DESC, fs.created_at DESC
+                  LIMIT 1
+                ) AS consumo_fatturato,
                 ROW_NUMBER() OVER (
                     PARTITION BY l.id_utenza
                     ORDER BY s.period_year DESC, s.period_month DESC
@@ -249,7 +258,7 @@ exports.getSessionGrid = async function ({ sessionId }) {
                     OR (s.period_year = ? AND s.period_month < ?)
                 )
         ) t
-        WHERE t.rn <= 4
+        WHERE t.rn <= 5
         ORDER BY t.id_utenza, t.period_year DESC, t.period_month DESC
         `,
         [
@@ -260,12 +269,59 @@ exports.getSessionGrid = async function ({ sessionId }) {
         ]
         );
 
+      const rawHistoryMap = new Map();
+
       for (const row of history) {
         if (!historyMap.has(row.id_utenza)) {
           historyMap.set(row.id_utenza, []);
         }
-        const arr = historyMap.get(row.id_utenza);
-        if (arr.length < 4) arr.push(row);
+
+        if (!rawHistoryMap.has(row.id_utenza)) {
+          rawHistoryMap.set(row.id_utenza, []);
+        }
+
+        rawHistoryMap.get(row.id_utenza).push(row);
+      }
+
+      for (const [idUtenza, rows] of rawHistoryMap.entries()) {
+        const displayRows = historyMap.get(idUtenza);
+
+        for (let i = 0; i < Math.min(4, rows.length); i++) {
+          const row = rows[i];
+          const previousRow = rows[i + 1] || null;
+          const invoicedConsumption =
+            row.consumo_fatturato === null || row.consumo_fatturato === undefined
+              ? null
+              : Number(row.consumo_fatturato);
+
+          const calculatedConsumption =
+            previousRow &&
+            row.valore_lettura !== null &&
+            row.valore_lettura !== undefined &&
+            previousRow.valore_lettura !== null &&
+            previousRow.valore_lettura !== undefined
+              ? Number(row.valore_lettura) - Number(previousRow.valore_lettura)
+              : null;
+
+          const hasInvoicedConsumption =
+            invoicedConsumption !== null && Number.isFinite(invoicedConsumption);
+
+          displayRows.push({
+            ...row,
+            consumo_calcolato:
+              calculatedConsumption !== null && Number.isFinite(calculatedConsumption)
+                ? calculatedConsumption
+                : null,
+            consumo_storico: hasInvoicedConsumption
+              ? invoicedConsumption
+              : calculatedConsumption,
+            consumo_source: hasInvoicedConsumption
+              ? "fatturato"
+              : calculatedConsumption !== null
+              ? "calcolato"
+              : null,
+          });
+        }
       }
     }
 

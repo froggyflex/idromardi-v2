@@ -19,6 +19,10 @@ export interface HistoryRow {
   period_month: number;
   valore_lettura: number | null;
   stato_lettura: string;
+  consumo_fatturato?: number | string | null;
+  consumo_calcolato?: number | string | null;
+  consumo_storico?: number | string | null;
+  consumo_source?: "fatturato" | "calcolato" | null;
 }
 
 export interface GridRow {
