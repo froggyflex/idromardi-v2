@@ -15,7 +15,7 @@ type NavItemProps = {
 type PipelineStatus = "idle" | "checking" | "ready" | "sleeping" | "error";
 
 const PIPELINE_HEALTH_URL =
-  "https://idromardi-ai-17229082190.europe-west1.run.app/health";
+  "https://idromardi-ai-693191024735.europe-west1.run.app/health";
 
 const STALE_AFTER_MS = 1000 * 60 * 15; // 15 min
 
