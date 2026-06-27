@@ -17,6 +17,7 @@ router.get("/versions/:versionId", controller.getVersionFull);
 
 /* Categories */
 router.post("/versions/:versionId/categories", controller.upsertCategory);
+router.put("/categories/:categoryId/config", controller.saveCategoryConfig);
 
 /* Scaglioni */
 router.post("/categories/:categoryId/scaglioni", controller.createScaglione);

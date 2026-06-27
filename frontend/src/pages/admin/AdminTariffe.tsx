@@ -20,10 +20,31 @@ import {
   createComponenteMC,
   updateComponenteMC,
   deleteComponenteMC,
+  saveCategoryConfig,
 } from "../../api/tariffe";
 
 // UI-only marker for locally added rows (not saved yet)
 type EditableScaglione = Scaglione & { _isNew?: boolean };
+type EditableQuotaFissa = {
+  id: string;
+  id_categoria: string;
+  codice: string;
+  importo: string;
+  _isNew?: boolean;
+};
+type EditableComponenteMC = {
+  id: string;
+  id_categoria: string;
+  codice: string;
+  prezzo_mc: string;
+  _isNew?: boolean;
+};
+type EditableCategoria = Categoria & {
+  scaglioni: EditableScaglione[];
+  quote_fisse: EditableQuotaFissa[];
+  componenti_mc: EditableComponenteMC[];
+  _dirty?: boolean;
+};
 
 export default function AdminTariffe() {
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -51,7 +72,7 @@ export default function AdminTariffe() {
     [providers, providerId]
   );
 
-  const [categories, setCategories] = useState<(Categoria & { scaglioni: EditableScaglione[] })[]>([]);
+  const [categories, setCategories] = useState<EditableCategoria[]>([]);
 
   async function refreshProviders() {
     const data = await listProviders();
@@ -76,6 +97,33 @@ export default function AdminTariffe() {
     }));
 
     setCategories(normalized as any);
+  }
+
+  function updateCategoryDraft(
+    categoryId: string,
+    updater: (category: EditableCategoria) => EditableCategoria
+  ) {
+    setCategories((prev) =>
+      prev.map((cat) =>
+        cat.id === categoryId ? { ...updater(cat), _dirty: true } : cat
+      )
+    );
+  }
+
+  function markCategorySaved(categoryId: string) {
+    setCategories((prev) =>
+      prev.map((cat) => (cat.id === categoryId ? { ...cat, _dirty: false } : cat))
+    );
+  }
+
+  function normalizeSavedCategories(nextCategories: Categoria[]) {
+    return (nextCategories as any[]).map((c) => ({
+      ...c,
+      scaglioni: c.scaglioni ?? [],
+      quote_fisse: c.quote_fisse ?? [],
+      componenti_mc: c.componenti_mc ?? [],
+      _dirty: false,
+    })) as EditableCategoria[];
   }
 
   /* ---------------- Componenti MC ---------------- */
@@ -228,29 +276,23 @@ export default function AdminTariffe() {
   function addScaglioneLocal(categoryId: string) {
     const tempId = crypto.randomUUID();
 
-    setCategories((prev) =>
-      prev.map((c) =>
-        c.id !== categoryId
-          ? c
-          : {
-              ...c,
-              scaglioni: [
-                ...c.scaglioni,
-                {
-                  id: tempId,
-                  id_categoria: categoryId,
-                  ordine: c.scaglioni.length + 1,
-                  nome: "",
-                  mc_da_base: 0,
-                  mc_a_base: null,
-                  moltiplica_per_nucleo: 1,
-                  prezzo_acquedotto: "0",
-                  _isNew: true,
-                },
-              ],
-            }
-      )
-    );
+    updateCategoryDraft(categoryId, (c) => ({
+      ...c,
+      scaglioni: [
+        ...c.scaglioni,
+        {
+          id: tempId,
+          id_categoria: categoryId,
+          ordine: c.scaglioni.length + 1,
+          nome: "",
+          mc_da_base: 0,
+          mc_a_base: null,
+          moltiplica_per_nucleo: 1,
+          prezzo_acquedotto: "0",
+          _isNew: true,
+        },
+      ],
+    }));
   }
 
   function scaglioniOverlap(scaglioni: EditableScaglione[]) {
@@ -340,42 +382,28 @@ export default function AdminTariffe() {
   }
 
   async function removeScaglione(categoryId: string, s: EditableScaglione) {
-    setLoading(true);
-    try {
-      if (!s._isNew) {
-        await deleteScaglione(s.id);
-      }
-      setCategories((prev) =>
-        prev.map((c) =>
-          c.id !== categoryId ? c : { ...c, scaglioni: c.scaglioni.filter((x) => x.id !== s.id) }
-        )
-      );
-    } finally {
-      setLoading(false);
-    }
+    updateCategoryDraft(categoryId, (c) => ({
+      ...c,
+      scaglioni: c.scaglioni.filter((x) => x.id !== s.id),
+    }));
   }
 
   /* ---------------- Quote Fisse ---------------- */
 
-  async function addQF(categoryId: string) {
-    setLoading(true);
-    try {
-      const res: any = await createQuotaFissa(categoryId, { codice: "QF", importo: 17.7454 });
-      const created = res.quota_fissa ?? res.quota ?? res.qf ?? null;
-
-      if (created) {
-        setCategories((prev) =>
-          prev.map((c) =>
-            c.id !== categoryId ? c : { ...c, quote_fisse: [...(c as any).quote_fisse, created] }
-          )
-        );
-      } else {
-        // fallback if API shape differs
-        if (versionId) await loadVersionFull(versionId);
-      }
-    } finally {
-      setLoading(false);
-    }
+  function addQF(categoryId: string) {
+    updateCategoryDraft(categoryId, (c) => ({
+      ...c,
+      quote_fisse: [
+        ...(c as any).quote_fisse,
+        {
+          id: crypto.randomUUID(),
+          id_categoria: categoryId,
+          codice: "QF",
+          importo: "0",
+          _isNew: true,
+        },
+      ],
+    }));
   }
 
   async function saveQF(q: any) {
@@ -408,34 +436,188 @@ export default function AdminTariffe() {
     }
   }
 
-  async function removeQF(id: string) {
+  function removeQF(categoryId: string, id: string) {
+    updateCategoryDraft(categoryId, (c) => ({
+      ...c,
+      quote_fisse: (c as any).quote_fisse.filter((x: any) => x.id !== id),
+    }));
+  }
+
+  async function saveCategoryDraft(cat: EditableCategoria) {
+    if (scaglioniOverlap(cat.scaglioni)) {
+      alert("Scaglioni sovrapposti: correggi mc_da/mc_a prima di salvare.");
+      return;
+    }
+
     setLoading(true);
     try {
-      await deleteQuotaFissa(id);
-      setCategories((prev) =>
-        prev.map((c) => ({
-          ...c,
-          quote_fisse: (c as any).quote_fisse.filter((x: any) => x.id !== id),
-        }))
-      );
+      const payload = {
+        scaglioni: cat.scaglioni.map((s) => ({
+          id: s.id,
+          id_categoria: cat.id,
+          ordine: Number(s.ordine),
+          nome: String(s.nome || "").trim(),
+          mc_da_base: Number(s.mc_da_base || 0),
+          mc_a_base:
+            s.mc_a_base === null || (s as any).mc_a_base === ""
+              ? null
+              : Number(s.mc_a_base),
+          moltiplica_per_nucleo: Number(s.moltiplica_per_nucleo) ? 1 : 0,
+          prezzo_acquedotto: String(s.prezzo_acquedotto || "0"),
+        })) as any,
+        quote_fisse: (cat as any).quote_fisse.map((q: any) => ({
+          id: q.id,
+          id_categoria: cat.id,
+          codice: String(q.codice || "QF").trim().toUpperCase(),
+          importo: String(q.importo || "0"),
+        })),
+        componenti_mc: (cat as any).componenti_mc
+          .filter((c: any) => String(c.codice || "").trim())
+          .map((c: any) => ({
+            id: c.id,
+            id_categoria: cat.id,
+            codice: String(c.codice || "").trim().toUpperCase(),
+            prezzo_mc: String(c.prezzo_mc || "0"),
+          })),
+      };
+
+      const saved = await saveCategoryConfig(cat.id, payload).catch((err: any) => {
+        if (err?.response?.status === 404) {
+          return saveCategoryDraftLegacy(cat.id, payload);
+        }
+
+        throw err;
+      });
+      setVersion(saved.version);
+      setCategories(normalizeSavedCategories(saved.categories));
+      markCategorySaved(cat.id);
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.message || err?.message || "Errore salvataggio categoria");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function saveCategoryDraftLegacy(categoryId: string, payload: {
+    scaglioni: any[];
+    quote_fisse: any[];
+    componenti_mc: any[];
+  }) {
+    if (!versionId) {
+      throw new Error("Seleziona una versione tariffaria prima di salvare.");
+    }
+
+    const latest = await getVersionFull(versionId);
+    const currentCategory = latest.categories.find((category) => category.id === categoryId);
+
+    if (!currentCategory) {
+      throw new Error("Categoria non trovata.");
+    }
+
+    const currentScaglioni = currentCategory.scaglioni || [];
+    const currentQuote = currentCategory.quote_fisse || [];
+    const currentComponenti = currentCategory.componenti_mc || [];
+
+    const nextScaglioneIds = new Set(payload.scaglioni.map((row) => row.id));
+    const currentScaglioneIds = new Set(currentScaglioni.map((row) => row.id));
+
+    for (const existing of currentScaglioni) {
+      if (!nextScaglioneIds.has(existing.id)) {
+        await deleteScaglione(existing.id);
+      }
+    }
+
+    for (const row of payload.scaglioni) {
+      const body = {
+        ordine: Number(row.ordine),
+        nome: String(row.nome || "").trim(),
+        mc_da_base: Number(row.mc_da_base || 0),
+        mc_a_base:
+          row.mc_a_base === null || row.mc_a_base === ""
+            ? null
+            : Number(row.mc_a_base),
+        moltiplica_per_nucleo: Number(row.moltiplica_per_nucleo) ? 1 : 0,
+        prezzo_acquedotto: Number(row.prezzo_acquedotto || 0),
+      };
+
+      if (currentScaglioneIds.has(row.id)) {
+        await updateScaglione(row.id, body);
+      } else {
+        await createScaglione(categoryId, body);
+      }
+    }
+
+    const nextQuoteIds = new Set(payload.quote_fisse.map((row) => row.id));
+    const currentQuoteIds = new Set(currentQuote.map((row) => row.id));
+
+    for (const existing of currentQuote) {
+      if (!nextQuoteIds.has(existing.id)) {
+        await deleteQuotaFissa(existing.id);
+      }
+    }
+
+    for (const row of payload.quote_fisse) {
+      const body = {
+        codice: String(row.codice || "QF").trim().toUpperCase(),
+        importo: Number(row.importo || 0),
+      };
+
+      if (currentQuoteIds.has(row.id)) {
+        await updateQuotaFissa(row.id, body);
+      } else {
+        await createQuotaFissa(categoryId, body);
+      }
+    }
+
+    const nextComponentIds = new Set(payload.componenti_mc.map((row) => row.id));
+    const currentComponentIds = new Set(currentComponenti.map((row) => row.id));
+
+    for (const existing of currentComponenti) {
+      if (!nextComponentIds.has(existing.id)) {
+        await deleteComponenteMC(existing.id);
+      }
+    }
+
+    for (const row of payload.componenti_mc) {
+      const body = {
+        codice: String(row.codice || "").trim().toUpperCase(),
+        prezzo_mc: Number(row.prezzo_mc || 0),
+      };
+
+      if (currentComponentIds.has(row.id)) {
+        await updateComponenteMC(row.id, body);
+      } else {
+        await createComponenteMC(categoryId, body);
+      }
+    }
+
+    return getVersionFull(versionId);
   }
 
   /* ---------------- Render ---------------- */
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-slate-200 bg-white p-6">
-        <div className="text-lg font-semibold text-slate-800">Tariffe Casa Idrica</div>
-        <div className="text-sm text-slate-500 mt-1">
-          Configura provider (ABC, ACEA...) e tariffe annuali con scaglioni + quota fissa.
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="border-b border-slate-100 pb-5">
+          <div className="text-lg font-semibold text-slate-800">Tariffe Casa Idrica</div>
+          <div className="mt-1 text-sm text-slate-500">
+            Crea o seleziona una versione tariffaria, poi compila scaglioni, quote fisse e componenti in un unico salvataggio.
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-slate-400 mb-2">Casa Idrica</div>
+        <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white">
+                1
+              </div>
+              <div>
+                <div className="text-sm font-bold text-slate-800">Casa idrica</div>
+                <div className="text-xs text-slate-500">Seleziona il provider o creane uno nuovo.</div>
+              </div>
+            </div>
+            <div className="text-xs uppercase tracking-wider text-slate-400 mb-2">Provider esistente</div>
             <select
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
               value={providerId}
@@ -449,7 +631,11 @@ export default function AdminTariffe() {
               ))}
             </select>
 
-            <div className="mt-3 grid grid-cols-1 gap-2">
+            <div className="mt-5 rounded-xl border border-dashed border-slate-300 bg-white p-3">
+              <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Nuovo provider
+              </div>
+              <div className="grid grid-cols-1 gap-2">
               <input
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 placeholder="Codice (es. ABC)"
@@ -469,11 +655,21 @@ export default function AdminTariffe() {
               >
                 Crea Casa Idrica
               </button>
+              </div>
             </div>
           </div>
 
-          <div>
-            <div className="text-xs uppercase tracking-wider text-slate-400 mb-2">Tariffe</div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white">
+                2
+              </div>
+              <div>
+                <div className="text-sm font-bold text-slate-800">Versione tariffaria</div>
+                <div className="text-xs text-slate-500">Apri un anno già salvato o prepara una nuova validità.</div>
+              </div>
+            </div>
+            <div className="text-xs uppercase tracking-wider text-slate-400 mb-2">Versioni salvate</div>
             <select
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
               value={versionId}
@@ -488,55 +684,80 @@ export default function AdminTariffe() {
               ))}
             </select>
 
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                value={anno}
-                onChange={(e) => {
-                  const y = Number(e.target.value);
-                  setAnno(y);
-                  setValidFrom(`${y}-01-01`);
-                  setValidTo(`${y}-12-31`);
-                }}
-                placeholder="Anno"
-                disabled={!providerId}
-              />
-              <input
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                value={descrizione}
-                onChange={(e) => setDescrizione(e.target.value)}
-                placeholder="Descrizione (opzionale)"
-                disabled={!providerId}
-              />
-              <input
-                type="date"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                value={validFrom}
-                onChange={(e) => setValidFrom(e.target.value)}
-                disabled={!providerId}
-              />
-              <input
-                type="date"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                value={validTo}
-                onChange={(e) => setValidTo(e.target.value)}
-                disabled={!providerId}
-              />
-              <button
-                className="col-span-2 rounded-xl bg-slate-900 text-white px-4 py-2 text-sm disabled:opacity-50"
-                disabled={loading || !providerId || !anno || !validFrom}
-                onClick={handleCreateVersion}
-              >
-                Crea Tariffa
-              </button>
+            <div className="mt-5 rounded-xl border border-dashed border-slate-300 bg-white p-3">
+              <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Nuova versione
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs font-semibold text-slate-500">
+                  Anno
+                  <input
+                    type="number"
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-800"
+                    value={anno}
+                    onChange={(e) => {
+                      const y = Number(e.target.value);
+                      setAnno(y);
+                      setValidFrom(`${y}-01-01`);
+                      setValidTo(`${y}-12-31`);
+                    }}
+                    placeholder="Anno"
+                    disabled={!providerId}
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Descrizione
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-800"
+                    value={descrizione}
+                    onChange={(e) => setDescrizione(e.target.value)}
+                    placeholder="Opzionale"
+                    disabled={!providerId}
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Valida dal
+                  <input
+                    type="date"
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-800"
+                    value={validFrom}
+                    onChange={(e) => setValidFrom(e.target.value)}
+                    disabled={!providerId}
+                  />
+                </label>
+                <label className="text-xs font-semibold text-slate-500">
+                  Valida al
+                  <input
+                    type="date"
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-800"
+                    value={validTo}
+                    onChange={(e) => setValidTo(e.target.value)}
+                    disabled={!providerId}
+                  />
+                </label>
+                <button
+                  className="col-span-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  disabled={loading || !providerId || !anno || !validFrom}
+                  onClick={handleCreateVersion}
+                >
+                  Crea versione tariffaria
+                </button>
+              </div>
             </div>
           </div>
 
-          <div>
-            <div className="text-xs uppercase tracking-wider text-slate-400 mb-2">Versione selezionata</div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-sm font-bold text-white">
+                3
+              </div>
+              <div>
+                <div className="text-sm font-bold text-slate-800">Configurazione</div>
+                <div className="text-xs text-slate-500">Crea la categoria e poi compila le voci sotto.</div>
+              </div>
+            </div>
             {version ? (
-              <div className="rounded-xl border border-slate-200 p-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="font-medium text-slate-800">
                   {selectedProvider?.codice} — {version.anno}
                 </div>
@@ -560,7 +781,7 @@ export default function AdminTariffe() {
                     Crea/aggiorna categoria NON_RESIDENTE
                   </button> */}
                   <button
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm"
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold"
                     disabled={loading}
                     onClick={handleUpdateVersion}
                   >
@@ -584,23 +805,37 @@ export default function AdminTariffe() {
             <div key={cat.id} className="rounded-2xl border border-slate-200 bg-white p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-slate-800">{cat.codice}</div>
-                  <div className="text-xs text-slate-500">Scaglioni + Quote fisse</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold text-slate-800">{cat.codice}</div>
+                    {cat._dirty && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                        Modifiche non salvate
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500">Scaglioni, quote fisse e componenti per m³</div>
                 </div>
                 <div className="flex gap-2">
                   <button
-                    className="rounded-xl bg-blue-600 text-white px-3 py-2 text-sm"
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     onClick={() => addScaglioneLocal(cat.id)}
                     disabled={loading}
                   >
                     + Scaglione
                   </button>
                   <button
-                    className="rounded-xl bg-slate-900 text-white px-3 py-2 text-sm"
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     onClick={() => addQF(cat.id)}
                     disabled={loading}
                   >
                     + QF
+                  </button>
+                  <button
+                    className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => saveCategoryDraft(cat)}
+                    disabled={loading}
+                  >
+                    {loading ? "Salvataggio..." : "Salva categoria"}
                   </button>
                 </div>
               </div>
@@ -628,16 +863,10 @@ export default function AdminTariffe() {
                             value={s.ordine}
                             onChange={(e) => {
                               const v = Number(e.target.value);
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id !== cat.id
-                                    ? c
-                                    : {
-                                        ...c,
-                                        scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, ordine: v } : x)),
-                                      }
-                                )
-                              );
+                              updateCategoryDraft(cat.id, (c) => ({
+                                ...c,
+                                scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, ordine: v } : x)),
+                              }));
                             }}
                           />
                         </td>
@@ -647,16 +876,10 @@ export default function AdminTariffe() {
                             value={s.nome}
                             onChange={(e) => {
                               const v = e.target.value;
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id !== cat.id
-                                    ? c
-                                    : {
-                                        ...c,
-                                        scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, nome: v } : x)),
-                                      }
-                                )
-                              );
+                              updateCategoryDraft(cat.id, (c) => ({
+                                ...c,
+                                scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, nome: v } : x)),
+                              }));
                             }}
                           />
                         </td>
@@ -666,16 +889,10 @@ export default function AdminTariffe() {
                             value={s.mc_da_base}
                             onChange={(e) => {
                               const v = Number(e.target.value);
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id !== cat.id
-                                    ? c
-                                    : {
-                                        ...c,
-                                        scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, mc_da_base: v } : x)),
-                                      }
-                                )
-                              );
+                              updateCategoryDraft(cat.id, (c) => ({
+                                ...c,
+                                scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, mc_da_base: v } : x)),
+                              }));
                             }}
                           />
                         </td>
@@ -686,16 +903,10 @@ export default function AdminTariffe() {
                             onChange={(e) => {
                               const raw = e.target.value;
                               const v = raw === "" ? null : Number(raw);
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id !== cat.id
-                                    ? c
-                                    : {
-                                        ...c,
-                                        scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, mc_a_base: v } : x)),
-                                      }
-                                )
-                              );
+                              updateCategoryDraft(cat.id, (c) => ({
+                                ...c,
+                                scaglioni: c.scaglioni.map((x) => (x.id === s.id ? { ...x, mc_a_base: v } : x)),
+                              }));
                             }}
                           />
                         </td>
@@ -705,18 +916,12 @@ export default function AdminTariffe() {
                             checked={!!Number(s.moltiplica_per_nucleo)}
                             onChange={(e) => {
                               const v = e.target.checked ? 1 : 0;
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id !== cat.id
-                                    ? c
-                                    : {
-                                        ...c,
-                                        scaglioni: c.scaglioni.map((x) =>
-                                          x.id === s.id ? { ...x, moltiplica_per_nucleo: v } : x
-                                        ),
-                                      }
-                                )
-                              );
+                              updateCategoryDraft(cat.id, (c) => ({
+                                ...c,
+                                scaglioni: c.scaglioni.map((x) =>
+                                  x.id === s.id ? { ...x, moltiplica_per_nucleo: v } : x
+                                ),
+                              }));
                             }}
                           />
                         </td>
@@ -726,30 +931,17 @@ export default function AdminTariffe() {
                             value={s.prezzo_acquedotto as any}
                             onChange={(e) => {
                               const v = e.target.value;
-                              setCategories((prev) =>
-                                prev.map((c) =>
-                                  c.id !== cat.id
-                                    ? c
-                                    : {
-                                        ...c,
-                                        scaglioni: c.scaglioni.map((x) =>
-                                          x.id === s.id ? { ...x, prezzo_acquedotto: v as any } : x
-                                        ),
-                                      }
-                                )
-                              );
+                              updateCategoryDraft(cat.id, (c) => ({
+                                ...c,
+                                scaglioni: c.scaglioni.map((x) =>
+                                  x.id === s.id ? { ...x, prezzo_acquedotto: v as any } : x
+                                ),
+                              }));
                             }}
                           />
                         </td>
 
                         <td className="text-right whitespace-nowrap">
-                          <button
-                            className="rounded-lg bg-emerald-600 text-white px-3 py-1 text-xs mr-2"
-                            disabled={loading}
-                            onClick={() => saveScaglione(cat.id, s)}
-                          >
-                            Salva
-                          </button>
                           <button
                             className="rounded-lg bg-rose-600 text-white px-3 py-1 text-xs"
                             disabled={loading}
@@ -782,16 +974,10 @@ export default function AdminTariffe() {
                         value={q.codice}
                         onChange={(e) => {
                           const v = e.target.value;
-                          setCategories((prev) =>
-                            prev.map((c) =>
-                              c.id !== cat.id
-                                ? c
-                                : {
-                                    ...c,
-                                    quote_fisse: (c as any).quote_fisse.map((x: any) => (x.id === q.id ? { ...x, codice: v } : x)),
-                                  }
-                            )
-                          );
+                          updateCategoryDraft(cat.id, (c) => ({
+                            ...c,
+                            quote_fisse: (c as any).quote_fisse.map((x: any) => (x.id === q.id ? { ...x, codice: v } : x)),
+                          }));
                         }}
                       />
                       <input
@@ -799,29 +985,16 @@ export default function AdminTariffe() {
                         value={q.importo}
                         onChange={(e) => {
                           const v = e.target.value;
-                          setCategories((prev) =>
-                            prev.map((c) =>
-                              c.id !== cat.id
-                                ? c
-                                : {
-                                    ...c,
-                                    quote_fisse: (c as any).quote_fisse.map((x: any) => (x.id === q.id ? { ...x, importo: v } : x)),
-                                  }
-                            )
-                          );
+                          updateCategoryDraft(cat.id, (c) => ({
+                            ...c,
+                            quote_fisse: (c as any).quote_fisse.map((x: any) => (x.id === q.id ? { ...x, importo: v } : x)),
+                          }));
                         }}
                       />
                       <button
-                        className="rounded-lg bg-emerald-600 text-white px-3 py-1 text-xs"
-                        disabled={loading}
-                        onClick={() => saveQF(q)}
-                      >
-                        Salva
-                      </button>
-                      <button
                         className="rounded-lg bg-rose-600 text-white px-3 py-1 text-xs"
                         disabled={loading}
-                        onClick={() => removeQF(q.id)}
+                        onClick={() => removeQF(cat.id, q.id)}
                       >
                         Elimina
                       </button>
@@ -853,41 +1026,30 @@ export default function AdminTariffe() {
                     value={comp?.prezzo_mc ?? ""}
                     onChange={(e) => {
                         const v = e.target.value;
-                        setCategories((prev) =>
-                        prev.map((c) =>
-                            c.id !== cat.id
-                            ? c
-                            : {
-                                ...c,
-                                componenti_mc: (c as any).componenti_mc.map((x: any) =>
-                                    x.codice === tipo ? { ...x, prezzo_mc: v } : x
-                                ),
-                                }
-                        )
-                        );
+                        updateCategoryDraft(cat.id, (c) => {
+                          const existing = (c as any).componenti_mc || [];
+                          const hasComponent = existing.some((x: any) => x.codice === tipo);
+
+                          return {
+                            ...c,
+                            componenti_mc: hasComponent
+                              ? existing.map((x: any) =>
+                                  x.codice === tipo ? { ...x, prezzo_mc: v } : x
+                                )
+                              : [
+                                  ...existing,
+                                  {
+                                    id: crypto.randomUUID(),
+                                    id_categoria: cat.id,
+                                    codice: tipo,
+                                    prezzo_mc: v,
+                                    _isNew: true,
+                                  },
+                                ],
+                          };
+                        });
                     }}
                     />
-
-                    <button
-                    className="rounded-lg bg-emerald-600 text-white px-3 py-1 text-xs"
-                    disabled={loading}
-                    onClick={async () => {
-                        if (comp) {
-                        await updateComponenteMC(comp.id, {
-                            codice: tipo,
-                            prezzo_mc: Number(comp.prezzo_mc),
-                        });
-                        } else {
-                        await createComponenteMC(cat.id, {
-                            codice: tipo,
-                            prezzo_mc: 0,
-                        });
-                        }
-                        if (versionId) await loadVersionFull(versionId);
-                    }}
-                    >
-                    Salva
-                    </button>
                 </div>
                 );
             })}

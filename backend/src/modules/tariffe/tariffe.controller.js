@@ -73,6 +73,17 @@ exports.upsertCategory = async (req, res, next) => {
   }
 }
 
+exports.saveCategoryConfig = async (req, res, next) => {
+  try {
+    res.json(await service.saveCategoryConfig({
+      categoryId: req.params.categoryId,
+      ...req.body,
+    }));
+  } catch (e) {
+    next(e);
+  }
+}
+
 exports.createScaglione = async (req, res, next) => {
   try {
     res.json(await service.createScaglione({

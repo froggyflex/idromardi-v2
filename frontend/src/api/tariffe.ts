@@ -101,6 +101,15 @@ export async function upsertCategory(versionId: string, payload: { codice: strin
   return data as { category: Omit<Categoria, "scaglioni" | "quote_fisse"> };
 }
 
+export async function saveCategoryConfig(categoryId: string, payload: {
+  scaglioni: Scaglione[];
+  quote_fisse: QuotaFissa[];
+  componenti_mc: ComponenteMC[];
+}) {
+  const { data } = await api.put(`/tariffe/categories/${categoryId}/config`, payload);
+  return data as { version: TariffVersion; categories: Categoria[] };
+}
+
 export async function createScaglione(categoryId: string, payload: any) {
   const { data } = await api.post(`/tariffe/categories/${categoryId}/scaglioni`, payload);
   return data as { scaglione: Scaglione };

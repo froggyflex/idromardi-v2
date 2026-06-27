@@ -21,6 +21,10 @@ function assertDateISO(s, name) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error(`${name} must be YYYY-MM-DD`);
 }
 
+function isUuidLike(id) {
+  return typeof id === "string" && id.length === 36;
+}
+
 function toEndDate(d) {
   return d ?? "9999-12-31";
 }
@@ -304,6 +308,237 @@ exports.upsertCategory = async function({ versionId, codice, descrizione = null 
     conn.release();
   }
 }
+
+exports.saveCategoryConfig = async function({
+  categoryId,
+  scaglioni = [],
+  quote_fisse = [],
+  componenti_mc = [],
+}) {
+  assertUUID(categoryId, "categoryId");
+
+  const conn = await db.getConnection();
+  let committed = false;
+  try {
+    await conn.beginTransaction();
+
+    const [categoryRows] = await conn.query(
+      `SELECT * FROM casa_idrica_tariff_categorie WHERE id = ? LIMIT 1`,
+      [categoryId]
+    );
+
+    if (categoryRows.length === 0) {
+      throw new Error("Category not found");
+    }
+
+    const normalizedScaglioni = scaglioni.map((s, index) => {
+      const nome = String(s.nome || "").trim();
+      if (!nome) {
+        throw new Error(`Nome scaglione mancante alla riga ${index + 1}`);
+      }
+
+      const mcDa = Number(s.mc_da_base ?? 0);
+      const mcA = s.mc_a_base === "" || s.mc_a_base === null || s.mc_a_base === undefined
+        ? null
+        : Number(s.mc_a_base);
+      const prezzo = Number(s.prezzo_acquedotto ?? 0);
+
+      if (!Number.isFinite(mcDa) || mcDa < 0) {
+        throw new Error(`mc_da non valido alla riga ${index + 1}`);
+      }
+
+      if (mcA !== null && (!Number.isFinite(mcA) || mcA <= mcDa)) {
+        throw new Error(`mc_a deve essere maggiore di mc_da alla riga ${index + 1}`);
+      }
+
+      if (!Number.isFinite(prezzo) || prezzo < 0) {
+        throw new Error(`Tariffa acquedotto non valida alla riga ${index + 1}`);
+      }
+
+      return {
+        id: isUuidLike(s.id) ? s.id : null,
+        ordine: Number.isFinite(Number(s.ordine)) ? Number(s.ordine) : index + 1,
+        nome,
+        mc_da_base: mcDa,
+        mc_a_base: mcA,
+        moltiplica_per_nucleo: Number(s.moltiplica_per_nucleo) ? 1 : 0,
+        prezzo_acquedotto: prezzo,
+      };
+    });
+
+    const orderedScaglioni = [...normalizedScaglioni].sort(
+      (a, b) => a.ordine - b.ordine
+    );
+
+    for (let i = 0; i < orderedScaglioni.length; i++) {
+      const current = orderedScaglioni[i];
+      const currentEnd = current.mc_a_base === null ? Infinity : current.mc_a_base;
+
+      for (let j = i + 1; j < orderedScaglioni.length; j++) {
+        const next = orderedScaglioni[j];
+        const nextEnd = next.mc_a_base === null ? Infinity : next.mc_a_base;
+
+        if (current.mc_da_base < nextEnd && next.mc_da_base < currentEnd) {
+          throw new Error("Scaglioni sovrapposti: correggi mc_da/mc_a prima di salvare.");
+        }
+      }
+    }
+
+    const normalizeCode = (value, fallback) => String(value || fallback).trim().toUpperCase();
+
+    const normalizedQuote = quote_fisse.map((q, index) => {
+      const codice = normalizeCode(q.codice, "QF");
+      const importo = Number(q.importo ?? 0);
+
+      if (!Number.isFinite(importo) || importo < 0) {
+        throw new Error(`Quota fissa non valida alla riga ${index + 1}`);
+      }
+
+      return {
+        id: isUuidLike(q.id) ? q.id : null,
+        codice,
+        importo,
+      };
+    });
+
+    const normalizedComponenti = componenti_mc
+      .filter((c) => String(c.codice || "").trim())
+      .map((c, index) => {
+        const codice = normalizeCode(c.codice, "");
+        const prezzo = Number(c.prezzo_mc ?? 0);
+
+        if (!Number.isFinite(prezzo) || prezzo < 0) {
+          throw new Error(`Componente ${codice || index + 1} non valida`);
+        }
+
+        return {
+          id: isUuidLike(c.id) ? c.id : null,
+          codice,
+          prezzo_mc: prezzo,
+        };
+      });
+
+    const syncRows = async ({ table, existingRows, rows, insertSql, updateSql, toInsertValues, toUpdateValues }) => {
+      const existingIds = new Set(existingRows.map((row) => row.id));
+      const keptExistingIds = rows
+        .map((row) => row.id)
+        .filter((id) => id && existingIds.has(id));
+
+      if (keptExistingIds.length) {
+        await conn.query(
+          `DELETE FROM ${table} WHERE id_categoria = ? AND id NOT IN (${keptExistingIds.map(() => "?").join(",")})`,
+          [categoryId, ...keptExistingIds]
+        );
+      } else {
+        await conn.query(`DELETE FROM ${table} WHERE id_categoria = ?`, [categoryId]);
+      }
+
+      for (const row of rows) {
+        if (row.id && existingIds.has(row.id)) {
+          await conn.query(updateSql, toUpdateValues(row));
+        } else {
+          const id = uuidv4();
+          await conn.query(insertSql, toInsertValues({ ...row, id }));
+        }
+      }
+    };
+
+    const [existingScaglioni] = await conn.query(
+      `SELECT id FROM casa_idrica_tariff_scaglioni WHERE id_categoria = ?`,
+      [categoryId]
+    );
+    await syncRows({
+      table: "casa_idrica_tariff_scaglioni",
+      existingRows: existingScaglioni,
+      rows: normalizedScaglioni,
+      insertSql: `
+        INSERT INTO casa_idrica_tariff_scaglioni
+        (id, id_categoria, ordine, nome, mc_da_base, mc_a_base, moltiplica_per_nucleo, prezzo_acquedotto)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      updateSql: `
+        UPDATE casa_idrica_tariff_scaglioni
+        SET ordine = ?, nome = ?, mc_da_base = ?, mc_a_base = ?, moltiplica_per_nucleo = ?, prezzo_acquedotto = ?
+        WHERE id = ?
+      `,
+      toInsertValues: (row) => [
+        row.id,
+        categoryId,
+        row.ordine,
+        row.nome,
+        row.mc_da_base,
+        row.mc_a_base,
+        row.moltiplica_per_nucleo,
+        row.prezzo_acquedotto,
+      ],
+      toUpdateValues: (row) => [
+        row.ordine,
+        row.nome,
+        row.mc_da_base,
+        row.mc_a_base,
+        row.moltiplica_per_nucleo,
+        row.prezzo_acquedotto,
+        row.id,
+      ],
+    });
+
+    const [existingQuote] = await conn.query(
+      `SELECT id FROM casa_idrica_tariff_quote_fisse WHERE id_categoria = ?`,
+      [categoryId]
+    );
+    await syncRows({
+      table: "casa_idrica_tariff_quote_fisse",
+      existingRows: existingQuote,
+      rows: normalizedQuote,
+      insertSql: `
+        INSERT INTO casa_idrica_tariff_quote_fisse
+        (id, id_categoria, codice, importo)
+        VALUES (?, ?, ?, ?)
+      `,
+      updateSql: `
+        UPDATE casa_idrica_tariff_quote_fisse
+        SET codice = ?, importo = ?
+        WHERE id = ?
+      `,
+      toInsertValues: (row) => [row.id, categoryId, row.codice, row.importo],
+      toUpdateValues: (row) => [row.codice, row.importo, row.id],
+    });
+
+    const [existingComponenti] = await conn.query(
+      `SELECT id FROM casa_idrica_tariff_componenti_mc WHERE id_categoria = ?`,
+      [categoryId]
+    );
+    await syncRows({
+      table: "casa_idrica_tariff_componenti_mc",
+      existingRows: existingComponenti,
+      rows: normalizedComponenti,
+      insertSql: `
+        INSERT INTO casa_idrica_tariff_componenti_mc
+        (id, id_categoria, codice, prezzo_mc)
+        VALUES (?, ?, ?, ?)
+      `,
+      updateSql: `
+        UPDATE casa_idrica_tariff_componenti_mc
+        SET codice = ?, prezzo_mc = ?
+        WHERE id = ?
+      `,
+      toInsertValues: (row) => [row.id, categoryId, row.codice, row.prezzo_mc],
+      toUpdateValues: (row) => [row.codice, row.prezzo_mc, row.id],
+    });
+
+    await conn.commit();
+    committed = true;
+
+    return await exports.getVersionFull({ versionId: categoryRows[0].id_tariffa });
+  } catch (err) {
+    if (!committed) {
+      await conn.rollback();
+    }
+    throw err;
+  } finally {
+    conn.release();
+  }
+};
 
 /* ------------------ Scaglioni ------------------ */
 
