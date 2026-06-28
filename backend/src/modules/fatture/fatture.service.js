@@ -3146,9 +3146,25 @@ exports.updateContatoreGenerale = async function ({
 }) {
   assertUUID(sessionId, "sessionId");
 
+  const parseOptionalReading = (value, name) => {
+    if (value === undefined || value === null || value === "") {
+      return { shouldUpdate: false, value: null };
+    }
+
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`${name} non valido`);
+    }
+
+    return { shouldUpdate: true, value: parsed };
+  };
+
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+
+    const precedenteParsed = parseOptionalReading(precedente, "Lettura precedente");
+    const attualeParsed = parseOptionalReading(attuale, "Lettura attuale");
 
     const [sRows] = await conn.query(
       `SELECT * FROM fatture_sessioni WHERE id = ? FOR UPDATE`,
@@ -3163,21 +3179,21 @@ exports.updateContatoreGenerale = async function ({
       throw new Error("Session confirmed, cannot modify readings");
     }
 
-    if (precedente != null) {
+    if (precedenteParsed.shouldUpdate) {
       await conn.query(
         `UPDATE letture_sessioni
          SET contatore_generale_valore = ?
          WHERE id = ?`,
-        [Number(precedente), session.id_periodo_precedente]
+        [precedenteParsed.value, session.id_periodo_precedente]
       );
     }
 
-    if (attuale != null) {
+    if (attualeParsed.shouldUpdate) {
       await conn.query(
         `UPDATE letture_sessioni
          SET contatore_generale_valore = ?
          WHERE id = ?`,
-        [Number(attuale), session.id_periodo_attuale]
+        [attualeParsed.value, session.id_periodo_attuale]
       );
     }
 
