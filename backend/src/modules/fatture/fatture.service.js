@@ -1755,12 +1755,15 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
       SELECT *
       FROM utenze_v2
       WHERE condominio_id = ?
-        AND stato = 'ATTIVA'
+        AND (
+          stato = 'ATTIVA'
+          OR (data_chiusura IS NOT NULL AND data_chiusura >= ?)
+        )
         AND (data_attivazione IS NULL OR data_attivazione <= ?)
         AND (data_chiusura IS NULL OR data_chiusura >= ?)
       ORDER BY id_user ASC
       `,
-      [session.id_condominio, end, start]
+      [session.id_condominio, start, end, start]
     );
 
     // Load readings for both periods
@@ -2125,6 +2128,10 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
 
     const anno = Number(annoAtt) || Number(pa.period_year);
     const yd = yearDaysCount(anno);
+    const y = Number(pa.period_year || new Date().getFullYear());
+    const m = Number(pa.period_month || 1);
+    const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
+    const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 
     // -----------------------------
     // GENERAL CONSUMPTION
@@ -2138,8 +2145,18 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     // TOTAL NUCLEI
     // -----------------------------
     const [utenze] = await conn.query(
-      `SELECT nucleo FROM utenze_v2 WHERE condominio_id = ? AND stato='ATTIVA'`,
-      [session.id_condominio]
+      `
+      SELECT nucleo
+      FROM utenze_v2
+      WHERE condominio_id = ?
+        AND (
+          stato = 'ATTIVA'
+          OR (data_chiusura IS NOT NULL AND data_chiusura >= ?)
+        )
+        AND (data_attivazione IS NULL OR data_attivazione <= ?)
+        AND (data_chiusura IS NULL OR data_chiusura >= ?)
+      `,
+      [session.id_condominio, start, end, start]
     );
 
     const totNuc = utenze.reduce(
@@ -2399,12 +2416,15 @@ async function calculateInterni(
         u.Interno AS Interno
       FROM utenze_v2 u
       WHERE u.condominio_id = ?
-        AND u.stato = 'ATTIVA'
+        AND (
+          u.stato = 'ATTIVA'
+          OR (u.data_chiusura IS NOT NULL AND u.data_chiusura >= ?)
+        )
         AND (u.data_attivazione IS NULL OR u.data_attivazione <= ?)
         AND (u.data_chiusura IS NULL OR u.data_chiusura >= ?)
       ORDER BY u.id ASC
       `,
-      [session.id_condominio, end, start]
+      [session.id_condominio, start, end, start]
     );
 
     if (!utenzeRaw.length) {

@@ -205,12 +205,15 @@ exports.getSessionGrid = async function ({ sessionId }) {
         SELECT *
         FROM utenze_v2
         WHERE  condominio_id = ?
-        AND stato = 'ATTIVA'
+        AND (
+          stato = 'ATTIVA'
+          OR (data_chiusura IS NOT NULL AND data_chiusura >= ?)
+        )
         AND (data_attivazione IS NULL OR data_attivazione <= ?)
         AND (data_chiusura IS NULL OR data_chiusura >= ?)
         ORDER BY id_user ASC
       `,
-      [session.id_condominio, end, start]
+      [session.id_condominio, start, end, start]
     );
 
     const [righe] = await conn.query(
