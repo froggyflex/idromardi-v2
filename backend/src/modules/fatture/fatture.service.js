@@ -24,6 +24,7 @@ const {
 const DEFAULT_AI_PARSER_BASE_URL =
   "https://idromardi-ai-693191024735.europe-west1.run.app";
 let ripartizionePdfColumns = null;
+let fattureSessionColumns = null;
 
 async function getRipartizionePdfColumns() {
   if (ripartizionePdfColumns) return ripartizionePdfColumns;
@@ -41,8 +42,104 @@ async function getRipartizionePdfColumns() {
   return ripartizionePdfColumns;
 }
 
+async function getFattureSessionColumns() {
+  if (fattureSessionColumns) return fattureSessionColumns;
+
+  const [columns] = await db.query(
+    `
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'fatture_sessioni'
+    `
+  );
+
+  fattureSessionColumns = new Set(columns.map((row) => row.COLUMN_NAME));
+  return fattureSessionColumns;
+}
+
+async function ensureFattureSessionContextColumns() {
+  const columns = await getFattureSessionColumns();
+  const alters = [];
+
+  if (!columns.has("imported_document_id")) {
+    alters.push("ADD COLUMN imported_document_id BIGINT UNSIGNED NULL AFTER tf_code");
+  }
+
+  if (!columns.has("calculation_context_json")) {
+    alters.push("ADD COLUMN calculation_context_json LONGTEXT NULL AFTER imported_document_id");
+  }
+
+  if (!columns.has("calculation_context_updated_at")) {
+    alters.push("ADD COLUMN calculation_context_updated_at DATETIME NULL AFTER calculation_context_json");
+  }
+
+  if (!columns.has("manual_consumptions_json")) {
+    alters.push("ADD COLUMN manual_consumptions_json LONGTEXT NULL AFTER calculation_context_updated_at");
+  }
+
+  if (!alters.length) return columns;
+
+  await db.query(`ALTER TABLE fatture_sessioni ${alters.join(", ")}`);
+  fattureSessionColumns = null;
+  return getFattureSessionColumns();
+}
+
+async function getImportedDocumentLinkedToSession(conn, session) {
+  await ensureFattureSessionContextColumns();
+
+  if (session?.imported_document_id) {
+    const [rows] = await conn.query(
+      `
+      SELECT
+        id,
+        original_filename,
+        numero_bolletta,
+        data_inizio_periodo,
+        data_fine_periodo,
+        importo_totale_da_pagare,
+        linked_session_id
+      FROM imported_invoice_documents
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [session.imported_document_id]
+    );
+    if (rows[0]) return rows[0];
+  }
+
+  const [rows] = await conn.query(
+    `
+    SELECT
+      id,
+      original_filename,
+      numero_bolletta,
+      data_inizio_periodo,
+      data_fine_periodo,
+      importo_totale_da_pagare,
+      linked_session_id
+    FROM imported_invoice_documents
+    WHERE CONVERT(linked_session_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+      CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_general_ci
+    ORDER BY imported_at DESC, updated_at DESC
+    LIMIT 1
+    `,
+    [session.id]
+  );
+
+  return rows[0] || null;
+}
+
 function joinUrl(baseUrl, pathname) {
   return `${String(baseUrl).replace(/\/+$/, "")}${pathname}`;
+}
+
+function normalizeTfCode(value, fallback = "TF1") {
+  const code = String(value || fallback || "TF1").trim().toUpperCase();
+  if (code === "NONE") return "TF1";
+  if (code === "EQUAL" || code === "TF2N") return "TF2";
+  if (code === "PROP" || code === "TF3N") return "TF3";
+  return ["TF1", "TF2", "TF3"].includes(code) ? code : "TF1";
 }
 
 function getAiParserUrl(documentType) {
@@ -213,6 +310,347 @@ function summarizeImporto(rows) {
   return summary;
 }
 
+function parseItalianAmount(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const negative = raw.endsWith("-");
+  const normalized = raw
+    .replace(/-/g, "")
+    .replace(/\s+/g, "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+  const parsed = Number(normalized);
+
+  if (!Number.isFinite(parsed)) return null;
+  return negative ? -parsed : parsed;
+}
+
+function deriveAbcTxtFornitureSummary(rawText) {
+  if (!rawText || typeof rawText !== "string") return [];
+
+  const text = rawText.replace(/\r\n/g, "\n");
+  const markers = [...text.matchAll(/(\d{3}\)-Dati fornitura)/g)].map((match) => ({
+    index: match.index,
+    numero: match[1].slice(0, 3),
+  }));
+
+  if (!markers.length) return [];
+
+  return markers
+    .map((marker, idx) => {
+      const next = markers[idx + 1]?.index ?? text.length;
+      const section = text.slice(marker.index, next);
+      const totalMatch = section.match(new RegExp(`${marker.numero}\\)-Totale fornitura\\s+([\\d.,-]+)`));
+
+      const tipoLettura = /MEDIA\s*\/\s*ACCONTO/i.test(section)
+        ? "media"
+        : /LETTURA\s+A\s+GIRO/i.test(section)
+        ? "a_giro"
+        : null;
+
+      const consumoMatch = section.match(/TOTALE CONSUMI CALCOLATI:\s*([\d.,-]+)/i);
+      const ivaMatch = section.match(/ALIQUOTA\s+10\s+%\s+su imp\.\s+([\d.,-]+)\s*=\s*([\d.,-]+)/i);
+      const readings = [];
+      const readingRegex =
+        /(LETTURA\s+A\s+GIRO|MEDIA\s*\/\s*ACCONTO)\s+(\d{2}\/\d{2}\/\d{4})\s+([\d.,-]+)(?:\s+([\d.,-]+))?/gi;
+      let readingMatch;
+
+      while ((readingMatch = readingRegex.exec(section)) !== null) {
+        readings.push({
+          tipo_lettura: /MEDIA/i.test(readingMatch[1]) ? "media" : "a_giro",
+          data_lettura: readingMatch[2],
+          lettura_mc: parseItalianAmount(readingMatch[3]),
+          consumo_mc: parseItalianAmount(readingMatch[4]),
+        });
+      }
+
+      const riepilogoVoci = [];
+      const riepilogoRegex = /^\|([^|\n]+)\|([^|\n]+)\|([^|\n]+)\|\s*([\d.,-]+)\s*\|/gm;
+      let riepilogoMatch;
+
+      while ((riepilogoMatch = riepilogoRegex.exec(section)) !== null) {
+        const codice = riepilogoMatch[1].trim();
+        if (!codice || codice.toLowerCase() === "tipo voce") continue;
+
+        riepilogoVoci.push({
+          codice,
+          descrizione: riepilogoMatch[2].trim(),
+          aliquota: riepilogoMatch[3].trim(),
+          imponibile: parseItalianAmount(riepilogoMatch[4]),
+        });
+      }
+
+      return {
+        numero_fornitura: marker.numero,
+        tipo_lettura: tipoLettura,
+        totale_fornitura: parseItalianAmount(totalMatch?.[1]),
+        consumo_mc: parseItalianAmount(consumoMatch?.[1]),
+        imponibile_iva_10: parseItalianAmount(ivaMatch?.[1]),
+        iva_10: parseItalianAmount(ivaMatch?.[2]),
+        letture: readings,
+        riepilogo_voci: riepilogoVoci,
+      };
+    })
+    .filter((item) => item.totale_fornitura !== null || item.tipo_lettura || item.consumo_mc !== null);
+}
+
+function parseAbcTxtPeriodLine(line) {
+  const match = String(line || "").match(
+    /Periodo\s*:?\s+Dal\s+(\d{2}\/\d{2}\/\d{4})\s+al\s+(\d{2}\/\d{2}\/\d{4})/i
+  );
+
+  if (!match) return null;
+
+  return {
+    from_date: match[1],
+    to_date: match[2],
+  };
+}
+
+function parseAbcTxtComponentLine(line) {
+  const match = String(line || "").match(/^Componente:\s*([A-Z0-9_]+)\s*-\s*(.+)$/i);
+  if (!match) return null;
+
+  return {
+    code: match[1].trim(),
+    description: match[2].trim(),
+  };
+}
+
+function parseAbcTxtQuotaLine(line) {
+  const match = String(line || "").match(/^Quota\s*:\s*([A-Z0-9_]+)\s*-\s*(.+)$/i);
+  if (!match) return null;
+
+  return {
+    code: match[1].trim(),
+    description: match[2].trim(),
+  };
+}
+
+function parseAbcTxtAmountLine(line) {
+  const match = String(line || "").match(
+    /^\s*(MC|GG|CAD|EURO)\s+([\d.,-]+)\s+E\.\s+([\d.,-]+)\s+=\s+([\d.,-]+)\s+([A-Z0-9]+)\s*$/i
+  );
+
+  if (!match) return null;
+
+  return {
+    unit: match[1].toUpperCase(),
+    quantita: parseItalianAmount(match[2]),
+    tariffa: parseItalianAmount(match[3]),
+    importo: parseItalianAmount(match[4]),
+    iva_code: match[5],
+  };
+}
+
+function classifyAbcTxtComponent(component, quota, amount) {
+  const componentCode = String(component?.code || "").toUpperCase();
+  const quotaCode = String(quota?.code || "").toUpperCase();
+  const text = `${componentCode} ${component?.description || ""} ${quotaCode} ${quota?.description || ""}`.toUpperCase();
+
+  const isOneri =
+    /\bONERI\b/.test(text) ||
+    /\bPEREQUAZIONE\b/.test(text) ||
+    /^C_(UI[1-4]|MTI3)/.test(componentCode) ||
+    componentCode.includes("_UI") ||
+    componentCode.includes("_MTI3");
+
+  if (isOneri) return "oneri_perequazione";
+
+  const isQf =
+    componentCode.startsWith("C_QF") ||
+    quotaCode.startsWith("Q_QF") ||
+    text.includes("QUOTA FISSA TARIFFA ACQUA") ||
+    text.includes("QUOTA FISSA ACQUEDOTTO");
+
+  if (isQf) return "componente_quota_tariffa_acqua";
+
+  const isDep =
+    componentCode.startsWith("C_DEPUR") ||
+    quotaCode.startsWith("Q_DEPUR") ||
+    text.includes("TARIFFA DEPURAZIONE") ||
+    text.includes("QUOTA DEPURAZIONE");
+
+  if (isDep) return "componente_tariffa_depurazione";
+
+  const isFog =
+    componentCode.startsWith("C_FOGNA") ||
+    quotaCode.startsWith("Q_FOGNA") ||
+    text.includes("TARIFFA FOGNATURA") ||
+    text.includes("FOGNATURA QUOTA");
+
+  if (isFog) return "componente_tariffa_fognatura";
+
+  const isAcquedotto =
+    componentCode.startsWith("C_TARI") ||
+    text.includes("TARIFFA ACQUEDOTTO") ||
+    text.includes("TARIFFA ACQUA") ||
+    text.includes("QUOTA VARIABILE ACQUEDOTTO");
+
+  if (isAcquedotto && amount?.unit === "MC") {
+    return "componente_tariffa_acquedotto";
+  }
+
+  return null;
+}
+
+function deriveAbcTxtComponentRows(rawText) {
+  const empty = {
+    componente_tariffa_acquedotto: [],
+    componente_quota_tariffa_acqua: [],
+    componente_tariffa_fognatura: [],
+    componente_tariffa_depurazione: [],
+    oneri_perequazione: [],
+  };
+
+  if (!rawText || typeof rawText !== "string") return empty;
+
+  const text = rawText.replace(/\r\n/g, "\n");
+  const markers = [...text.matchAll(/(\d{3}\)-Dati fornitura)/g)].map((match) => ({
+    index: match.index,
+    numero: match[1].slice(0, 3),
+  }));
+
+  if (!markers.length) return empty;
+
+  const out = { ...empty };
+
+  for (let idx = 0; idx < markers.length; idx++) {
+    const marker = markers[idx];
+    const next = markers[idx + 1]?.index ?? text.length;
+    const section = text.slice(marker.index, next);
+    const tipoLettura = /MEDIA\s*\/\s*ACCONTO/i.test(section)
+      ? "media"
+      : /LETTURA\s+A\s+GIRO/i.test(section)
+      ? "a_giro"
+      : null;
+
+    const lines = section.split("\n");
+    let currentPeriod = null;
+    let currentComponent = null;
+    let currentQuota = null;
+    let isStorno = false;
+
+    for (const line of lines) {
+      const period = parseAbcTxtPeriodLine(line);
+      if (period) {
+        currentPeriod = period;
+        isStorno = false;
+        continue;
+      }
+
+      const component = parseAbcTxtComponentLine(line);
+      if (component) {
+        currentComponent = component;
+        currentQuota = null;
+        isStorno = false;
+        continue;
+      }
+
+      const quota = parseAbcTxtQuotaLine(line);
+      if (quota) {
+        currentQuota = quota;
+        continue;
+      }
+
+      if (/RIGA\s+DI\s+STORNO\s+ACCONTO/i.test(line)) {
+        isStorno = true;
+        continue;
+      }
+
+      const amount = parseAbcTxtAmountLine(line);
+      if (!amount || !currentPeriod || !currentComponent) continue;
+
+      const target = classifyAbcTxtComponent(currentComponent, currentQuota, amount);
+      if (!target) continue;
+
+      const importo = isStorno && amount.importo > 0 ? -amount.importo : amount.importo;
+      const quantita = isStorno && amount.quantita > 0 ? -amount.quantita : amount.quantita;
+
+      out[target].push({
+        confidence: 1,
+        descrizione: currentComponent.description,
+        codice_componente: currentComponent.code,
+        codice_quota: currentQuota?.code || null,
+        quota_descrizione: currentQuota?.description || null,
+        fornitura: marker.numero,
+        tipo_lettura: tipoLettura,
+        from_date: currentPeriod.from_date,
+        to_date: currentPeriod.to_date,
+        quantita,
+        tariffa: amount.tariffa,
+        importo,
+      });
+
+      isStorno = false;
+    }
+  }
+
+  return out;
+}
+
+function enrichParsedPayloadWithTxtSummary(parsedPayload, rawText) {
+  if (!parsedPayload || typeof parsedPayload !== "object" || !rawText) return parsedPayload;
+
+  const fornitureSummary = deriveAbcTxtFornitureSummary(rawText);
+  if (fornitureSummary.length) {
+    parsedPayload.forniture_summary = fornitureSummary;
+  }
+
+  const componentRows = deriveAbcTxtComponentRows(rawText);
+  for (const [key, rows] of Object.entries(componentRows)) {
+    if (Array.isArray(rows) && rows.length) {
+      parsedPayload[key] = rows;
+    }
+  }
+
+  parsedPayload.summaryTariffeAcquedotto = summarizeTariffeAcquedotto(
+    parsedPayload.componente_tariffa_acquedotto || []
+  );
+  parsedPayload.totale_dep_fog =
+    summarizeImporto(parsedPayload.componente_tariffa_depurazione || []) +
+    summarizeImporto(parsedPayload.componente_tariffa_fognatura || []);
+
+  return parsedPayload;
+}
+
+function enrichImportedDocumentWithStoredTxtSummary(doc) {
+  if (!doc?.stored_filename || !doc?.parsed_payload_json) return doc;
+
+  const originalName = doc.original_filename || doc.stored_filename;
+  if (path.extname(originalName).toLowerCase() !== ".txt") return doc;
+
+  const filePath = path.join(
+    process.cwd(),
+    "..",
+    "runtime_uploads",
+    "fatture-import",
+    doc.stored_filename
+  );
+
+  if (!fs1.existsSync(filePath)) return doc;
+
+  try {
+    const parsedPayload =
+      typeof doc.parsed_payload_json === "string"
+        ? JSON.parse(doc.parsed_payload_json)
+        : doc.parsed_payload_json;
+
+    const rawText = fs1.readFileSync(filePath, "utf8");
+    const enrichedPayload = enrichParsedPayloadWithTxtSummary(parsedPayload, rawText);
+
+    return {
+      ...doc,
+      parsed_payload_json: JSON.stringify(enrichedPayload),
+    };
+  } catch (err) {
+    console.error("Errore arricchimento riepilogo TXT:", err);
+    return doc;
+  }
+}
+
 function deriveLettureSummary(letture = []) {
   const items = Array.isArray(letture) ? letture : [];
 
@@ -282,7 +720,13 @@ function deriveLettureSummary(letture = []) {
 
 function toSortableDate(value) {
   if (!value) return "0000-00-00";
-  const parts = String(value).split("/");
+  const raw = String(value).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10);
+  }
+
+  const parts = raw.split("/");
   if (parts.length !== 3) return "0000-00-00";
   const [dd, mm, yyyy] = parts;
   return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
@@ -1111,9 +1555,14 @@ exports.parseImportedDocument = async (id) => {
 
   let parserResponse;
   let parsedPayload;
+  let rawTxtContent = null;
 
   try {
     const form = new FormData();
+
+    if (documentType === "txt") {
+      rawTxtContent = fs1.readFileSync(filePath, "utf8");
+    }
 
     form.append("file", fs1.createReadStream(filePath), {
       filename: originalName,
@@ -1158,6 +1607,8 @@ exports.parseImportedDocument = async (id) => {
 
     throw buildAiParserError(e, documentType, getAiParserUrl(documentType));
   }
+
+  enrichParsedPayloadWithTxtSummary(parsedPayload, rawTxtContent);
 
   const extractionErrors = formatExtractionErrors(parserResponse?.errors);
   const lettureSummary = deriveLettureSummary(parsedPayload.letture || []);
@@ -1641,6 +2092,8 @@ exports.createOrLoadSession = async function ({
 
   const conn = await db.getConnection();
   try {
+    await ensureFattureSessionContextColumns();
+
     // Load condominio snapshot values
     const [condRows] = await conn.query(
       `SELECT oneri, oneri_doppio FROM condomini_v2 WHERE id = ? LIMIT 1`,
@@ -1728,6 +2181,8 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     );
     if (sRows.length === 0) throw new Error("Session not found");
     const session = sRows[0];
+
+    const linkedImportedDocument = await getImportedDocumentLinkedToSession(conn, session);
 
     // Period sessions
     const [paRows] = await conn.query(
@@ -1817,13 +2272,34 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
     const mapRighe = new Map(righeRows.map((r) => [r.id_utenza, r]));
 
-    const grid = utenze.map((u) => ({
+    let grid = utenze.map((u) => ({
       utenza: u,
       attuale: mapAtt.get(u.id) || null,
       precedente: mapPrec.get(u.id) || null,  
       riga: mapRighe.get(u.id) || null,
       
     }));
+
+    if (grid.length === 0 && righeRows.length > 0) {
+      grid = righeRows.map((r) => ({
+        utenza: {
+          id: r.id_utenza,
+          id_user: r.id_user,
+          Nome: r.utente,
+          Cognome: "",
+          doppio_contatore: r.doppio_contatore,
+        },
+        attuale: {
+          valore_lettura: r.lettura_attuale,
+          stato_lettura: r.stato_attuale,
+        },
+        precedente: {
+          valore_lettura: r.lettura_precedente,
+          stato_lettura: r.stato_precedente,
+        },
+        riga: r,
+      }));
+    }
 
     // General meter (for display)
     const contGenAtt = periodoAttuale?.contatore_generale_valore ?? null;
@@ -1839,6 +2315,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
       session,
       periodoAttuale,
       periodoPrecedente,
+      linkedImportedDocument,
       contatoreGenerale: { attuale: contGenAtt, precedente: contGenPrec },
       grid,
     };
@@ -1858,10 +2335,13 @@ exports.updateSessionParams = async function ({
   varie,
   dataFattura,
   dataCasaIdrica,
-  giorniCasa
+  giorniCasa,
+  tfCode,
+  manualConsumptions
  
 }) {
   assertUUID(sessionId, "sessionId");
+  await ensureFattureSessionContextColumns();
  
   
   const conn = await db.getConnection();
@@ -1872,14 +2352,16 @@ exports.updateSessionParams = async function ({
       SET
         giorni_qf = COALESCE(?, giorni_qf),
         giorni_consumi = COALESCE(?, giorni_consumi),
-        giorni_acconto = ?,
+        giorni_acconto = COALESCE(?, giorni_acconto),
         varie = COALESCE(?, varie),
-        data_fattura = ?,
-        data_casa_idrica = ?,
-        giorni_interni = ?,
-        tot_acquedotto = ?,
-        mcAcconto  = ?,
-        mcStorno = ?
+        data_fattura = COALESCE(?, data_fattura),
+        data_casa_idrica = COALESCE(?, data_casa_idrica),
+        giorni_interni = COALESCE(?, giorni_interni),
+        tot_acquedotto = COALESCE(?, tot_acquedotto),
+        mcAcconto  = COALESCE(?, mcAcconto),
+        mcStorno = COALESCE(?, mcStorno),
+        tf_code = COALESCE(?, tf_code),
+        manual_consumptions_json = COALESCE(?, manual_consumptions_json)
       WHERE id = ?
       `,
       [
@@ -1893,6 +2375,12 @@ exports.updateSessionParams = async function ({
         totImpo !== undefined ? (totImpo === null ? null : Number(totImpo)) : null,
         mcAcconto !== undefined ? (mcAcconto === null ? null : Number(mcAcconto)) : null,
         mcStorno !== undefined ? (mcStorno === null ? null : Number(mcStorno)) : null,
+        tfCode !== undefined && tfCode !== null && tfCode !== ""
+          ? normalizeTfCode(tfCode)
+          : null,
+        manualConsumptions !== undefined
+          ? JSON.stringify(manualConsumptions || {})
+          : null,
         sessionId,
       ]
     );
@@ -1900,6 +2388,10 @@ exports.updateSessionParams = async function ({
     const [rows] = await conn.query(`SELECT * FROM fatture_sessioni WHERE id = ? LIMIT 1`, [
       sessionId,
     ]);
+    if (!rows.length) {
+      throw new Error("Sessione fatturazione non trovata");
+    }
+
     return { session: rows[0] };
   } finally {
     conn.release();
@@ -2312,7 +2804,10 @@ async function calculateInterni(
   eurStorno = 0,
   totaleParsedWithOneri,
   parsedOneriPerequazione = null,
-  parsedOneriPerequazioneAcconto = null
+  parsedOneriPerequazioneAcconto = null,
+  parsedAccontoImporto = null,
+  parsedAccontoDepFog = null,
+  parsedAccontoTotale = null
 ) {
 
   console.log(generale);
@@ -2540,6 +3035,16 @@ async function calculateInterni(
 
     const dettaglio_consumi = [];
     let dettaglioConsumiAcquedotto = [];
+    let manualConsumptions = {};
+    try {
+      manualConsumptions =
+        typeof session.manual_consumptions_json === "string"
+          ? JSON.parse(session.manual_consumptions_json || "{}")
+          : session.manual_consumptions_json || {};
+    } catch {
+      manualConsumptions = {};
+    }
+
     for (const key of unitKeys) {
       const group = byUnit.get(key);
 
@@ -2595,6 +3100,19 @@ async function calculateInterni(
         flatTipo = "SPECIAL";
       }
 
+      const manualConsumptionValue = manualConsumptions?.[first.id];
+      const hasManualConsumption =
+        upper(statoAtt, "") === "Y" &&
+        manualConsumptionValue !== undefined &&
+        manualConsumptionValue !== null &&
+        manualConsumptionValue !== "" &&
+        Number.isFinite(Number(manualConsumptionValue)) &&
+        Number(manualConsumptionValue) >= 0;
+
+      if (hasManualConsumption) {
+        consumoNorm = round3(Number(manualConsumptionValue));
+      }
+
       const consumoTot = consumoNorm;
 
       const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
@@ -2607,7 +3125,7 @@ async function calculateInterni(
 
       let impAcq = 0;
       
-      let user_id = ra0.id_utenza;
+      let user_id = ra0?.id_utenza ?? first.id;
 
        
       if (consumoNorm !== null) {
@@ -2738,10 +3256,31 @@ async function calculateInterni(
     // -------------------------------------------------------------------
     const primaries = rows.filter((r) => r._isPrimary);
 
-    const totAccEuro = round2(n2(generale.totAcc ?? 0));
+    const hasParsedAccontoImporto =
+      parsedAccontoImporto !== null &&
+      parsedAccontoImporto !== undefined &&
+      Number.isFinite(Number(parsedAccontoImporto)) &&
+      n2(parsedAccontoImporto) > 0;
+    const hasParsedAccontoDepFog =
+      parsedAccontoDepFog !== null &&
+      parsedAccontoDepFog !== undefined &&
+      Number.isFinite(Number(parsedAccontoDepFog));
+    const hasParsedAccontoTotale =
+      parsedAccontoTotale !== null &&
+      parsedAccontoTotale !== undefined &&
+      Number.isFinite(Number(parsedAccontoTotale)) &&
+      n2(parsedAccontoTotale) > 0;
+
+    const totAccEuro = round2(
+      hasParsedAccontoTotale ? n2(parsedAccontoTotale) : n2(generale.totAcc ?? 0)
+    );
     const totConsAccMc = round3(n2(generale.consumoAcconto ?? 0));
-    const totImpConsAcc = round2(n2(generale.impConsAcc ?? 0));
-    const totDepFogAcc = round2(n2(generale.depFogAcc ?? 0));
+    const totImpConsAcc = round2(
+      hasParsedAccontoImporto ? n2(parsedAccontoImporto) : n2(generale.impConsAcc ?? 0)
+    );
+    const totDepFogAcc = round2(
+      hasParsedAccontoDepFog ? n2(parsedAccontoDepFog) : n2(generale.depFogAcc ?? 0)
+    );
 
     // invoice-facing storno should be NEGATIVE
     const totStornoCalcolato = round2(n2(eurStorno ?? 0));
@@ -2765,29 +3304,44 @@ async function calculateInterni(
       }
     }
 
-    const accEuroShares = allocateByWeight(totAccEuro, primaries, moneyWeightFn, 2);
+    const accEuroShares = allocateByWeight(totAccEuro, primaries, mcWeightFn, 2);
     const impConsAccShares = allocateByWeight(
       totImpConsAcc > 0 ? totImpConsAcc : totAccEuro,
       primaries,
-      moneyWeightFn,
+      mcWeightFn,
       2
     );
-    const depFogAccShares = allocateByWeight(totDepFogAcc, primaries, moneyWeightFn, 2);
+    const depFogAccShares = allocateByWeight(totDepFogAcc, primaries, mcWeightFn, 2);
+    const totIvaAcc = round2(
+      Math.max(
+        0,
+        n2(totAccEuro) -
+          n2(totImpConsAcc) -
+          n2(totDepFogAcc) -
+          (hasParsedOneri ? n2(parsedOneriAcconto) : 0)
+      )
+    );
+    const ivaAccShares = allocateByWeight(totIvaAcc, primaries, mcWeightFn, 2);
     const accMcShares = allocateByWeight(totConsAccMc, primaries, mcWeightFn, 3);
     const stornoCalcShares = allocateByWeight(totStornoCalcolato, primaries, moneyWeightFn, 2);
     const oneriAccShares = hasParsedOneri
-      ? allocateEqualRounded(parsedOneriAcconto, primaries, 2)
+      ? allocateByWeight(parsedOneriAcconto, primaries, mcWeightFn, 2)
       : primaries.map(() => 0);
+    const accontoTotaleIncludesParsedOneri = hasParsedAccontoTotale && hasParsedOneri;
 
     for (let i = 0; i < primaries.length; i++) {
       const r = primaries[i];
       const oneriAccShare = round2(oneriAccShares[i] || 0);
 
-      r.acconto = round2(n2(accEuroShares[i] || 0) + oneriAccShare);
+      r.acconto = round2(
+        n2(accEuroShares[i] || 0) +
+          (accontoTotaleIncludesParsedOneri ? 0 : oneriAccShare)
+      );
       r.imp_acconto = round2(impConsAccShares[i] || 0);
       r.depfog_acconto = round2(depFogAccShares[i] || 0);
       r.consumo_acconto = round3(accMcShares[i] || 0);
       r.imp_oneri = round2(n2(r.imp_oneri) + oneriAccShare);
+      r.imp_iva = round2(n2(r.imp_iva) + n2(ivaAccShares[i] || 0));
 
       // must be negative if it reduces the invoice
       r.storno_calcolato = round2(stornoCalcShares[i] || 0);
@@ -2798,6 +3352,7 @@ async function calculateInterni(
         n2(r.imp_acconto) +
         n2(r.depfog_acconto) +
         oneriAccShare +
+        n2(ivaAccShares[i] || 0) +
         n2(r.storno_calcolato)
       );
     }
@@ -2995,7 +3550,7 @@ async function calculateInterni(
       baseSum,
       diffApplied: diff,
       rows,
-      tfCode: upper(tfCode, "TF1"),
+      tfCode: normalizeTfCode(tfCode),
     };
   } catch (err) {
     throw err;
@@ -3007,16 +3562,22 @@ exports.calculateSession = async function ({
   annoAtt,
   annoPrec = null,
   eurStorno = 0,
-  parsedQF = 0,
+  parsedQF = null,
+  parsedAccontoImporto = null,
+  parsedAccontoDepFog = null,
+  parsedAccontoTotale = null,
   parsedOneriPerequazione = null,
   parsedOneriPerequazioneAcconto = null,
   totaleParsedWithOneri = 0,
+  importedDocumentId = null,
+  calculationContext = null,
 }) {
 
   assertUUID(sessionId, "sessionId");
 
   let conn;
   try {
+    await ensureFattureSessionContextColumns();
     conn = await db.getConnection();
     await conn.beginTransaction();
 
@@ -3030,6 +3591,27 @@ exports.calculateSession = async function ({
     if (session.stato === "CONFERMATA") {
       throw new Error("Session is confirmed and cannot be recalculated");
     }
+    const effectiveTfCode = normalizeTfCode(
+      tfCode || calculationContext?.tfCode,
+      session.tf_code || "TF1"
+    );
+    console.log("calculateSession TF", {
+      sessionId,
+      requestTfCode: tfCode,
+      previousTfCode: session.tf_code,
+      effectiveTfCode,
+    });
+    const resolvedImportedDocumentId =
+      importedDocumentId ?? calculationContext?.importedDocumentId ?? null;
+    const calculationContextJson = calculationContext
+      ? JSON.stringify({
+          ...calculationContext,
+          tfCode: effectiveTfCode,
+          importedDocumentId: resolvedImportedDocumentId,
+          savedAt: new Date().toISOString(),
+        })
+      : null;
+
     const generaleResult = await calculateGenerale(conn, sessionId, annoAtt, annoPrec, eurStorno, parsedQF);
  
     const g = generaleResult.generale;
@@ -3040,13 +3622,16 @@ exports.calculateSession = async function ({
       conn,
       session,
       g,
-      tfCode,
+      effectiveTfCode,
       annoAtt,
       annoPrec,
       eurStorno,
       totaleParsedWithOneri,
       parsedOneriPerequazione,
-      parsedOneriPerequazioneAcconto
+      parsedOneriPerequazioneAcconto,
+      parsedAccontoImporto,
+      parsedAccontoDepFog,
+      parsedAccontoTotale
     );
     
     
@@ -3055,6 +3640,10 @@ exports.calculateSession = async function ({
       UPDATE fatture_sessioni
       SET
         stato = 'CALCOLATA',
+        tf_code = ?,
+        imported_document_id = COALESCE(?, imported_document_id),
+        calculation_context_json = COALESCE(?, calculation_context_json),
+        calculation_context_updated_at = CASE WHEN ? IS NULL THEN calculation_context_updated_at ELSE NOW() END,
         tot_acquedotto = ?,
         tot_fognatura = ?,
         tot_depurazione = ?,
@@ -3065,6 +3654,12 @@ exports.calculateSession = async function ({
       WHERE id = ?
       `,
       [
+        effectiveTfCode,
+        resolvedImportedDocumentId === undefined || resolvedImportedDocumentId === null || resolvedImportedDocumentId === ""
+          ? null
+          : Number(resolvedImportedDocumentId),
+        calculationContextJson,
+        calculationContextJson,
         g.impAcquedotto,
         g.depFog,
         0,
@@ -3075,6 +3670,25 @@ exports.calculateSession = async function ({
         sessionId,
       ]
     );
+
+    const [tfRows] = await conn.query(
+      `
+      SELECT
+        tf_code,
+        imported_document_id,
+        calculation_context_json IS NOT NULL AS has_calculation_context
+      FROM fatture_sessioni
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [sessionId]
+    );
+    console.log("calculateSession TF persisted", {
+      sessionId,
+      persistedTfCode: tfRows[0]?.tf_code,
+      importedDocumentId: tfRows[0]?.imported_document_id,
+      hasCalculationContext: !!tfRows[0]?.has_calculation_context,
+    });
 
     await conn.commit();
 
@@ -3095,12 +3709,38 @@ exports.calculateSession = async function ({
 exports.getByCondominio = async function ({ condominioId }) {
   const conn = await db.getConnection();
   try {
+    await ensureFattureSessionContextColumns();
+
     const [rows] = await conn.query(
       `
-      SELECT *
-      FROM fatture_sessioni
-      WHERE id_condominio = ?
-      ORDER BY created_at DESC
+      SELECT
+        fs.*,
+        pa.period_year AS periodo_attuale_anno,
+        pa.period_month AS periodo_attuale_mese,
+        pp.period_year AS periodo_precedente_anno,
+        pp.period_month AS periodo_precedente_mese,
+        COALESCE(iid.id, iid_legacy.id) AS linked_imported_document_id,
+        COALESCE(iid.original_filename, iid_legacy.original_filename) AS linked_imported_original_filename,
+        COALESCE(iid.numero_bolletta, iid_legacy.numero_bolletta) AS linked_imported_numero_bolletta,
+        COALESCE(iid.data_inizio_periodo, iid_legacy.data_inizio_periodo) AS linked_imported_data_inizio_periodo,
+        COALESCE(iid.data_fine_periodo, iid_legacy.data_fine_periodo) AS linked_imported_data_fine_periodo,
+        COALESCE(iid.importo_totale_da_pagare, iid_legacy.importo_totale_da_pagare) AS linked_imported_importo_totale_da_pagare
+      FROM fatture_sessioni fs
+      LEFT JOIN letture_sessioni pa ON pa.id = fs.id_periodo_attuale
+      LEFT JOIN letture_sessioni pp ON pp.id = fs.id_periodo_precedente
+      LEFT JOIN imported_invoice_documents iid ON iid.id = fs.imported_document_id
+      LEFT JOIN (
+        SELECT
+          CONVERT(linked_session_id USING utf8mb4) COLLATE utf8mb4_general_ci AS linked_session_id,
+          MAX(id) AS imported_document_id
+        FROM imported_invoice_documents
+        WHERE linked_session_id IS NOT NULL
+        GROUP BY CONVERT(linked_session_id USING utf8mb4) COLLATE utf8mb4_general_ci
+      ) legacy_link ON legacy_link.linked_session_id =
+        CONVERT(fs.id USING utf8mb4) COLLATE utf8mb4_general_ci
+      LEFT JOIN imported_invoice_documents iid_legacy ON iid_legacy.id = legacy_link.imported_document_id
+      WHERE fs.id_condominio = ?
+      ORDER BY pa.period_year DESC, pa.period_month DESC, fs.created_at DESC
       `,
       [condominioId]
     );
@@ -3391,14 +4031,15 @@ exports.getImportedDocumentById = async function (id) {
     [id]
   );
 
-  const doc = rows[0];
+  const docRows = rows[0] || [];
+  const doc = docRows[0] || null;
   if (!doc) {
     const err = new Error("Documento importato non trovato");
     err.statusCode = 404;
     throw err;
   }
 
-  return { ok: true, document: doc };
+  return { ok: true, document: [enrichImportedDocumentWithStoredTxtSummary(doc)] };
 }
 
 async function mergePdfBuffers(buffers) {
@@ -3491,8 +4132,9 @@ exports.updateImportedDocumentParsedResult = async function (id, payload) {
     `SELECT id FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
     [id]
   );
+  const existingDocRows = existingRows[0] || [];
 
-  if (!existingRows[0]) {
+  if (!existingDocRows.length) {
     const err = new Error("Documento importato non trovato");
     err.statusCode = 404;
     throw err;
@@ -3561,23 +4203,49 @@ exports.updateImportedDocumentParsedResult = async function (id, payload) {
     [id]
   );
 
-  return { ok: true, document: rows[0] || null };
+  const docRows = rows[0] || [];
+  return { ok: true, document: docRows[0] || null };
 }
 
 exports.linkImportedDocumentToSession = async function (id, sessionId) {
   if (!sessionId) {
     throw new Error("sessionId mancante");
   }
+  await ensureFattureSessionContextColumns();
 
-  const existingRows = await db.query(
+  const [existingRows] = await db.query(
     `SELECT id FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
     [id]
   );
 
-  if (!existingRows[0]) {
+  if (!existingRows.length) {
     const err = new Error("Documento importato non trovato");
     err.statusCode = 404;
     throw err;
+  }
+
+  await db.query(
+    `
+    UPDATE imported_invoice_documents
+    SET linked_session_id = NULL
+    WHERE CONVERT(linked_session_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+      CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_general_ci
+      AND id <> ?
+    `,
+    [sessionId, id]
+  );
+
+  const [sessionUpdate] = await db.query(
+    `
+    UPDATE fatture_sessioni
+    SET imported_document_id = ?
+    WHERE id = ?
+    `,
+    [id, sessionId]
+  );
+
+  if (!sessionUpdate.affectedRows) {
+    throw new Error("Sessione fatturazione non trovata per associazione documento");
   }
 
   await db.query(
@@ -3592,7 +4260,7 @@ exports.linkImportedDocumentToSession = async function (id, sessionId) {
     [sessionId, id]
   );
 
-  const rows = await db.query(
+  const [rows] = await db.query(
     `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
     [id]
   );

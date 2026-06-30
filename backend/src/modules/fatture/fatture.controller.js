@@ -129,15 +129,25 @@ exports.updateSessionParams = async (req, res) => {
 
 exports.calculateSession = async (req, res) => {
   try {
+    console.log("calculateSession request", {
+      sessionId: req.params.id,
+      tfCode: req.body?.tfCode,
+      importedDocumentId: req.body?.importedDocumentId,
+    });
    
     const result = await service.calculateSession({ sessionId: req.params.id, 
       tfCode: req.body?.tfCode, 
       annoAtt: req.body?.annoTariffa,
       eurStorno: req.body?.eurStorno,
       parsedQF: req.body?.parsedQF,
+      parsedAccontoImporto: req.body?.parsedAccontoImporto,
+      parsedAccontoDepFog: req.body?.parsedAccontoDepFog,
+      parsedAccontoTotale: req.body?.parsedAccontoTotale,
       parsedOneriPerequazione: req.body?.parsedOneriPerequazione,
       parsedOneriPerequazioneAcconto: req.body?.parsedOneriPerequazioneAcconto,
-      totaleParsedWithOneri: req.body?.totaleParsedWithOneri
+      totaleParsedWithOneri: req.body?.totaleParsedWithOneri,
+      importedDocumentId: req.body?.importedDocumentId,
+      calculationContext: req.body?.calculationContext,
      });
         
     res.json(result);

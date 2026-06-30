@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
-import { Trash2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
 import { parse, set, weeksToDays } from "date-fns";
 import { useRef } from "react";
 import { ca, se } from "date-fns/locale";
 import InvoicePrintCard from "../components/InvoicePrintCard";
+import { getVersionFull, listVersions } from "../../api/tariffe";
  // @ts-ignore
 import { summarizePeriodiAndTariffe } from "../../utils/fattureUtils";
 
@@ -65,6 +66,8 @@ export default function CondominioFatturePage() {
     const [loadingDetail, setLoadingDetail] = useState(false);
     const [loadingCreate, setLoadingCreate] = useState(false);
     const [loadingCalc, setLoadingCalc] = useState(false);
+    const [autoCalculatingSessionId, setAutoCalculatingSessionId] = useState<string | null>(null);
+    const [pendingAutoCalculateSessionId, setPendingAutoCalculateSessionId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [valPrec, setValPrec] = useState<number | string>("");
     const [valAtt, setValAtt] = useState<number | string>("");
@@ -80,6 +83,14 @@ export default function CondominioFatturePage() {
     const [pdfPage, setPdfPage] = useState(1);
     const pdfPageSize = 20;
     const [expandedRows, setExpandedRows] = useState<Record<string | number, boolean>>({});
+    const [manualConsumptions, setManualConsumptions] = useState<Record<string, string>>({});
+    const loadedTfSessionRef = useRef<string | null>(null);
+    const selectedTfCodeRef = useRef<string>("TF1");
+    const manualTfOverrideRef = useRef<{ sessionId: string | null; tfCode: string | null }>({
+      sessionId: null,
+      tfCode: null,
+    });
+    const autoCalculatedSessionRef = useRef<string | null>(null);
 
     const toggleRow = (rowKey: string | number) => {
       setExpandedRows((prev) => ({
@@ -117,7 +128,65 @@ export default function CondominioFatturePage() {
 
     const session = detail?.session;
     const contatoreGenerale = detail?.contatoreGenerale ?? {};
-    const righe = detail?.righe ?? detail?.grid ?? [];
+    const normalizeFatturaRow = (row: any) => {
+      const sourceUtenza = row?.utenza || {};
+      const flatName = String(row?.utente || "").trim();
+      const [flatNome, ...flatCognomeParts] = flatName.split(/\s+/).filter(Boolean);
+
+      if (row?.utenza || row?.riga) {
+        return {
+          ...row,
+          utenza: {
+            ...sourceUtenza,
+            id: sourceUtenza?.id ?? row?.id_utenza,
+            id_user: sourceUtenza?.id_user ?? row?.id_user,
+            Nome: sourceUtenza?.Nome ?? sourceUtenza?.nome ?? flatNome ?? "",
+            Cognome:
+              sourceUtenza?.Cognome ??
+              sourceUtenza?.cognome ??
+              flatCognomeParts.join(" ") ??
+              "",
+            Isolato: sourceUtenza?.Isolato ?? sourceUtenza?.isolato ?? "",
+            Scala: sourceUtenza?.Scala ?? sourceUtenza?.scala ?? "",
+            Interno: sourceUtenza?.Interno ?? sourceUtenza?.interno ?? "",
+            doppio_contatore:
+              sourceUtenza?.doppio_contatore ?? row?.doppio_contatore,
+          },
+        };
+      }
+
+      return {
+        utenza: {
+          id: row?.id_utenza,
+          id_user: row?.id_user,
+          Nome: row?.utente || row?.nome || "",
+          Cognome: row?.cognome || "",
+          Isolato: row?.Isolato ?? row?.isolato ?? "",
+          Scala: row?.Scala ?? row?.scala ?? "",
+          Interno: row?.Interno ?? row?.interno ?? "",
+          doppio_contatore: row?.doppio_contatore,
+        },
+        attuale:
+          row?.lettura_attuale !== undefined || row?.stato_attuale !== undefined
+            ? {
+                valore_lettura: row?.lettura_attuale,
+                stato_lettura: row?.stato_attuale,
+              }
+            : null,
+        precedente:
+          row?.lettura_precedente !== undefined || row?.stato_precedente !== undefined
+            ? {
+                valore_lettura: row?.lettura_precedente,
+                stato_lettura: row?.stato_precedente,
+              }
+            : null,
+        riga: row,
+      };
+    };
+
+    const gridRows = Array.isArray(detail?.grid) ? detail.grid : [];
+    const calculatedRows = Array.isArray(detail?.righe) ? detail.righe : [];
+    const righe = (gridRows.length > 0 ? gridRows : calculatedRows).map(normalizeFatturaRow);
     const periodoAttuale = detail?.periodoAttuale ?? null;
     const periodoPrecedente = detail?.periodoPrecedente ?? null;
     const consumoGenerale =
@@ -168,6 +237,9 @@ export default function CondominioFatturePage() {
     const [generatedDocuments, setGeneratedDocuments] = useState<any[]>([]);
     const [openPeriod, setOpenPeriod] = useState<string | null>(null);
     const [pdfSearch, setPdfSearch] = useState("");
+    const [activeTariffPreview, setActiveTariffPreview] = useState<any | null>(null);
+    const [loadingTariffPreview, setLoadingTariffPreview] = useState(false);
+    const [periodSearch, setPeriodSearch] = useState("");
 
     const [importedSearch, setImportedSearch] = useState("");
     
@@ -191,6 +263,29 @@ export default function CondominioFatturePage() {
         importedStatusFilter === "all" || status === importedStatusFilter;
 
       return matchesSearch && matchesStatus;
+    });
+
+    const filteredSessions = sessions.filter((s: any) => {
+      const search = periodSearch.toLowerCase().trim();
+      if (!search) return true;
+
+      const linkedDoc = getSessionLinkedImportedDocument(s);
+      const periodLabel = s.periodo_precedente_mese && s.periodo_attuale_mese
+        ? `${s.periodo_precedente_mese}/${s.periodo_precedente_anno} ${s.periodo_attuale_mese}/${s.periodo_attuale_anno}`
+        : "";
+
+      return [
+        periodLabel,
+        getImportedDocumentName(linkedDoc || ({} as ImportedInvoiceDocument)),
+        s.id,
+        s.tf_code,
+        s.tf,
+        s.stato,
+        String(s.grand_total ?? ""),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
     });
 
     const importedTotalPages = Math.max(
@@ -357,6 +452,58 @@ export default function CondominioFatturePage() {
     return Array.isArray(value) ? value : [];
   }
 
+  function normalizeTfCode(value: any): string {
+    const code = String(value || "TF1").trim().toUpperCase();
+
+    if (code === "NONE") return "TF1";
+    if (code === "EQUAL" || code === "TF2N") return "TF2";
+    if (code === "PROP" || code === "TF3N") return "TF3";
+    if (["TF1", "TF2", "TF3"].includes(code)) return code;
+
+    return "TF1";
+  }
+
+  function applyTfCode(value: any) {
+    const normalized = normalizeTfCode(value);
+    selectedTfCodeRef.current = normalized;
+    setTfCode(normalized);
+    return normalized;
+  }
+
+  async function persistTfCode(value: any, sessionId: string | null = fatturaId || null) {
+    if (!sessionId) return;
+
+    const normalized = applyTfCode(value);
+    manualTfOverrideRef.current = {
+      sessionId,
+      tfCode: normalized,
+    };
+
+    try {
+      await api.put(`/fatture/sessioni/${sessionId}/parametri`, {
+        tfCode: normalized,
+      });
+      setSessions((prev) =>
+        prev.map((s: any) =>
+          String(s.id) === String(sessionId) ? { ...s, tf_code: normalized } : s
+        )
+      );
+      setCurrentSession((prev: any) =>
+        prev && String(prev.id) === String(sessionId)
+          ? { ...prev, tf_code: normalized }
+          : prev
+      );
+      setDetail((prev: any) =>
+        prev?.session && String(prev.session.id) === String(sessionId)
+          ? { ...prev, session: { ...prev.session, tf_code: normalized } }
+          : prev
+      );
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore salvataggio TF");
+      throw err;
+    }
+  }
+
   function formatImportedDocDate(value?: string | null) {
     if (!value) return "";
 
@@ -400,6 +547,183 @@ export default function CondominioFatturePage() {
     return cleanImportedFilename(doc.original_filename);
   }
 
+  function findSessionById(sessionId?: string | null) {
+    if (!sessionId) return null;
+
+    if (session && String(session.id || "") === String(sessionId)) {
+      return session;
+    }
+
+    if (currentSession && String(currentSession.id || "") === String(sessionId)) {
+      return currentSession;
+    }
+
+    const fromList = sessions.find((item: any) => String(item?.id || "") === String(sessionId));
+    return fromList || null;
+  }
+
+  function buildImportedDocumentFromSession(sessionRow: any) {
+    if (!sessionRow?.linked_imported_document_id && !sessionRow?.imported_document_id) {
+      return null;
+    }
+
+    return {
+      id: sessionRow.linked_imported_document_id || sessionRow.imported_document_id,
+      original_filename: sessionRow.linked_imported_original_filename,
+      numero_bolletta: sessionRow.linked_imported_numero_bolletta,
+      data_inizio_periodo: sessionRow.linked_imported_data_inizio_periodo,
+      data_fine_periodo: sessionRow.linked_imported_data_fine_periodo,
+      importo_totale_da_pagare: sessionRow.linked_imported_importo_totale_da_pagare,
+      linked_session_id: sessionRow.id,
+    } as ImportedInvoiceDocument;
+  }
+
+  function getLinkedImportedDocument(sessionId?: string | null) {
+    if (!sessionId) return null;
+
+    const sessionRow = findSessionById(sessionId);
+    const sessionDocumentId =
+      sessionRow?.imported_document_id || sessionRow?.linked_imported_document_id || null;
+
+    const fromList =
+      importedDocs.find((doc: any) => String(doc?.linked_session_id || "") === String(sessionId)) ||
+      (sessionDocumentId
+        ? importedDocs.find((doc: any) => String(doc?.id || "") === String(sessionDocumentId))
+        : null);
+
+    if (
+      selectedImportedDoc?.id &&
+      (String(selectedImportedDoc.linked_session_id || "") === String(sessionId) ||
+        (sessionDocumentId && String(selectedImportedDoc.id) === String(sessionDocumentId)))
+    ) {
+      return { ...selectedImportedDoc, linked_session_id: sessionId };
+    }
+
+    if (fromList) {
+      return { ...fromList, linked_session_id: sessionId };
+    }
+
+    if (
+      detail?.linkedImportedDocument?.id &&
+      detail?.session?.id &&
+      String(detail.session.id) === String(sessionId)
+    ) {
+      return { ...detail.linkedImportedDocument, linked_session_id: sessionId };
+    }
+
+    return buildImportedDocumentFromSession(sessionRow);
+  }
+
+  function getSessionLinkedImportedDocument(session: any) {
+    const linkedFromList = getLinkedImportedDocument(session?.id);
+    if (linkedFromList) return linkedFromList;
+
+    return buildImportedDocumentFromSession(session);
+  }
+
+  function resolveGiorniCasaInterniValue() {
+    return (
+      positiveNumberOrNull(giorniCasaInterni) ??
+      positiveNumberOrNull(session?.giorni_interni) ??
+      resolveGiorniInterniFromPeriods(periodoPrecedente, periodoAttuale) ??
+      0
+    );
+  }
+
+  function resolveSelectedImportedDocumentForSession(sessionId: string) {
+    const linked = getLinkedImportedDocument(sessionId);
+    if (linked) return linked;
+
+    if (
+      detail?.linkedImportedDocument?.id &&
+      String(session?.id || "") === String(sessionId)
+    ) {
+      return detail.linkedImportedDocument;
+    }
+
+    if (
+      selectedImportedDoc?.id &&
+      (!selectedImportedDoc?.linked_session_id ||
+        String(selectedImportedDoc.linked_session_id) === String(sessionId))
+    ) {
+      return selectedImportedDoc;
+    }
+
+    return null;
+  }
+
+  function getParsedCalculationParams(payloadJson?: string | null, parsedSummary?: any) {
+    if (!payloadJson) return {};
+
+    try {
+      const payload = typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
+      const summary = parsedSummary ?? summarizePeriodiAndTariffe(payload || null);
+      const grouped = payload?.grouped_letture || {};
+      const aGiro = grouped.a_giro;
+      const resolvedAcconto = resolveAccontoPeriodFromPayload(payload, summary);
+
+      return {
+        giorniQF: deriveGiorniQfFromPayload(payload),
+        giorniConsumi:
+          aGiro?.oldest?.data_lettura && aGiro?.newest?.data_lettura
+            ? diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura)
+            : null,
+        giorniAcconto:
+          resolvedAcconto?.dataInizio && resolvedAcconto?.dataFine
+            ? diffDaysExclusive(resolvedAcconto.dataInizio, resolvedAcconto.dataFine)
+            : null,
+        mcAcconto:
+          resolvedAcconto?.consumo !== undefined && resolvedAcconto?.consumo !== null
+            ? Number(resolvedAcconto.consumo)
+            : null,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  function getParsedPayloadObject(payloadJson?: string | null) {
+    if (!payloadJson) return null;
+    try {
+      return typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
+    } catch {
+      return null;
+    }
+  }
+
+  function getStornoValuesFromPayload(payload: any) {
+    const summary = payload?.summaryTariffeAcquedotto || {};
+    return {
+      mc: Number(summary.quantitaNeg || 0),
+      euro: Number(summary.importoNeg || 0),
+    };
+  }
+
+  function parseManualConsumptions(value: any): Record<string, string> {
+    try {
+      const raw = typeof value === "string" ? JSON.parse(value || "{}") : value || {};
+      return Object.entries(raw).reduce((acc: Record<string, string>, [key, val]) => {
+        if (val !== null && val !== undefined && val !== "") {
+          acc[String(key)] = String(val);
+        }
+        return acc;
+      }, {});
+    } catch {
+      return {};
+    }
+  }
+
+  function getManualConsumptionPayload() {
+    return Object.entries(manualConsumptions).reduce((acc: Record<string, number>, [key, val]) => {
+      if (val === "") return acc;
+      const parsed = Number(val);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        acc[key] = parsed;
+      }
+      return acc;
+    }, {});
+  }
+
   async function parseImportedInvoice(id: string) {
     try {
       setParsingImportId(id);
@@ -408,7 +732,7 @@ export default function CondominioFatturePage() {
       await api.post(`/fatture/imported-documents/${id}/parse`);
 
       await loadImportedDocuments();
-      await loadImportedDocumentDetail(id);
+      await loadImportedDocumentForSession(id);
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore parsing bolletta");
     } finally {
@@ -497,7 +821,18 @@ export default function CondominioFatturePage() {
   }
 function parseItalianDate(value?: string | null): Date | null {
   if (!value) return null;
-  const parts = String(value).split("/");
+
+  const raw = String(value).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    const [yyyy, mm, dd] = raw.slice(0, 10).split("-").map(Number);
+    if (!dd || !mm || !yyyy) return null;
+
+    const dt = new Date(yyyy, mm - 1, dd);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+
+  const parts = raw.split("/");
   if (parts.length !== 3) return null;
 
   const [dd, mm, yyyy] = parts.map(Number);
@@ -529,6 +864,57 @@ function diffDaysExclusive(from?: string | null, to?: string | null): number | n
   const diff = Math.round((end.getTime() - start.getTime()) / msPerDay);
 
   return diff >= 0 ? diff : null;
+}
+
+function firstDateValue(source: any, keys: string[]): string | null {
+  if (!source) return null;
+
+  for (const key of keys) {
+    const value = source?.[key];
+    if (!value) continue;
+
+    const parsed = parseItalianDate(String(value));
+    if (parsed) return String(value);
+  }
+
+  return null;
+}
+
+function getPeriodStartDate(period: any): string | null {
+  return firstDateValue(period, ["data_inizio", "from_date", "start_date"]);
+}
+
+function getPeriodEndDate(period: any): string | null {
+  return firstDateValue(period, ["data_fine", "to_date", "end_date"]);
+}
+
+function getReadingDate(reading: any): string | null {
+  return firstDateValue(reading, ["data_lettura", "date", "data"]);
+}
+
+function getInternalPeriodDate(period: any): string | null {
+  return firstDateValue(period, [
+    "dataCasaIdrica",
+    "data_lettura_casa_idrica",
+    "data_casa_idrica",
+    "dataOperatore",
+    "data_lettura_operatore",
+    "data_operatore",
+  ]);
+}
+
+function resolveGiorniInterniFromPeriods(
+  periodoPrecedente?: any,
+  periodoAttuale?: any
+): number | null {
+  const from = getInternalPeriodDate(periodoPrecedente);
+  const to = getInternalPeriodDate(periodoAttuale);
+  return diffDaysExclusive(from, to);
+}
+
+function positiveNumberOrNull(value: any): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function getTotaleOneriPerequazione(payload: any): number {
@@ -578,9 +964,7 @@ function parseOneriPerequazioneFromPayload(
     }
 
     const mediaPeriods = Array.isArray(parsedSummary)
-      ? parsedSummary.filter(
-          (p: any) => String(p?.tipo_lettura ?? "").trim().toLowerCase() === "media"
-        )
+      ? parsedSummary.filter((p: any) => isAccontoLike(p?.tipo_lettura))
       : [];
 
     const filteredRows = oneriRows.filter((row: any) => {
@@ -720,7 +1104,15 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     console.log("Assigning state from parsed payload:", payload);
 
     const parsedSummary = summarizePeriodiAndTariffe(payload || null);
-    parsedConsumoFromParsedPayload(parsedSummary);
+    const parsedBuckets = getParsedBuckets(payload, parsedSummary);
+    if (parsedBuckets.aGiro.hasPeriod) {
+      setParsedImpCons(parsedBuckets.aGiro.acquedotto);
+      setDepFog(parsedBuckets.aGiro.depFog);
+      setOneriPerequazione(parsedBuckets.aGiro.oneri);
+    } else {
+      parsedConsumoFromParsedPayload(parsedSummary);
+    }
+    parseAccontoFromParsedPayload(payloadJson, parsedSummary);
 
 
     console.log("Parsed summary from payload:", parsedSummary);
@@ -737,12 +1129,12 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setGiorniConsumi(diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura) ?? 0);
       
       
-      parseAccontoFromParsedPayload(payloadJson, parsedSummary);
       parseStornoFromParsedPayload(payloadJson);
       parseQFFromParsedPayload(payloadJson);
-      setOneriPerequazione(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "non_media"));
-
-      setDepFog(getDepFogData(payloadJson, "positive", "non_acconto").totale) //JSON.parse(payloadJson).totale_dep_fog
+      if (!parsedBuckets.aGiro.hasPeriod) {
+        setOneriPerequazione(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "non_media"));
+        setDepFog(getDepFogData(payloadJson, "positive", "non_acconto").totale); //JSON.parse(payloadJson).totale_dep_fog
+      }
        
 
       setParsingAlert?.(null);
@@ -803,7 +1195,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
  
   function parsedConsumoFromParsedPayload(parsedSummary?: any){
     parsedSummary?.map((t: any) => {
-      if(t.tipo_lettura === "a_giro") {
+      if(String(t.tipo_lettura ?? "").trim().toLowerCase() === "a_giro") {
         setParsedImpCons(t.totali.importo_positive)
       }   
     })
@@ -853,53 +1245,440 @@ function getDepFogAccontoByOverlap(
 
   return sumRows(dep) + sumRows(fog);
 }
+
+function resetAccontoFromParsedPayload() {
+  setGiorniAcconto(0);
+  setMcAcconto(0);
+  setEurAcconto(0);
+  setIvaAcconto(0);
+  setDepfogAcconto(0);
+  setTotaleAcconto(0);
+  setOneriPerequazioneAcconto(0);
+}
+
+function resetParsedDocumentState() {
+  setSelectedImportedId(null);
+  setSelectedImportedDoc(null);
+  setSelectedDoc(null);
+  setImportedDocYear(null);
+  setParsedImpCons(0);
+  setDepFog(0);
+  setParsedQF(null);
+  setOneriPerequazione(0);
+  setMcStorno(0);
+  setEurStorno(0);
+  resetAccontoFromParsedPayload();
+}
+
+function resolveAccontoPeriodFromPayload(payload: any, parsedSummary?: any) {
+  const periodi = Array.isArray(payload?.periodi_fatturazione)
+    ? payload.periodi_fatturazione
+    : [];
+
+  const accontoPeriodIndex = periodi.findIndex((p: any) =>
+    isAccontoLike(p?.tipo_lettura)
+  );
+  const accontoPeriod =
+    accontoPeriodIndex >= 0 ? periodi[accontoPeriodIndex] : null;
+  const previousPeriod =
+    accontoPeriodIndex > 0 ? periodi[accontoPeriodIndex - 1] : null;
+
+  const accontoSummary = Array.isArray(parsedSummary)
+    ? parsedSummary.find((t: any) => isAccontoLike(t?.tipo_lettura))
+    : null;
+
+  const grouped = payload?.grouped_letture || {};
+  const groupedAcconto =
+    grouped.media ||
+    grouped.acconto ||
+    grouped.acconto_a_giro ||
+    null;
+
+  const letture = Array.isArray(payload?.letture) ? payload.letture : [];
+  const sortedLetture = [...letture]
+    .filter((reading: any) => getReadingDate(reading))
+    .sort((a: any, b: any) => {
+      const ad = parseItalianDate(getReadingDate(a));
+      const bd = parseItalianDate(getReadingDate(b));
+      return (ad?.getTime() ?? 0) - (bd?.getTime() ?? 0);
+    });
+
+  const accontoReading = sortedLetture.find((reading: any) =>
+    isAccontoLike(reading?.tipo_lettura)
+  );
+
+  const explicitEnd =
+    getPeriodEndDate(accontoPeriod) ??
+    getPeriodEndDate(accontoSummary) ??
+    getReadingDate(groupedAcconto?.newest) ??
+    getReadingDate(accontoReading);
+
+  const explicitStart =
+    getPeriodStartDate(accontoPeriod) ??
+    getPeriodStartDate(accontoSummary);
+
+  const previousPeriodEnd = getPeriodEndDate(previousPeriod);
+
+  const previousReadingBeforeAcconto = explicitEnd
+    ? [...sortedLetture]
+        .reverse()
+        .find((reading: any) => {
+          const readingDate = parseItalianDate(getReadingDate(reading));
+          const endDate = parseItalianDate(explicitEnd);
+          return (
+            readingDate &&
+            endDate &&
+            readingDate < endDate &&
+            !isAccontoLike(reading?.tipo_lettura)
+          );
+        })
+    : null;
+
+  const groupedAgiRoEnd = getReadingDate(grouped?.a_giro?.newest);
+  const groupedAccontoStart = getReadingDate(groupedAcconto?.oldest);
+  const groupedAccontoEnd = getReadingDate(groupedAcconto?.newest);
+  const groupedStart =
+    groupedAccontoStart && groupedAccontoStart !== groupedAccontoEnd
+      ? groupedAccontoStart
+      : null;
+
+  const dataInizio =
+    explicitStart ??
+    previousPeriodEnd ??
+    getReadingDate(previousReadingBeforeAcconto) ??
+    groupedAgiRoEnd ??
+    groupedStart;
+  const dataFine = explicitEnd ?? groupedAccontoEnd;
+
+  const consumo = Number(
+    accontoPeriod?.consumo_mc ??
+      accontoSummary?.consumo_periodo_mc ??
+      payload?.letture_summary?.consumo_acconto ??
+      accontoReading?.consumo_mc ??
+      groupedAcconto?.newest?.consumo_mc ??
+      0
+  );
+
+  if (!accontoPeriod && !accontoSummary && !groupedAcconto && !accontoReading) {
+    return null;
+  }
+
+  return {
+    dataInizio,
+    dataFine,
+    consumo,
+    accontoSummary,
+  };
+}
+
+function sumRows(rows: any[]) {
+  return rows.reduce(
+    (acc: any, row: any) => {
+      acc.quantita += Number(row?.quantita ?? 0);
+      acc.importo += Number(row?.importo ?? 0);
+      return acc;
+    },
+    { quantita: 0, importo: 0 }
+  );
+}
+
+function dateTime(value?: string | null): number | null {
+  const date = parseItalianDate(value);
+  return date ? date.getTime() : null;
+}
+
+function getParsedComponentImportoByConsumption(
+  payload: any,
+  componentName: string,
+  consumoAcconto: number,
+  accontoEnd?: string | null
+): number | null {
+  const targetMc = Math.abs(Number(consumoAcconto || 0));
+  if (!targetMc) return null;
+
+  const rows = Array.isArray(payload?.[componentName])
+    ? payload[componentName].filter((row: any) => Number(row?.importo ?? 0) > 0)
+    : [];
+
+  if (!rows.length) return null;
+
+  const tolerance = Math.max(0.01, targetMc * 0.002);
+  const accontoEndTime = dateTime(accontoEnd);
+
+  const grouped = new Map<string, any[]>();
+  for (const row of rows) {
+    const key = `${row?.from_date ?? ""}|${row?.to_date ?? ""}`;
+    grouped.set(key, [...(grouped.get(key) || []), row]);
+  }
+
+  const matchingGroup = [...grouped.values()]
+    .map((groupRows) => {
+      const total = sumRows(groupRows);
+      return {
+        ...total,
+        from: groupRows[0]?.from_date ?? null,
+        to: groupRows[0]?.to_date ?? null,
+        endTime: dateTime(groupRows[0]?.to_date),
+      };
+    })
+    .filter((total) => Math.abs(Math.abs(Number(total.quantita || 0)) - targetMc) <= tolerance)
+    .sort((a, b) => {
+      if (accontoEndTime !== null) {
+        const aDistance = a.endTime !== null ? Math.abs(a.endTime - accontoEndTime) : Number.MAX_SAFE_INTEGER;
+        const bDistance = b.endTime !== null ? Math.abs(b.endTime - accontoEndTime) : Number.MAX_SAFE_INTEGER;
+        if (aDistance !== bDistance) return aDistance - bDistance;
+      }
+
+      return Number(b.endTime || 0) - Number(a.endTime || 0);
+    })[0];
+
+  if (matchingGroup) return Number(matchingGroup.importo || 0);
+
+  const exactRow = rows
+    .filter((row: any) => Math.abs(Math.abs(Number(row?.quantita ?? 0)) - targetMc) <= tolerance)
+    .sort((a: any, b: any) => Number(dateTime(b?.to_date) || 0) - Number(dateTime(a?.to_date) || 0))[0];
+
+  return exactRow ? Number(exactRow.importo ?? 0) : null;
+}
+
+function sameDate(a?: string | null, b?: string | null) {
+  const at = dateTime(a);
+  const bt = dateTime(b);
+  return at !== null && bt !== null && at === bt;
+}
+
+function isContainedInPeriod(row: any, period: any) {
+  const rowStart = dateTime(row?.from_date);
+  const rowEnd = dateTime(row?.to_date);
+  const periodStart = dateTime(period?.data_inizio);
+  const periodEnd = dateTime(period?.data_fine);
+
+  return (
+    rowStart !== null &&
+    rowEnd !== null &&
+    periodStart !== null &&
+    periodEnd !== null &&
+    rowStart >= periodStart &&
+    rowEnd <= periodEnd
+  );
+}
+
+function closeQuantity(a: any, b: any) {
+  const target = Math.abs(Number(b || 0));
+  if (!target) return false;
+  return Math.abs(Math.abs(Number(a || 0)) - target) <= Math.max(0.01, target * 0.002);
+}
+
+function getTypedPeriod(parsedSummary: any[] | undefined, tipo: "a_giro" | "media") {
+  return Array.isArray(parsedSummary)
+    ? parsedSummary.find((period: any) => String(period?.tipo_lettura || "").toLowerCase() === tipo)
+    : null;
+}
+
+function sumComponentForPeriod(
+  payload: any,
+  componentName: string,
+  period: any,
+  consumoMc: number,
+  sign: "positive" | "negative" = "positive"
+) {
+  const rows = Array.isArray(payload?.[componentName]) ? payload[componentName] : [];
+  if (!rows.length) return 0;
+
+  const signedRows = rows.filter((row: any) => {
+    const importo = Number(row?.importo ?? 0);
+    if (sign === "positive") return importo > 0;
+    return importo < 0;
+  });
+
+  const exactPeriodRows = signedRows.filter((row: any) => {
+    const exactDates =
+      sameDate(row?.from_date, period?.data_inizio) &&
+      sameDate(row?.to_date, period?.data_fine);
+
+    if (!exactDates) return false;
+
+    if (Number(row?.quantita || 0) === 0 || !consumoMc) return true;
+
+    return Math.abs(Number(row?.quantita || 0)) <= Math.abs(Number(consumoMc || 0));
+  });
+
+  if (exactPeriodRows.length) {
+    return exactPeriodRows.reduce((sum: number, row: any) => sum + Number(row?.importo ?? 0), 0);
+  }
+
+  const containedPeriodRows = signedRows.filter((row: any) =>
+    isContainedInPeriod(row, period)
+  );
+
+  if (containedPeriodRows.length) {
+    return containedPeriodRows.reduce((sum: number, row: any) => sum + Number(row?.importo ?? 0), 0);
+  }
+
+  return getParsedComponentImportoByConsumption(
+    payload,
+    componentName,
+    consumoMc,
+    period?.data_fine
+  ) ?? 0;
+}
+
+function sumOneriForPeriod(payload: any, period: any, sign: "positive" | "negative" = "positive") {
+  const rows = Array.isArray(payload?.oneri_perequazione) ? payload.oneri_perequazione : [];
+
+  return rows
+    .filter((row: any) => {
+      const importo = Number(row?.importo ?? 0);
+      const signOk = sign === "positive" ? importo > 0 : importo < 0;
+
+      return signOk && (
+        (
+          sameDate(row?.from_date, period?.data_inizio) &&
+          sameDate(row?.to_date, period?.data_fine)
+        ) ||
+        isContainedInPeriod(row, period)
+      );
+    })
+    .reduce((sum: number, row: any) => sum + Number(row?.importo ?? 0), 0);
+}
+
+function getParsedBuckets(payload: any, parsedSummary: any[] | undefined) {
+  const aGiroPeriod = getTypedPeriod(parsedSummary, "a_giro");
+  const mediaPeriod = getTypedPeriod(parsedSummary, "media");
+
+  const aGiroMc = Number(aGiroPeriod?.consumo_periodo_mc ?? 0);
+  const mediaMc = Number(mediaPeriod?.consumo_periodo_mc ?? 0);
+
+  const bucketFor = (period: any, consumoMc: number) => {
+    if (!period) {
+      return {
+        hasPeriod: false,
+        consumoMc: 0,
+        acquedotto: 0,
+        depurazione: 0,
+        fognatura: 0,
+        depFog: 0,
+        oneri: 0,
+      };
+    }
+
+    const acquedotto = sumComponentForPeriod(
+      payload,
+      "componente_tariffa_acquedotto",
+      period,
+      consumoMc
+    );
+    const depurazione = sumComponentForPeriod(
+      payload,
+      "componente_tariffa_depurazione",
+      period,
+      consumoMc
+    );
+    const fognatura = sumComponentForPeriod(
+      payload,
+      "componente_tariffa_fognatura",
+      period,
+      consumoMc
+    );
+    const oneri = sumOneriForPeriod(payload, period);
+
+    return {
+      hasPeriod: true,
+      consumoMc,
+      acquedotto,
+      depurazione,
+      fognatura,
+      depFog: depurazione + fognatura,
+      oneri,
+    };
+  };
+
+  return {
+    aGiro: bucketFor(aGiroPeriod, aGiroMc),
+    acconto: bucketFor(mediaPeriod, mediaMc),
+  };
+}
+
+function getFornituraSummaryByType(payload: any, tipo: "a_giro" | "media") {
+  const summaries = Array.isArray(payload?.forniture_summary)
+    ? payload.forniture_summary
+    : [];
+
+  const direct = summaries.find(
+    (item: any) => String(item?.tipo_lettura || "").toLowerCase() === tipo
+  );
+
+  if (direct) return direct;
+
+  const grouped = payload?.grouped_letture || {};
+  const target =
+    tipo === "media"
+      ? grouped.media || grouped.acconto || grouped.acconto_a_giro
+      : grouped.a_giro;
+  const targetMc = Number(target?.newest?.consumo_mc || 0);
+
+  if (!targetMc) return null;
+
+  return summaries.find(
+    (item: any) => Math.abs(Number(item?.consumo_mc || 0) - targetMc) <= 0.01
+  ) || null;
+}
+
 function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummary?: any) {
   if (!payloadJson) return;
 
   try {
-    const payload = JSON.parse(payloadJson);
+    const parsedAcconto = getAccontoValuesFromParsedPayload(payloadJson, parsedSummary);
 
-    if (!payload?.letture_summary?.ha_acconto) return;
+    if (!parsedAcconto) {
+      resetAccontoFromParsedPayload();
+      return;
+    }
 
-    const isAccontoType = (value: any) =>
-      value === "acconto" ||
-      value === "acconto_a_giro" ||
-      value === "media";
-
-    const accontoPeriod = Array.isArray(payload.periodi_fatturazione)
-      ? payload.periodi_fatturazione.find((p: any) => isAccontoType(p?.tipo_lettura))
-      : null;
-
-    if (!accontoPeriod) return;
-
-    const dataInizioAcconto = accontoPeriod.data_inizio ?? null;
-    const dataFineAcconto = accontoPeriod.data_fine ?? null;
-
-    setGiorniAcconto(diffDaysExclusive(dataInizioAcconto, dataFineAcconto) ?? 0);
-    setMcAcconto(Number(accontoPeriod.consumo_mc ?? 0));
-
-    const depFogTotale = Number(
-      getDepFogAccontoByOverlap(payload, dataInizioAcconto, dataFineAcconto) ?? 0
-    );
-
-    const accontoSummary = Array.isArray(parsedSummary)
-      ? parsedSummary.find((t: any) => isAccontoType(t?.tipo_lettura))
-      : null;
-
-    const importoPositive = Number(accontoSummary?.totali?.importo_positive ?? 0);
-
-    const ivaAcconto = (importoPositive + depFogTotale + Number(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "media"))) * 0.1;
-    const totaleAcconto = importoPositive + depFogTotale + ivaAcconto + Number(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "media"));
-    setOneriPerequazioneAcconto(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "media"));
+    setGiorniAcconto(parsedAcconto.giorni);
+    setMcAcconto(parsedAcconto.mc);
+    setOneriPerequazioneAcconto(parsedAcconto.oneri);
       
-    setEurAcconto(importoPositive);
-    setIvaAcconto(ivaAcconto);
-    setDepfogAcconto(depFogTotale);
-    setTotaleAcconto(totaleAcconto);
+    setEurAcconto(parsedAcconto.acquedotto);
+    setIvaAcconto(parsedAcconto.iva);
+    setDepfogAcconto(parsedAcconto.depFog);
+    setTotaleAcconto(parsedAcconto.totale);
     
     
   } catch (err) {
     console.error("Errore durante il parsing del payload per l'acconto:", err);
+  }
+}
+
+function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSummary?: any) {
+  if (!payloadJson) return null;
+
+  try {
+    const payload = JSON.parse(payloadJson);
+    const summary = parsedSummary ?? summarizePeriodiAndTariffe(payload || null);
+    const resolvedAcconto = resolveAccontoPeriodFromPayload(payload, summary);
+
+    if (!resolvedAcconto) return null;
+
+    const buckets = getParsedBuckets(payload, summary);
+    const acquedotto = Number(
+      buckets.acconto.acquedotto || resolvedAcconto.accontoSummary?.totali?.importo_positive || 0
+    );
+    const depFog = Number(buckets.acconto.depFog || 0);
+    const oneri = Number(buckets.acconto.oneri || 0);
+    const iva = (acquedotto + depFog + oneri) * 0.1;
+
+    return {
+      giorni: diffDaysExclusive(resolvedAcconto.dataInizio ?? null, resolvedAcconto.dataFine ?? null) ?? 0,
+      mc: Number(resolvedAcconto.consumo ?? 0),
+      acquedotto,
+      depFog,
+      oneri,
+      iva,
+      totale: acquedotto + depFog + oneri + iva,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -918,17 +1697,68 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
     }
   }    
 
+  function deriveGiorniQfFromPayload(payload: any): number | null {
+    const rows = Array.isArray(payload?.componente_quota_tariffa_acqua)
+      ? payload.componente_quota_tariffa_acqua
+      : [];
+
+    const intervals = rows
+      .filter((row: any) => Number(row?.importo || 0) !== 0)
+      .map((row: any) => {
+        const start = parseItalianDate(row?.from_date);
+        const end = parseItalianDate(row?.to_date);
+        const days = diffDaysInclusive(row?.from_date, row?.to_date);
+
+        return start && end && days !== null
+          ? {
+              ...row,
+              start,
+              end,
+              days,
+              importo: Number(row?.importo || 0),
+            }
+          : null;
+      })
+      .filter(Boolean);
+
+    if (!intervals.length) return null;
+
+    const signedRows = intervals.filter((row: any) => row.importo < 0);
+    if (signedRows.length) {
+      const total = intervals.reduce((sum: number, row: any) => {
+        return sum + (row.importo < 0 ? -row.days : row.days);
+      }, 0);
+      return Math.max(0, Math.round(total));
+    }
+
+    const ordered = [...intervals].sort((a: any, b: any) => b.days - a.days);
+    const main = ordered[0];
+    const containedAdjustments = ordered.slice(1).filter((row: any) => {
+      return row.start >= main.start && row.end <= main.end;
+    });
+
+    if (containedAdjustments.length) {
+      const adjustmentDays = containedAdjustments.reduce(
+        (sum: number, row: any) => sum + row.days,
+        0
+      );
+      return Math.max(0, Math.round(main.days - adjustmentDays));
+    }
+
+    return Math.round(
+      intervals.reduce((sum: number, row: any) => sum + row.days, 0)
+    );
+  }
+
   function parseQFFromParsedPayload(payloadJson?: string | null) {
     if (!payloadJson) return;
     try {
       const payload = JSON.parse(payloadJson);
-      payload.componente_quota_tariffa_acqua.map((c: any) => { 
-      if(c.importo > 0) { 
-              setGiorniQf(diffDaysExclusive(c.from_date, c.to_date) ?? 0);
-              setParsedQF(c.importo);
-              
-          }
-      });
+      const giorni = deriveGiorniQfFromPayload(payload);
+      if (giorni !== null) {
+        setGiorniQf(giorni);
+      }
+      setParsedQF(null);
     }catch (err) {
       console.error("Errore durante il parsing del payload per il QF:", err);
     }
@@ -939,7 +1769,8 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
 
         const res = await api.get(`/fatture/imported-documents/${id}`);
 
-        const document = res.data?.document?.[0] || null;
+        const rawDocument = res.data?.document;
+        const document = Array.isArray(rawDocument) ? rawDocument[0] || null : rawDocument || null;
 
         setSelectedImportedDoc(document);
         setSelectedImportedId(id);
@@ -969,14 +1800,29 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
 
         console.log("Imported document detail loaded:", document);
         console.log("Parsed payload:", payload);
+        return document;
       } catch (err: any) {
         setError(err?.response?.data?.error || "Errore caricamento documento importato");
+        return null;
       } finally {
         setLoadingImportedDetail(false);
       }
     }
+
+  async function loadImportedDocumentForSession(id: string) {
+    const document = await loadImportedDocumentDetail(id);
+
+    if (document?.id && fatturaId) {
+      await ensureImportedDocumentLinkedToSession(document, String(fatturaId));
+      await persistImportedDocumentParamsForSession(document, String(fatturaId));
+      await refreshSessionsList();
+      await loadDetail();
+    }
+
+    return document;
+  }
   
-    async function linkImportedToCurrentSession(importedId: string, sessionId: string) {
+  async function linkImportedToCurrentSession(importedId: string, sessionId: string) {
   
     try {
       await api.post(`/fatture/imported-documents/${importedId}/link-session`, {
@@ -988,6 +1834,79 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore collegamento documento-sessione");
     }
+  }
+
+  async function ensureImportedDocumentLinkedToSession(doc: ImportedInvoiceDocument | null, sessionId: string) {
+    if (!doc?.id || !sessionId) return null;
+
+    const res = await api.post(`/fatture/imported-documents/${doc.id}/link-session`, {
+      sessionId,
+    });
+
+    const linkedDocument = Array.isArray(res.data?.document)
+      ? res.data.document[0] || doc
+      : res.data?.document || doc;
+
+    setImportedDocs((prev) =>
+      prev.map((item: any) => ({
+        ...item,
+        linked_session_id:
+          String(item.id) === String(doc.id)
+            ? sessionId
+            : String(item.linked_session_id || "") === String(sessionId)
+            ? null
+            : item.linked_session_id,
+      }))
+    );
+    setSelectedImportedDoc((prev: any) =>
+      prev && String(prev.id) === String(doc.id)
+        ? { ...prev, ...linkedDocument, linked_session_id: sessionId }
+        : prev
+    );
+    setSessions((prev) =>
+      prev.map((s: any) =>
+        String(s.id) === String(sessionId)
+          ? {
+              ...s,
+              linked_imported_document_id: doc.id,
+              linked_imported_original_filename: linkedDocument?.original_filename || doc.original_filename,
+              linked_imported_numero_bolletta: linkedDocument?.numero_bolletta || doc.numero_bolletta,
+              linked_imported_data_inizio_periodo:
+                linkedDocument?.data_inizio_periodo || doc.data_inizio_periodo,
+              linked_imported_data_fine_periodo:
+                linkedDocument?.data_fine_periodo || doc.data_fine_periodo,
+              linked_imported_importo_totale_da_pagare:
+                linkedDocument?.importo_totale_da_pagare || doc.importo_totale_da_pagare,
+            }
+          : s
+      )
+    );
+
+    return linkedDocument;
+  }
+
+  async function persistImportedDocumentParamsForSession(
+    doc: ImportedInvoiceDocument | null,
+    sessionId: string
+  ) {
+    if (!doc?.parsed_payload_json || !sessionId) return;
+
+    const parsedParams = getParsedCalculationParams(doc.parsed_payload_json);
+    const parsedPayload = getParsedPayloadObject(doc.parsed_payload_json);
+    const parsedStorno = getStornoValuesFromPayload(parsedPayload);
+    const resolvedTfCode = normalizeTfCode(selectedTfCodeRef.current || tfCode || session?.tf_code);
+
+    await api.put(`/fatture/sessioni/${sessionId}/parametri`, {
+      giorniQF: parsedParams.giorniQF ?? 0,
+      giorniConsumi: parsedParams.giorniConsumi ?? 0,
+      giorniAcconto: parsedParams.giorniAcconto ?? 0,
+      giorniCasa: resolveGiorniCasaInterniValue(),
+      mcAcconto: parsedParams.mcAcconto ?? 0,
+      mcStorno: parsedStorno.mc || Number(mcStorno || 0),
+      varie: Number(varie || 0),
+      tfCode: resolvedTfCode,
+      manualConsumptions: getManualConsumptionPayload(),
+    });
   }
 
   async function bootstrap() {
@@ -1039,6 +1958,10 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
   async function loadDetail() {
     if (!condominioId || !fatturaId) {
       setDetail(null);
+      setCurrentSession(null);
+      setGenerale(null);
+      setRigheCalcoli([]);
+      setDettaglioByUtenza({});
       return;
     }
     setError(null);
@@ -1048,9 +1971,20 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
       const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId}`);
 
       setDetail(res.data);
+      setCurrentSession(res.data?.session || null);
+      setRigheCalcoli(res.data?.righe || res.data?.grid || []);
+      const linkedDocumentId =
+        res.data?.linkedImportedDocument?.id || res.data?.session?.imported_document_id;
+      if (linkedDocumentId) {
+        await loadImportedDocumentDetail(String(linkedDocumentId));
+      }
        
     } catch (err: any) {
       setDetail(null);
+      setCurrentSession(null);
+      setRigheCalcoli([]);
+      setGenerale(null);
+      setDettaglioByUtenza({});
       setError(err?.response?.data?.error || "Errore caricamento fattura");
     } finally {
       setLoadingDetail(false);
@@ -1058,12 +1992,34 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
   }
 
   async function refreshSessionsList() {
- 
-    const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId? fatturaId : ""}`);  
-    const list = res.data?.sessions ?? res.data; // supports both shapes
-    setSessions(Array.isArray(list) ? list : []);
-    setDetail(list);
-     
+    if (!condominioId) return;
+
+    const sessionsRes = await api.get(`/fatture/condominio/${condominioId}`);
+    setSessions(Array.isArray(sessionsRes.data) ? sessionsRes.data : []);
+
+    if (fatturaId) {
+      const detailRes = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId}`);
+      setDetail(detailRes.data);
+      setCurrentSession(detailRes.data?.session || null);
+      setRigheCalcoli(detailRes.data?.righe || detailRes.data?.grid || []);
+      const linkedDocumentId =
+        detailRes.data?.linkedImportedDocument?.id || detailRes.data?.session?.imported_document_id;
+      if (linkedDocumentId) {
+        await loadImportedDocumentDetail(String(linkedDocumentId));
+      }
+    }
+  }
+
+  function handleSelectSession(s: any) {
+    autoCalculatedSessionRef.current = null;
+    applyTfCode(s.tf_code || s.tf || selectedTfCodeRef.current);
+    const linkedDoc = getSessionLinkedImportedDocument(s);
+    if (linkedDoc?.id) {
+      setSelectedImportedDoc(linkedDoc);
+      setSelectedImportedId(String(linkedDoc.id));
+    }
+    setPendingAutoCalculateSessionId(String(s.id));
+    navigate(`/condomini/${condominioId}/fatture/${s.id}`);
   }
 
   async function handleCreateFattura() {
@@ -1165,41 +2121,188 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
 
  
 
-    async function calcola() {
+    function normalizeOptionalReading(value: number | string, label: string): number | null {
+      if (value === "" || value === null || value === undefined) return null;
+
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(`${label} non valida`);
+      }
+
+      return parsed;
+    }
+
+    async function calcola(options: {
+      sessionIdOverride?: string;
+      tfCodeOverride?: string;
+      skipSave?: boolean;
+      auto?: boolean;
+    } = {}) {
        
-      if (!fatturaId) return;
+      const targetSessionId = options.sessionIdOverride || fatturaId;
+      if (!targetSessionId) return;
 
       setLoadingCalc(true);
+      if (options.auto) {
+        setAutoCalculatingSessionId(targetSessionId);
+      }
       setError(null);
 
       try {
-        await saveParams();
+        let calculationDocument: any =
+          resolveSelectedImportedDocumentForSession(targetSessionId);
+
+        if (!calculationDocument?.id && importedDocs.length > 0) {
+          throw new Error("Seleziona o collega il documento TXT da usare per questa sessione prima del calcolo.");
+        }
+
+        if (calculationDocument?.id && !calculationDocument?.parsed_payload_json) {
+          const docRes = await api.get(`/fatture/imported-documents/${calculationDocument.id}`);
+          const rawDocument = docRes.data?.document;
+          calculationDocument = Array.isArray(rawDocument)
+            ? rawDocument[0] || calculationDocument
+            : rawDocument || calculationDocument;
+          setSelectedImportedDoc(calculationDocument);
+          setSelectedImportedId(calculationDocument.id);
+        }
+
+        if (calculationDocument?.id) {
+          calculationDocument =
+            (await ensureImportedDocumentLinkedToSession(calculationDocument, targetSessionId)) ||
+            calculationDocument;
+        }
+
+        const parsedPayloadForCalc = calculationDocument?.parsed_payload_json;
+        if (calculationDocument?.id && !parsedPayloadForCalc) {
+          throw new Error("Documento collegato senza payload parsed. Ricarica o riparsa il TXT prima del calcolo.");
+        }
+        if (parsedPayloadForCalc) {
+          assignStateFromParsedPayload(parsedPayloadForCalc);
+        }
+        const parsedPayloadObject = getParsedPayloadObject(parsedPayloadForCalc);
+        const parsedSummaryForCalc = parsedPayloadObject
+          ? summarizePeriodiAndTariffe(parsedPayloadObject || null)
+          : undefined;
+        const parsedBucketsForCalc = parsedPayloadObject
+          ? getParsedBuckets(parsedPayloadObject, parsedSummaryForCalc)
+          : null;
+        const parsedStornoForCalc = getStornoValuesFromPayload(parsedPayloadObject);
+        const parsedOneriNormaleForCalc = parsedBucketsForCalc?.aGiro?.oneri ?? Number(oneriPerequazione || 0);
+        const parsedParamsForCalc = getParsedCalculationParams(parsedPayloadForCalc);
+        const manualTfForSession =
+          manualTfOverrideRef.current.sessionId === targetSessionId
+            ? manualTfOverrideRef.current.tfCode
+            : null;
+        const selectedTfCode = normalizeTfCode(
+          manualTfForSession ||
+            options.tfCodeOverride ||
+            selectedTfCodeRef.current ||
+            tfCode ||
+            session?.tf_code
+        );
+
+        if (!options.skipSave) {
+          await saveGenerale({ reload: false });
+          await saveParams({
+            sessionIdOverride: targetSessionId,
+            giorniQF: parsedParamsForCalc.giorniQF,
+            giorniConsumi: parsedParamsForCalc.giorniConsumi,
+            giorniAcconto: parsedParamsForCalc.giorniAcconto,
+            mcAcconto: parsedParamsForCalc.mcAcconto,
+            giorniCasa: resolveGiorniCasaInterniValue(),
+            tfCode: selectedTfCode,
+            manualConsumptions: getManualConsumptionPayload(),
+          });
+        }
 
         const parsedHasOneri = hasOneriPerequazioneRows(
-          selectedImportedDoc?.parsed_payload_json
+          parsedPayloadForCalc
+        );
+        const parsedAccontoForCalc = getAccontoValuesFromParsedPayload(
+          parsedPayloadForCalc
+        );
+        const calcMcAcconto = parsedAccontoForCalc?.mc ?? Number(mcAcconto || 0);
+        const parsedDocumentTotalForCalc = Number(
+          calculationDocument?.importo_totale_da_pagare ??
+            totaleDocumento ??
+            0
         );
   
-        const res = await api.post(`/fatture/sessioni/${fatturaId}/calcola`, {
-          tfCode,
+        const res = await api.post(`/fatture/sessioni/${targetSessionId}/calcola`, {
+          tfCode: selectedTfCode,
           annoTariffa: Number(annoTariffa) || null,
-          eurStorno: eurStorno? Number(eurStorno) : null,
-          parsedQF: parsedQF !== null ? Number(parsedQF) : null,
-          parsedOneriPerequazione: parsedHasOneri ? Number(oneriPerequazione || 0) : null,
+          eurStorno: parsedStornoForCalc.euro || (eurStorno ? Number(eurStorno) : null),
+          parsedQF: null,
+          parsedAccontoImporto: calcMcAcconto > 0
+            ? Number(parsedAccontoForCalc?.acquedotto ?? eurAcconto ?? 0)
+            : null,
+          parsedAccontoDepFog: calcMcAcconto > 0
+            ? Number(parsedAccontoForCalc?.depFog ?? depfogAcconto ?? 0)
+            : null,
+          parsedAccontoTotale: calcMcAcconto > 0
+            ? Number(parsedAccontoForCalc?.totale ?? totaleAcconto ?? 0)
+            : null,
+          parsedOneriPerequazione: parsedHasOneri ? Number(parsedOneriNormaleForCalc || 0) : null,
           parsedOneriPerequazioneAcconto: parsedHasOneri
-            ? Number(oneriPerequazioneAcconto || 0)
+            ? Number(parsedAccontoForCalc?.oneri ?? oneriPerequazioneAcconto ?? 0)
             : null,
           totaleParsedWithOneri: parsedHasOneri
-            ? Number(totaleDocumento || 0)
+            ? parsedDocumentTotalForCalc
             : totaleDocumentoConOneri
             ? Number(totaleDocumentoConOneri)
-            : 0
+            : 0,
+          importedDocumentId: calculationDocument?.id || null,
+          calculationContext: {
+            importedDocumentId: calculationDocument?.id || null,
+            importedDocumentName: calculationDocument ? getImportedDocumentName(calculationDocument) : null,
+            tfCode: selectedTfCode,
+            annoTariffa: Number(annoTariffa) || null,
+            giorniQF: parsedParamsForCalc.giorniQF ?? null,
+            giorniConsumi: parsedParamsForCalc.giorniConsumi ?? null,
+            giorniAcconto: parsedParamsForCalc.giorniAcconto ?? null,
+            giorniInterni: resolveGiorniCasaInterniValue(),
+            mcAcconto: parsedParamsForCalc.mcAcconto ?? null,
+            mcStorno: parsedStornoForCalc.mc || Number(mcStorno || 0),
+            eurStorno: parsedStornoForCalc.euro || Number(eurStorno || 0),
+            parsedAccontoImporto: parsedAccontoForCalc?.acquedotto ?? null,
+            parsedAccontoDepFog: parsedAccontoForCalc?.depFog ?? null,
+            parsedAccontoTotale: parsedAccontoForCalc?.totale ?? null,
+            parsedOneriPerequazione: parsedHasOneri ? Number(parsedOneriNormaleForCalc || 0) : null,
+            parsedOneriPerequazioneAcconto: parsedHasOneri
+              ? Number(parsedAccontoForCalc?.oneri ?? oneriPerequazioneAcconto ?? 0)
+              : null,
+            totaleDocumento: parsedDocumentTotalForCalc,
+          }
         }); 
         // console.log("Calcolo response:", res.data);
         //await loadDetail();
         await refreshSessionsList();
         setCurrentSession(res.data.session);
+        applyTfCode(selectedTfCode);
+        if (manualTfOverrideRef.current.sessionId === targetSessionId) {
+          manualTfOverrideRef.current = { sessionId: null, tfCode: null };
+        }
+        setSessions((prev) =>
+          prev.map((s: any) =>
+            String(s.id) === String(targetSessionId)
+              ? {
+                  ...s,
+                  ...(res.data.session || {}),
+                  tf_code: selectedTfCode,
+                  grand_total: res.data.session?.grand_total ?? s.grand_total,
+                }
+              : s
+          )
+        );
+        loadedTfSessionRef.current = String(res.data?.session?.id || targetSessionId || "");
         setRigheCalcoli(res.data.righe || []);
         setGenerale(res.data.generale || null);
+        setDetail((prev: any) => ({
+          ...(prev || {}),
+          ...res.data,
+          righe: res.data.righe || [],
+          session: res.data.session || prev?.session || null,
+        }));
 
         const newDettaglio: Record<string, any[]> = {};
 
@@ -1233,46 +2336,79 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
         setError(err?.response?.data?.error || "Errore calcolo: " + (err?.message || "Errore sconosciuto"));
       } finally {
         setLoadingCalc(false);
+        if (options.auto) {
+          setAutoCalculatingSessionId(null);
+        }
       }
     }
 
 
-  async function saveGenerale() {
+  async function saveGenerale(options: { reload?: boolean } = {}) {
   if (!fatturaId) return;
 
   try {
     setSavingGenerale(true);
 
+    const precedente = normalizeOptionalReading(valPrec, "Lettura precedente");
+    const attuale = normalizeOptionalReading(valAtt, "Lettura attuale");
+
+    if (precedente === null && attuale === null) {
+      return;
+    }
+
+    if (precedente !== null && attuale !== null && attuale < precedente) {
+      throw new Error("La lettura attuale non puo essere inferiore alla precedente");
+    }
+
     await api.put(`/fatture/sessioni/${fatturaId}/contatore-generale`, {
-      precedente: valPrec,
-      attuale: valAtt,
+      precedente,
+      attuale,
     });
 
+    if (options.reload !== false) {
       await loadDetail();
+    }
     } catch (err: any) {
-      setError(err?.response?.data?.error || "Errore salvataggio");
+      setError(err?.response?.data?.error || err?.message || "Errore salvataggio");
+      throw err;
     } finally {
       setSavingGenerale(false);
     }
   }
-  async function saveParams() {
-    if (!fatturaId) return;
+  async function saveParams(options: {
+    sessionIdOverride?: string;
+    giorniQF?: number | null;
+    giorniConsumi?: number | null;
+    giorniAcconto?: number | null;
+    giorniCasa?: number | null;
+    mcAcconto?: number | null;
+    tfCode?: string;
+    manualConsumptions?: Record<string, number>;
+  } = {}) {
+    const targetSessionId = options.sessionIdOverride || fatturaId;
+    if (!targetSessionId) return;
 
     try {
       setSavingParams(true);
 
-      console.log("Saving params:", { giorniQf, giorniConsumi, giorniAcconto, varie, giorniCasaInterni, mcAcconto, mcStorno });
-      if(Number(giorniAcconto) <= 0) {
-        setMcAcconto(0);
-      }
-      await api.put(`/fatture/sessioni/${fatturaId}/parametri`, {
-        giorniQF: Number(giorniQf),
-        giorniConsumi: Number(giorniConsumi),
-        giorniAcconto: Number(giorniAcconto),
+      const resolvedGiorniCasa = options.giorniCasa ?? resolveGiorniCasaInterniValue();
+      const resolvedGiorniQF = options.giorniQF ?? positiveNumberOrNull(giorniQf) ?? positiveNumberOrNull(session?.giorni_qf) ?? 0;
+      const resolvedGiorniConsumi = options.giorniConsumi ?? positiveNumberOrNull(giorniConsumi) ?? positiveNumberOrNull(session?.giorni_consumi) ?? 0;
+      const resolvedGiorniAcconto = options.giorniAcconto ?? positiveNumberOrNull(giorniAcconto) ?? positiveNumberOrNull(session?.giorni_acconto) ?? 0;
+      const resolvedMcAcconto = options.mcAcconto ?? positiveNumberOrNull(mcAcconto) ?? positiveNumberOrNull(session?.mcAcconto) ?? 0;
+      const resolvedTfCode = normalizeTfCode(options.tfCode || selectedTfCodeRef.current || tfCode);
+
+      console.log("Saving params:", { giorniQf: resolvedGiorniQF, giorniConsumi: resolvedGiorniConsumi, giorniAcconto: resolvedGiorniAcconto, varie, giorniCasaInterni: resolvedGiorniCasa, mcAcconto: resolvedMcAcconto, mcStorno });
+      await api.put(`/fatture/sessioni/${targetSessionId}/parametri`, {
+        giorniQF: resolvedGiorniQF,
+        giorniConsumi: resolvedGiorniConsumi,
+        giorniAcconto: resolvedGiorniAcconto,
         varie: Number(varie),
-        giorniCasa: Number(giorniCasaInterni),
-        mcAcconto: Number(giorniAcconto) == 0 ? 0 : Number(mcAcconto),
+        giorniCasa: resolvedGiorniCasa,
+        mcAcconto: resolvedMcAcconto,
         mcStorno: Number(mcStorno)==0 ? 0 : Number(mcStorno),
+        tfCode: resolvedTfCode,
+        manualConsumptions: options.manualConsumptions ?? getManualConsumptionPayload(),
         totImpo:Number(session?.tot_acquedotto ?? 0)
       });
 
@@ -1280,6 +2416,7 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
       //await loadDetail();
     } catch (err: any) {
       setError(err?.response?.data?.error || "Errore salvataggio");
+      throw err;
     } finally {
       setSavingParams(false);
     }
@@ -1305,16 +2442,119 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
     
     if (!session) return;
 
-    setGiorniQf(session.giorni_qf ?? 0);
-    setGiorniConsumi(session.giorni_consumi ?? 0);
-    setGiorniAcconto(Number(session.giorni_acconto) ?? 0);
-    setMcAcconto(Number(session.mcAcconto) ?? 0);
-    setGiorniCasaInterni(session.giorni_interni ?? 0);
+    if (loadedTfSessionRef.current !== String(session.id || "")) {
+      applyTfCode(session.tf_code || session.tf);
+      loadedTfSessionRef.current = String(session.id || "");
+    }
+    const linkedDoc = getLinkedImportedDocument(session.id);
+    const parsedParams =
+      linkedDoc?.parsed_payload_json
+        ? getParsedCalculationParams(linkedDoc.parsed_payload_json)
+        : {};
+
+    setGiorniQf(parsedParams.giorniQF ?? session.giorni_qf ?? 0);
+    setGiorniConsumi(parsedParams.giorniConsumi ?? session.giorni_consumi ?? 0);
+    setGiorniAcconto(parsedParams.giorniAcconto ?? Number(session.giorni_acconto) ?? 0);
+    setMcAcconto(parsedParams.mcAcconto ?? Number(session.mcAcconto) ?? 0);
+    setGiorniCasaInterni(
+      positiveNumberOrNull(session.giorni_interni) ??
+        resolveGiorniInterniFromPeriods(periodoPrecedente, periodoAttuale) ??
+        0
+    );
+    setManualConsumptions(parseManualConsumptions(session.manual_consumptions_json));
 
     setVarie(session.varie ?? 0);
    
 
-  }, [session]);
+  }, [session, selectedImportedDoc?.id, selectedImportedDoc?.parsed_payload_json, importedDocs]);
+
+  useEffect(() => {
+    if (!fatturaId) return;
+
+    const linkedDoc = getLinkedImportedDocument(fatturaId);
+
+    if (!linkedDoc?.id) {
+      return;
+    }
+
+    if (
+      String(selectedImportedId || "") === String(linkedDoc.id) &&
+      selectedImportedDoc?.parsed_payload_json
+    ) {
+      return;
+    }
+
+    loadImportedDocumentDetail(String(linkedDoc.id)).catch(() => undefined);
+  }, [
+    fatturaId,
+    importedDocs,
+    sessions,
+    detail?.linkedImportedDocument?.id,
+    session?.imported_document_id,
+    selectedImportedId,
+    selectedImportedDoc?.parsed_payload_json,
+  ]);
+
+  useEffect(() => {
+    if (!pendingAutoCalculateSessionId || !fatturaId) return;
+    if (String(pendingAutoCalculateSessionId) !== String(fatturaId)) return;
+    if (loadingDetail || loadingImportedDetail || loadingCalc) return;
+    if (!session?.id || String(session.id) !== String(pendingAutoCalculateSessionId)) return;
+
+    const linkedDoc = getLinkedImportedDocument(pendingAutoCalculateSessionId);
+    if (linkedDoc && String(selectedImportedDoc?.id || "") !== String(linkedDoc.id)) {
+      return;
+    }
+
+    const targetTf = normalizeTfCode(session?.tf_code || session?.tf || selectedTfCodeRef.current);
+    const autoKey = `${pendingAutoCalculateSessionId}:${targetTf}:${linkedDoc?.id || "no-doc"}`;
+
+    if (autoCalculatedSessionRef.current === autoKey) return;
+
+    autoCalculatedSessionRef.current = autoKey;
+    setPendingAutoCalculateSessionId(null);
+
+    calcola({
+      sessionIdOverride: pendingAutoCalculateSessionId,
+      tfCodeOverride: targetTf,
+      skipSave: false,
+      auto: true,
+    }).catch(() => undefined);
+  }, [
+    pendingAutoCalculateSessionId,
+    fatturaId,
+    loadingDetail,
+    loadingImportedDetail,
+    loadingCalc,
+    selectedImportedDoc?.id,
+    importedDocs,
+    sessions,
+    session?.id,
+    session?.tf_code,
+    session?.tf,
+  ]);
+
+  useEffect(() => {
+    const giorniInterniDaPeriodi = resolveGiorniInterniFromPeriods(
+      periodoPrecedente,
+      periodoAttuale
+    );
+
+    if (giorniInterniDaPeriodi !== null) {
+      setGiorniCasaInterni(giorniInterniDaPeriodi);
+    }
+  }, [
+    periodoPrecedente?.id,
+    periodoPrecedente?.dataCasaIdrica,
+    periodoPrecedente?.data_lettura_casa_idrica,
+    periodoPrecedente?.dataOperatore,
+    periodoPrecedente?.data_lettura_operatore,
+    periodoAttuale?.id,
+    periodoAttuale?.dataCasaIdrica,
+    periodoAttuale?.data_lettura_casa_idrica,
+    periodoAttuale?.dataOperatore,
+    periodoAttuale?.data_lettura_operatore,
+  ]);
  
   useEffect(() => {
   if (!session) return;
@@ -1326,6 +2566,63 @@ function parseAccontoFromParsedPayload(payloadJson?: string | null, parsedSummar
     
 
 }, [session]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadActiveTariffPreview() {
+      const year = Number(annoTariffa || importedDocYear || periodoAttuale?.period_year || 0);
+
+      if (!providerId || !year) {
+        setActiveTariffPreview(null);
+        return;
+      }
+
+      try {
+        setLoadingTariffPreview(true);
+        const versionsResult = await listVersions(providerId);
+        const versions = versionsResult.versions || [];
+        const version =
+          versions.find((item: any) => Number(item.anno) === year) ||
+          versions.find((item: any) => {
+            const from = item.valid_from ? new Date(`${item.valid_from}T00:00:00`) : null;
+            const to = item.valid_to ? new Date(`${item.valid_to}T00:00:00`) : null;
+            const probe = new Date(`${year}-07-01T00:00:00`);
+            return from && probe >= from && (!to || probe <= to);
+          }) ||
+          null;
+
+        if (!version) {
+          if (!cancelled) setActiveTariffPreview(null);
+          return;
+        }
+
+        const full = await getVersionFull(version.id);
+        const categories = full.categories || [];
+        const category =
+          categories.find((cat: any) => String(cat.codice || "").toUpperCase() === "RESIDENTE") ||
+          categories[0] ||
+          null;
+
+        if (!cancelled) {
+          setActiveTariffPreview({
+            version: full.version,
+            category,
+          });
+        }
+      } catch (err) {
+        if (!cancelled) setActiveTariffPreview(null);
+      } finally {
+        if (!cancelled) setLoadingTariffPreview(false);
+      }
+    }
+
+    loadActiveTariffPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [providerId, annoTariffa, importedDocYear, periodoAttuale?.period_year]);
 
 
  
@@ -1441,13 +2738,62 @@ const handleExportPdf = async () => {
 const pages = chunkArray(righe, 2);
 const dettaglio = generale?.dettaglio ?? [];
 
+const activeImportedDocument = fatturaId
+  ? resolveSelectedImportedDocumentForSession(String(fatturaId))
+  : selectedImportedDoc;
+
+const selectedParsedPayload = useMemo(() => {
+  if (!activeImportedDocument?.parsed_payload_json) return null;
+
+  try {
+    return typeof activeImportedDocument.parsed_payload_json === "string"
+      ? JSON.parse(activeImportedDocument.parsed_payload_json)
+      : activeImportedDocument.parsed_payload_json;
+  } catch (err) {
+    return null;
+  }
+}, [activeImportedDocument?.parsed_payload_json]);
+
  
 const consumo = Number(valAtt || 0) - Number(valPrec || 0);
 const impConsumo = Number(parsedImpCons ?? 0);
 const depFogValue = Number(depfog ?? 0);
-const quotaFissa = Number(parsedQF ?? session?.tot_qf ?? 0);
-const ivaBase = impConsumo + depFogValue + quotaFissa;
+const parsedQuotaFissaFromPayload = Array.isArray(selectedParsedPayload?.componente_quota_tariffa_acqua)
+  ? selectedParsedPayload.componente_quota_tariffa_acqua
+      .filter((row: any) => Number(row?.importo || 0) > 0)
+      .reduce((sum: number, row: any) => sum + Number(row?.importo || 0), 0)
+  : 0;
+const quotaFissaSession = Number(session?.tot_qf ?? 0);
+const quotaFissa = quotaFissaSession > 0 ? quotaFissaSession : parsedQuotaFissaFromPayload;
+const oneriAGiro = Number(oneriPerequazione || 0);
+const fornituraAGiro = getFornituraSummaryByType(selectedParsedPayload, "a_giro");
+const totaleFornituraAGiroDaTxt = Number(fornituraAGiro?.totale_fornitura || 0);
+const totaleFornituraAGiroDaDifferenza =
+  Number(activeImportedDocument?.importo_totale_da_pagare || 0) > 0 &&
+  Number(totaleAcconto || 0) > 0
+    ? Math.round(
+        (Number(activeImportedDocument?.importo_totale_da_pagare || 0) -
+          Number(totaleAcconto || 0) +
+          Number.EPSILON) *
+          100
+      ) / 100
+    : 0;
+const totaleFornituraAGiro =
+  totaleFornituraAGiroDaTxt > 0
+    ? totaleFornituraAGiroDaTxt
+    : totaleFornituraAGiroDaDifferenza > 0
+    ? totaleFornituraAGiroDaDifferenza
+    : 0;
+const ivaBase = impConsumo + depFogValue + quotaFissa + oneriAGiro;
+const ivaAGiro = Math.round((ivaBase * 0.1 + Number.EPSILON) * 100) / 100;
 const varieValue = Number(varie || 0);
+const totaleLetturaAGiroCalcolato =
+  Math.round(
+    (impConsumo + depFogValue + quotaFissa + oneriAGiro + ivaAGiro + varieValue + Number.EPSILON) *
+      100
+  ) / 100;
+const totaleLetturaAGiro =
+  totaleFornituraAGiro > 0 ? totaleFornituraAGiro : totaleLetturaAGiroCalcolato;
 
 const numberOrNull = (value: any) => {
   if (value === null || value === undefined || value === "") return null;
@@ -1455,18 +2801,65 @@ const numberOrNull = (value: any) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const isSnapshotSession =
+  String(session?.stato || "").toUpperCase() === "CALCOLATA" ||
+  String(session?.stato || "").toUpperCase() === "CONFERMATA";
+
 const getLiveLetturaAttuale = (row: any) =>
-  numberOrNull(row?.attuale?.valore_lettura) ??
-  numberOrNull(row?.riga?.lettura_attuale);
+  isSnapshotSession
+    ? numberOrNull(row?.riga?.lettura_attuale) ??
+      numberOrNull(row?.attuale?.valore_lettura)
+    : numberOrNull(row?.attuale?.valore_lettura) ??
+      numberOrNull(row?.riga?.lettura_attuale);
 
 const getLiveLetturaPrecedente = (row: any) =>
-  numberOrNull(row?.precedente?.valore_lettura) ??
-  numberOrNull(row?.riga?.lettura_precedente);
+  isSnapshotSession
+    ? numberOrNull(row?.riga?.lettura_precedente) ??
+      numberOrNull(row?.precedente?.valore_lettura)
+    : numberOrNull(row?.precedente?.valore_lettura) ??
+      numberOrNull(row?.riga?.lettura_precedente);
 
 const getLiveStatoAttuale = (row: any) =>
-  row?.attuale?.stato_lettura ?? row?.riga?.stato_attuale ?? "-";
+  isSnapshotSession
+    ? row?.riga?.stato_attuale ?? row?.attuale?.stato_lettura ?? "-"
+    : row?.attuale?.stato_lettura ?? row?.riga?.stato_attuale ?? "-";
+
+const getRowUtenzaId = (row: any) => String(row?.riga?.id_utenza || row?.utenza?.id || "");
+
+const isManualConsumptionRow = (row: any) =>
+  String(getLiveStatoAttuale(row) || "").trim().toUpperCase() === "Y";
+
+const getManualConsumptionValue = (row: any) => {
+  const key = getRowUtenzaId(row);
+  if (!key) return null;
+  return numberOrNull(manualConsumptions[key]);
+};
+
+const updateManualConsumption = (row: any, value: string) => {
+  const key = getRowUtenzaId(row);
+  if (!key) return;
+
+  setManualConsumptions((prev) => ({
+    ...prev,
+    [key]: value,
+  }));
+};
+
+const persistManualConsumptions = () => {
+  if (!fatturaId) return;
+  saveParams({ manualConsumptions: getManualConsumptionPayload() }).catch(() => undefined);
+};
 
 const getLiveRowConsumption = (row: any) => {
+  if (isManualConsumptionRow(row)) {
+    const manual = getManualConsumptionValue(row);
+    if (manual !== null) return manual;
+  }
+
+  if (isSnapshotSession && row?.riga) {
+    return Number(row?.riga?.consumo_totale || 0);
+  }
+
   const attuale = getLiveLetturaAttuale(row);
   const precedente = getLiveLetturaPrecedente(row);
 
@@ -1478,6 +2871,8 @@ const getLiveRowConsumption = (row: any) => {
 };
 
 const hasStaleCalculatedReadings = (row: any) => {
+  if (isSnapshotSession) return false;
+
   const riga = row?.riga;
   if (!riga) return false;
 
@@ -1496,6 +2891,14 @@ const hasStaleCalculatedReadings = (row: any) => {
   );
 };
 
+const hasStaleManualConsumption = (row: any) => {
+  if (!isManualConsumptionRow(row)) return false;
+  const manual = getManualConsumptionValue(row);
+  if (manual === null) return false;
+  const stored = numberOrNull(row?.riga?.consumo_totale);
+  return stored !== null && Math.abs(manual - stored) > 0.001;
+};
+
 
 
 const totals = useMemo(() => {
@@ -1511,6 +2914,7 @@ const totals = useMemo(() => {
       acc.cong += Number(row.conguaglio || 0);
       acc.oneri += Number(row.imp_oneri || 0);
       acc.acconto += Number(row.acconto || 0);
+      acc.accontoAcq += Number(row.imp_acconto || 0);
       acc.accontoDepFog += Number(row.depfog_acconto || 0);
       acc.storno += Number(row.storno_acconto || 0);
       acc.totConsAcc += Number(row.consumo_acconto || 0);
@@ -1529,6 +2933,7 @@ const totals = useMemo(() => {
       cong: 0,
       oneri: 0,
       acconto: 0,
+      accontoAcq: 0,
       accontoDepFog: 0,
       storno: 0,
       totConsAcc: 0,
@@ -1537,6 +2942,9 @@ const totals = useMemo(() => {
       totale: 0,
     }
   );
+
+  base.accontoVisibile = Number((base.accontoAcq + base.accontoDepFog).toFixed(2));
+  base.accontoExtra = Number((base.acconto - base.accontoVisibile).toFixed(2));
 
   const totaleInterni = Number(base.totale.toFixed(2));
 
@@ -1563,10 +2971,10 @@ const totals = useMemo(() => {
   };
 }, [righe, session]);
 
-const totaleDocumento = Number(selectedImportedDoc?.importo_totale_da_pagare ?? 0);
+const totaleDocumento = Number(activeImportedDocument?.importo_totale_da_pagare ?? 0);
 const totaleOneri = Number(totals?.oneri ?? 0);
 const selectedDocHasParsedOneri = hasOneriPerequazioneRows(
-  selectedImportedDoc?.parsed_payload_json
+  activeImportedDocument?.parsed_payload_json
 );
 const totaleParsedOneriPereq = Number(oneriPerequazione || 0) + Number(oneriPerequazioneAcconto || 0);
 const displayedOneriPereqShare = useMemo(() => {
@@ -1677,18 +3085,50 @@ const totalAudit = useMemo(() => {
   };
 }, [righe, selectedDocHasParsedOneri, displayedOneriPereqShare, totaleInterniVisibile]);
 
+const activeTariffCategory = activeTariffPreview?.category || null;
+const activeTariffScaglioni = Array.isArray(activeTariffCategory?.scaglioni)
+  ? [...activeTariffCategory.scaglioni].sort(
+      (a: any, b: any) => Number(a?.ordine || 0) - Number(b?.ordine || 0)
+    )
+  : [];
+const activeTariffQf = Array.isArray(activeTariffCategory?.quote_fisse)
+  ? activeTariffCategory.quote_fisse.find(
+      (item: any) => String(item?.codice || "").toUpperCase() === "QF"
+    ) || activeTariffCategory.quote_fisse[0]
+  : null;
+const formatTariffNumber = (value: any, decimals = 4) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(decimals) : "-";
+};
+const formatScaglioneRange = (scaglione: any) => {
+  const from = Number(scaglione?.mc_da_base ?? 0);
+  const to = scaglione?.mc_a_base === null || scaglione?.mc_a_base === undefined
+    ? "∞"
+    : Number(scaglione.mc_a_base);
+  return `${from}-${to}`;
+};
+
 return (
     <div className=" ">
       <div className="screen-only">
       {/* SUMMARY */}
-      <div className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b shadow-sm">
+      <div className="sticky top-0 z-50 -mt-px border-b bg-white shadow-sm">
         <div className="max-w-full px-6 py-4 space-y-4">
           <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
             <div>
                 {/* ERROR */}
                 {error && (
-                  <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
-                    {error}
+                  <div className="mb-3 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
+                    <div className="min-w-0 flex-1">{error}</div>
+                    <button
+                      type="button"
+                      onClick={() => setError(null)}
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-red-500 transition hover:bg-red-100 hover:text-red-700"
+                      aria-label="Chiudi errore"
+                      title="Chiudi"
+                    >
+                      x
+                    </button>
                   </div>
                 )}
               <div className="text-lg font-semibold text-slate-900">Fatturazione | Totale € {Number(selectedDoc || 0).toFixed(2)}</div>
@@ -1704,19 +3144,20 @@ return (
                 <span className="text-xs text-slate-500">TF</span>
                 <select
                   value={tfCode}
-                  onChange={(e) => setTfCode(e.target.value)}
+                  onChange={(e) => {
+                    persistTfCode(e.target.value).catch(() => undefined);
+                  }}
                   className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
                   disabled={loadingCalc}
                 >
                   <option value="TF1">TF1</option>
                   <option value="TF2">TF2</option>
                   <option value="TF3">TF3</option>
-                  {/* add more when needed */}
                 </select>
               </div>
 
               <button
-                onClick={calcola}
+                onClick={() => calcola()}
                 disabled={loadingCalc}
                 className="bg-blue-600 text-white px-5 py-2 rounded-xl hover:bg-blue-700 transition shadow-md disabled:opacity-60"
               >
@@ -1725,40 +3166,99 @@ return (
             </div>
           </div>
 
+          <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Tariffa applicata
+              </span>
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">
+                {normalizeTfCode(tfCode)}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
+                {activeTariffPreview?.version?.anno || annoTariffa || "-"}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
+                {activeTariffCategory?.codice || "Categoria -"}
+              </span>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
+                QF € {formatTariffNumber(activeTariffQf?.importo, 2)}
+              </span>
+            </div>
+
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {loadingTariffPreview ? (
+                <span className="text-slate-400">Caricamento tariffa...</span>
+              ) : activeTariffScaglioni.length > 0 ? (
+                activeTariffScaglioni.slice(0, 5).map((scaglione: any) => (
+                  <span
+                    key={scaglione.id || `${scaglione.ordine}-${scaglione.nome}`}
+                    className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700"
+                    title={scaglione.nome || ""}
+                  >
+                    {scaglione.nome || `S${scaglione.ordine}`}: {formatScaglioneRange(scaglione)} mc
+                    {" · "}€ {formatTariffNumber(scaglione.prezzo_acquedotto, 4)}
+                  </span>
+                ))
+              ) : (
+                <span className="text-slate-400">Scaglioni non disponibili</span>
+              )}
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
             <div className="flex items-center justify-between gap-4 mb-3">
               <div>
                 <div className="text-sm font-semibold text-slate-900">
-                  Sessioni esistenti
+                  Periodi di fatturazione
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Ogni periodo mantiene il proprio TXT associato e i dati calcolati.
                 </div>
             
               </div>
 
               <div className="shrink-0 rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600">
-                {sessions.length} {sessions.length === 1 ? "sessione" : "sessioni"}
+                {filteredSessions.length} / {sessions.length}
               </div>
+            </div>
+
+            <div className="mb-3">
+              <input
+                value={periodSearch}
+                onChange={(e) => setPeriodSearch(e.target.value)}
+                placeholder="Cerca periodo, TXT, TF o totale..."
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              />
             </div>
 
             {sessions.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-500">
-                Nessuna fattura disponibile.
+                Nessun periodo di fatturazione salvato.
+              </div>
+            ) : filteredSessions.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-500">
+                Nessun periodo trovato con questa ricerca.
               </div>
             ) : (
-              <div className="flex gap-2 overflow-x-auto pb-1 pr-1">
-                {sessions.map((s: any) => (
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                {filteredSessions.map((s: any) => {
+                  const linkedDoc = getSessionLinkedImportedDocument(s);
+                  const linkedDocName = linkedDoc ? getImportedDocumentName(linkedDoc) : "Nessun documento collegato";
+                  const isAutoLoading = String(autoCalculatingSessionId || pendingAutoCalculateSessionId || "") === String(s.id);
+
+                  return (
                   <div
                     key={s.id}
-                    className={`group flex-shrink-0 flex items-center gap-2 rounded-full border px-3 py-2 transition ${
+                    className={`group flex items-center gap-3 rounded-2xl border px-3 py-3 transition ${
                       fatturaId === s.id
                         ? "border-blue-500 bg-blue-50"
                         : "border-slate-200 bg-white hover:bg-slate-50"
                     }`}
                   >
                     <button
-                      onClick={() =>
-                        navigate(`/condomini/${condominioId}/fatture/${s.id}`)
-                      }
-                      className="flex items-center gap-2 text-left"
+                      onClick={() => handleSelectSession(s)}
+                      disabled={isAutoLoading || loadingCalc}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left disabled:cursor-wait"
                     >
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
@@ -1770,13 +3270,37 @@ return (
                         {s.stato}
                       </span>
 
-                      <span className="text-sm font-medium text-slate-800">
-                        {String(s.id).slice(0, 8)}...
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-slate-800">
+                          {s.periodo_precedente_mese && s.periodo_attuale_mese
+                            ? `${s.periodo_precedente_mese}/${s.periodo_precedente_anno} -> ${s.periodo_attuale_mese}/${s.periodo_attuale_anno}`
+                            : String(s.id).slice(0, 8) + "..."}
+                        </span>
+                        <span
+                            className={`block max-w-[260px] truncate text-[11px] ${
+                            linkedDoc ? "text-slate-500" : "text-amber-600"
+                          }`}
+                          title={linkedDocName}
+                        >
+                          Doc: {linkedDocName}
+                        </span>
                       </span>
 
-                      <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
+                      {/* <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
                         € {Number(s.grand_total ?? 0).toFixed(2)}
+                      </span> */}
+
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                        {normalizeTfCode(s.tf_code || s.tf)}
                       </span>
+
+                      <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                        Apri
+                      </span>
+
+                      {isAutoLoading && (
+                        <Loader2 size={16} className="animate-spin text-blue-600" />
+                      )}
                     </button>
 
                     {s.stato === "BOZZA" && (
@@ -1787,6 +3311,7 @@ return (
                         }}
                         className="rounded-full p-1 opacity-60 transition hover:opacity-100 hover:bg-red-50"
                         title="Elimina Bozza"
+                        disabled={isAutoLoading}
                       >
                         <Trash2
                           size={14}
@@ -1795,7 +3320,15 @@ return (
                       </button>
                     )}
                   </div>
-                ))}
+                  );
+                })}
+              </div>
+            )}
+
+            {(autoCalculatingSessionId || pendingAutoCalculateSessionId) && (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">
+                <Loader2 size={14} className="animate-spin" />
+                Attendere prego, sto preparando la sessione selezionata...
               </div>
             )}
           </div>
@@ -1805,14 +3338,14 @@ return (
 
       {!fatturaId ? (
         <div className="bg-white p-6 rounded-xl shadow">
-          <div className="font-semibold">Seleziona una fattura</div>
+          <div className="font-semibold">Seleziona un periodo o crea una nuova combinazione</div>
           {/* <div className="text-sm text-slate-500">
             Crea una nuova fattura oppure aprine una esistente.
           </div>  */}
           <div className="mt-6 border-t pt-5">
           
           <div className="mt-1 text-sm text-slate-500">
-            Crea una nuova sessione manuale.
+            Scegli casa idrica, periodo attuale e periodo precedente per aprire o creare lo snapshot di fatturazione.
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
@@ -1863,7 +3396,7 @@ return (
                 onClick={createSession}
                 className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {loadingCreate ? "Creazione..." : "Carica Sessione"}
+                {loadingCreate ? "Caricamento..." : "Carica periodo"}
               </button>
             </div>
           </div>
@@ -1871,7 +3404,7 @@ return (
         </div>
       ) : loadingDetail ? (
         <div className="bg-white p-6 rounded-xl shadow">
-          Caricamento...
+          Attendere prego, sto caricando lo snapshot della sessione...
         </div>
       ) : !session ? (
         <div className="bg-white p-6 rounded-xl shadow">
@@ -1957,7 +3490,7 @@ return (
         disabled={!importFile || uploadingImport}
         className="inline-flex h-[58px] items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {uploadingImport ? "Upload..." : "Carica"}
+        {uploadingImport ? "Caricamento..." : "Carica"}
       </button>
     </div>
   </div>
@@ -1972,7 +3505,7 @@ return (
             Documenti caricati
           </h4>
           <p className="mt-1 text-xs text-slate-500">
-            Parsing e importazione dei documenti provider.
+            Analisi e associazione dei documenti provider.
           </p>
         </div>
 
@@ -1996,9 +3529,9 @@ return (
             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
           >
             <option value="all">Tutti</option>
-            <option value="uploaded">Uploaded</option>
-            <option value="parsed">Parsed</option>
-            <option value="imported">Imported</option>
+            <option value="uploaded">Da analizzare</option>
+            <option value="parsed">Analizzati</option>
+            <option value="imported">Associati</option>
           </select>
         </div>
       </div>
@@ -2021,7 +3554,7 @@ return (
                     Nome documento
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
-                    Parsing
+                    Stato analisi
                   </th>
                   <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-500">
                     Azioni
@@ -2040,6 +3573,14 @@ return (
                   paginatedImportedDocs.map((doc: any) => {
                     const status = doc.parse_status || "uploaded";
                     const documentName = getImportedDocumentName(doc);
+                    const statusLabel =
+                      status === "imported"
+                        ? "Associato"
+                        : status === "parsed"
+                        ? "Analizzato"
+                        : status === "failed"
+                        ? "Errore"
+                        : "Da analizzare";
 
                     const statusClass =
                       status === "imported"
@@ -2060,7 +3601,7 @@ return (
                         <td className="px-4 py-3">
                           <button
                             type="button"
-                            onClick={() => loadImportedDocumentDetail(doc.id)}
+                            onClick={() => loadImportedDocumentForSession(doc.id)}
                             className="max-w-[260px] truncate text-left font-bold text-slate-900 hover:text-blue-700"
                           >
                             {documentName}
@@ -2079,7 +3620,7 @@ return (
                           <span
                             className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${statusClass}`}
                           >
-                            {status}
+                            {statusLabel}
                           </span>
                         </td>
 
@@ -2091,16 +3632,16 @@ return (
                                 onClick={() => parseImportedInvoice(doc.id)}
                                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
                               >
-                                Parsing
+                                Analizza
                               </button>
                             )}
 
                             <button
                               type="button"
-                              onClick={() => loadImportedDocumentDetail(doc.id)}
+                              onClick={() => loadImportedDocumentForSession(doc.id)}
                               className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
                             >
-                              Carica
+                              Usa
                             </button>
 
                             <button
@@ -2167,6 +3708,15 @@ return (
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 sm:col-span-2">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            Documento associato al periodo
+          </span>
+          <span className={`mt-1 truncate text-sm font-semibold ${activeImportedDocument ? "text-slate-900" : "text-amber-700"}`}>
+            {activeImportedDocument ? getImportedDocumentName(activeImportedDocument) : "Nessun TXT associato"}
+          </span>
+        </div>
+
         <div className="flex flex-col sm:col-span-2">
           <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
             Anno tariffa
@@ -2268,7 +3818,7 @@ return (
                   </div>
 
                   <div className="p-5 sm:p-6">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-5">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
                       <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                           Consumo mc
@@ -2283,13 +3833,25 @@ return (
 
                       <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Acquedotto
+                        </div>
+                        <div className="mt-2 text-2xl font-bold text-slate-900">
+                          € {Number(impConsumo ?? 0).toFixed(2)}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          Importo lettura a giro
+                        </div>
+                      </article>
+
+                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                           Quota fissa
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
                           € {Number(quotaFissa ?? 0).toFixed(2)}
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
-                          Ripartizione quota fissa
+                          {quotaFissaSession > 0 ? "Ripartizione quota fissa" : "Quota fissa da TXT"}
                         </div>
                       </article>
 
@@ -2328,10 +3890,14 @@ return (
                           Totale lettura a giro
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {Number((totaleDocumento ?? 0) - (Number(totaleAcconto) || 0)).toFixed(2)}
+                          € {Number(totaleLetturaAGiro ?? 0).toFixed(2)}
                         </div>
                         <div className="mt-1 text-xs text-emerald-700/80">
-                          Totale documento al netto dell’acconto
+                          {totaleFornituraAGiro > 0
+                            ? totaleFornituraAGiroDaTxt > 0
+                              ? "Totale fornitura a_giro dal TXT"
+                              : "Totale documento meno acconto"
+                            : "Solo letture a_giro, senza acconto o storno"}
                         </div>
                       </article>
                     </div>
@@ -2359,9 +3925,9 @@ return (
                           </div>
                         </article>
 
-                        {/* <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Importo acconto
+                            Acquedotto acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
                             € {Number(eurAcconto ?? 0).toFixed(2)}
@@ -2384,7 +3950,7 @@ return (
                           <div className="mt-2 text-xl font-bold text-slate-900">
                             € {Number(ivaAcconto ?? 0).toFixed(2)}
                           </div>
-                        </article> */}
+                        </article>
 
                         <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
@@ -2725,7 +4291,7 @@ return (
       </div>
 
       <button
-        onClick={saveGenerale}
+        onClick={() => saveGenerale()}
         disabled={savingGenerale}
         className="inline-flex h-11 items-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-900 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
       >
@@ -2827,7 +4393,9 @@ return (
                                     
                                     const rowKey = r.id ?? idx;
                                     const isExpanded = !!expandedRows[rowKey];
-                                    const staleReadings = hasStaleCalculatedReadings(r);
+                                    const staleReadings =
+                                      hasStaleCalculatedReadings(r) ||
+                                      hasStaleManualConsumption(r);
 
                                     const utenzaKey = String(r.utenza?.id ?? "").trim();
 
@@ -2880,7 +4448,28 @@ return (
                                             {getLiveStatoAttuale(r)}
                                           </td>
                                           <td className="p-2 text-center">
-                                            {Number(getLiveRowConsumption(r) ?? 0).toFixed(0)}
+                                            {isManualConsumptionRow(r) ? (
+                                              <div className="flex flex-col items-center gap-1">
+                                                <input
+                                                  type="number"
+                                                  min="0"
+                                                  step="0.01"
+                                                  value={
+                                                    manualConsumptions[getRowUtenzaId(r)] ??
+                                                    String(Number(getLiveRowConsumption(r) ?? 0))
+                                                  }
+                                                  onChange={(e) => updateManualConsumption(r, e.target.value)}
+                                                  onBlur={persistManualConsumptions}
+                                                  className="h-8 w-20 rounded-lg border border-amber-300 bg-amber-50 px-2 text-center text-xs font-bold text-slate-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                                                  title="Consumo manuale definitivo per stato Y"
+                                                />
+                                                <span className="text-[9px] font-bold uppercase tracking-wide text-amber-700">
+                                                  Manuale
+                                                </span>
+                                              </div>
+                                            ) : (
+                                              Number(getLiveRowConsumption(r) ?? 0).toFixed(0)
+                                            )}
                                           </td>
                                           <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
                                           <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
@@ -3000,12 +4589,33 @@ return (
                                     <td className="p-2 text-center">{totaleOneriVisibile.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totaleOneriPereqVisibile.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
-                                    <td className="p-2 text-center">
-                                      {totals.totConsAcc.toFixed(2)}mc
-                                      <br />
-                                      {righe.reduce((sum: number, row: any) => sum + Number(row?.riga?.imp_acconto || 0), 0).toFixed(2)}
+                                    <td colSpan={2} className="p-2 text-center align-middle">
+                                      <div className="mx-auto max-w-[230px] rounded-md border border-slate-300 bg-white/70 px-2 py-1.5 shadow-sm">
+                                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                                          Tot. acconto
+                                        </div>
+                                        <div className="text-sm font-extrabold text-slate-900">
+                                          {totals.acconto.toFixed(2)}
+                                        </div>
+                                        <div className="mt-1 grid grid-cols-2 gap-2 border-t border-slate-200 pt-1 text-[11px] leading-tight text-slate-700">
+                                          <div>
+                                            <div className="font-bold text-slate-900">
+                                              {totals.totConsAcc.toFixed(2)}mc
+                                            </div>
+                                            <div>Acq {totals.accontoAcq.toFixed(2)}</div>
+                                          </div>
+                                          <div>
+                                            <div className="font-bold text-slate-900">
+                                              Dep/Fog
+                                            </div>
+                                            <div>{totals.accontoDepFog.toFixed(2)}</div>
+                                          </div>
+                                        </div>
+                                        <div className="mt-1 border-t border-slate-200 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                          IVA/Oneri {totals.accontoExtra.toFixed(2)}
+                                        </div>
+                                      </div>
                                     </td>
-                                    <td className="p-2 text-center">{totals.accontoDepFog.toFixed(2)}</td>
                                     <td className="p-2 text-center">
                                       {Number(mcStorno || 0).toFixed(2)}mc
                                       <br />
@@ -3382,4 +4992,3 @@ return (
   
 }
  
-
