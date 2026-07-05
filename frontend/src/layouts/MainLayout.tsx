@@ -1,6 +1,7 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode, SVGProps } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { clearAuthSession, getAuthUser } from "../auth";
 
 type Props = {
   children: ReactNode;
@@ -249,8 +250,15 @@ function PipelineStatusPanel() {
 
 export default function MainLayout({ children }: Props) {
   const location = useLocation();
+  const navigate = useNavigate();
   const match = location.pathname.match(/^\/condomini\/([^/]+)/);
   const condominioId = match?.[1];
+  const user = getAuthUser();
+
+  function handleLogout() {
+    clearAuthSession();
+    navigate("/login", { replace: true });
+  }
 
   return (
     <div className="flex h-screen bg-slate-50">
@@ -322,6 +330,7 @@ export default function MainLayout({ children }: Props) {
                 label="Gegolocalizzazione Condomini"
               />
               <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
+              <NavItem to="/admin/password" label="Password" />
               <NavItem to="/admin/contabilita" label="Contabilità" />
             </div>
 
@@ -330,6 +339,19 @@ export default function MainLayout({ children }: Props) {
             </div>
           </div>
         </nav>
+
+        <div className="border-t border-slate-200 px-4 py-4">
+          <div className="mb-2 text-xs text-slate-500">
+            Operatore: <span className="font-semibold text-slate-700">{user?.username || "admin"}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+          >
+            Esci
+          </button>
+        </div>
       </aside>
 
       <main className="flex-1 p-6 overflow-auto">{children}</main>

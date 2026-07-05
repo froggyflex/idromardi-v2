@@ -9,6 +9,7 @@ import { useRef } from "react";
 import { ca, se } from "date-fns/locale";
 import InvoicePrintCard from "../components/InvoicePrintCard";
 import { getVersionFull, listVersions } from "../../api/tariffe";
+import { getAuthToken } from "../../auth";
  // @ts-ignore
 import { summarizePeriodiAndTariffe } from "../../utils/fattureUtils";
 
@@ -334,6 +335,7 @@ export default function CondominioFatturePage() {
 
     function viewSinglePdf(id: number) {
       const params = new URLSearchParams();
+      const token = getAuthToken();
 
       if (condominioId) {
         params.set("condominioId", String(condominioId));
@@ -341,6 +343,10 @@ export default function CondominioFatturePage() {
 
       if (fatturaId) {
         params.set("fatturaId", String(fatturaId));
+      }
+
+      if (token) {
+        params.set("authToken", token);
       }
 
       window.open(
@@ -351,6 +357,7 @@ export default function CondominioFatturePage() {
 
     function viewPeriodPdf(periodKey: string) {
       const params = new URLSearchParams();
+      const token = getAuthToken();
 
       if (condominioId) {
         params.set("condominioId", String(condominioId));
@@ -358,6 +365,10 @@ export default function CondominioFatturePage() {
 
       if (fatturaId) {
         params.set("fatturaId", String(fatturaId));
+      }
+
+      if (token) {
+        params.set("authToken", token);
       }
 
       window.open(
@@ -368,9 +379,14 @@ export default function CondominioFatturePage() {
 
     function viewGeneratedDocument(id: string) {
       const params = new URLSearchParams();
+      const token = getAuthToken();
 
       if (condominioId) {
         params.set("condominioId", String(condominioId));
+      }
+
+      if (token) {
+        params.set("authToken", token);
       }
 
       window.open(
@@ -2101,7 +2117,13 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
   async function onStampaProspetto(fatturaId: string) {
     // Open in new tab
-    const url = `/fatture/${fatturaId}/prospetto.pdf`;
+    const params = new URLSearchParams();
+    const token = getAuthToken();
+    if (token) {
+      params.set("authToken", token);
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const url = `/fatture/${fatturaId}/prospetto.pdf${suffix}`;
     window.open(api.defaults.baseURL + url, "_blank");
     window.setTimeout(() => {
       loadGeneratedDocuments().catch(() => undefined);

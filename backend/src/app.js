@@ -12,6 +12,8 @@ const prospettoRoutes = require("./modules/prospetti/prospetti.routes");
 const financialSummaryRoutes = require("./modules/financialSummary/financialSummary.routes");
 const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 const adminRoutes = require("./modules/admin/admin.routes");
+const authRoutes = require("./modules/auth/auth.routes");
+const { requireAuth } = require("./modules/auth/auth.middleware");
 
 const app = express();
 
@@ -62,6 +64,9 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+
+app.use("/api/auth", authRoutes);
+app.use("/api", requireAuth);
 
 app.use("/api/condomini", condominiRoutes);
 app.use("/api", utenzeRoutes);
