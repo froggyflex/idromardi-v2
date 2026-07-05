@@ -325,13 +325,20 @@ export default function MainLayout({ children }: Props) {
             </div>
 
             <div className="space-y-1">
+              <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
+              <NavItem to="/admin/contabilita" label="Contabilità" />
+            </div>
+
+            <div className="mt-5 px-3 text-xs text-slate-400 uppercase tracking-wider pb-2">
+              Impostazioni
+            </div>
+
+            <div className="space-y-1">
               <NavItem
                 to="/admin/tools"
-                label="Gegolocalizzazione Condomini"
+                label="Geolocalizzazione Condomini"
               />
-              <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
               <NavItem to="/admin/password" label="Password" />
-              <NavItem to="/admin/contabilita" label="Contabilità" />
             </div>
 
             <div className="mt-5 px-1">

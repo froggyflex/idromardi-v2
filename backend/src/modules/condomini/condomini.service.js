@@ -146,7 +146,11 @@ exports.getAll = async (page = 1, limit = 20, search = "") => {
       c.codice,
       c.nome,
       c.indirizzo,
+      c.cap,
       c.citta,
+      c.stato,
+      c.latitude,
+      c.longitude,
       (
         SELECT cc2.nome 
         FROM condominio_contatti_v2 cc2
