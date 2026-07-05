@@ -3009,6 +3009,37 @@ const getDisplayedRowTotal = (row: any) => {
   return getExpectedRowTotal(row);
 };
 
+const getMinimumPayableAmount = (row: any) => {
+  const r = row?.riga || {};
+  const qf = Number(r.imp_qf || 0);
+  const fromBackend = Number(r.minimum_payable || 0);
+
+  if (fromBackend > 0) return fromBackend;
+
+  return roundMoney(Number(r.imp_oneri || 0) + qf + qf * 0.1);
+};
+
+const isMinimumPayableApplied = (row: any) => {
+  const r = row?.riga || {};
+  if (Number(r.minimum_payable_applied || 0) === 1) return true;
+
+  const storno = Number(r.storno_acconto || 0);
+  const total = getDisplayedRowTotal(row);
+  const minimum = getMinimumPayableAmount(row);
+
+  return storno < 0 && minimum > 0 && Math.abs(total - minimum) <= 0.05;
+};
+
+const isRecuperoReadingRow = (row: any) => {
+  if (Number(row?.riga?.recupero_lettura || 0) === 1) return true;
+
+  const stato = String(row?.riga?.stato_attuale ?? row?.attuale?.stato_lettura ?? "").toUpperCase();
+  const current = numberOrNull(row?.riga?.lettura_attuale ?? row?.attuale?.valore_lettura);
+  const previous = numberOrNull(row?.riga?.lettura_precedente ?? row?.precedente?.valore_lettura);
+
+  return stato !== "S" && current !== null && previous !== null && current < previous;
+};
+
 const roundMoney = (value: number) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -4400,6 +4431,14 @@ return (
                                     const utenzaKey = String(r.utenza?.id ?? "").trim();
 
                                     const tiers = dettaglioByUtenza[utenzaKey] ?? [];
+                                    const minimumPayableApplied = isMinimumPayableApplied(r);
+                                    const minimumPayableAmount = getMinimumPayableAmount(r);
+                                    const minimumCreditEuro = Number(r.riga?.minimum_payable_credit_euro || 0);
+                                    const minimumCreditMc = Number(r.riga?.minimum_payable_credit_mc || 0);
+                                    const recuperoReading = isRecuperoReadingRow(r);
+                                    const recuperoNote =
+                                      r.riga?.recupero_note ||
+                                      "Lettura attuale inferiore alla precedente: consumo portato a recupero";
 
                                     const uniqueTiers = tiers.filter(
                                       (tier: any, index: number, arr: any[]) =>
@@ -4432,6 +4471,22 @@ return (
                                             {staleReadings && (
                                               <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">
                                                 Da ricalcolare
+                                              </div>
+                                            )}
+                                            {minimumPayableApplied && (
+                                              <div
+                                                className="mx-auto mt-1 inline-flex rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700"
+                                                title={`Ridotto al minimo fatturabile: EUR ${minimumPayableAmount.toFixed(2)}`}
+                                              >
+                                                Minimo
+                                              </div>
+                                            )}
+                                            {recuperoReading && (
+                                              <div
+                                                className="mx-auto mt-1 inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700"
+                                                title={recuperoNote}
+                                              >
+                                                Recupero
                                               </div>
                                             )}
                                           </td>
@@ -4561,6 +4616,35 @@ return (
                                                       <span>Totale Consumo</span>
                                                       <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
                                                     </div>
+                                                    {minimumPayableApplied && (
+                                                      <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-800">
+                                                        <div className="font-bold uppercase tracking-wide">
+                                                          Minimo fatturabile applicato
+                                                        </div>
+                                                        <div className="mt-1">
+                                                          Questa utenza e stata mantenuta al minimo di EUR {minimumPayableAmount.toFixed(2)} per preservare oneri, quota fissa e IVA quota fissa.
+                                                        </div>
+                                                        {(minimumCreditEuro > 0 || minimumCreditMc > 0) && (
+                                                          <div className="mt-1 font-semibold">
+                                                            Credito residuo salvato: EUR {minimumCreditEuro.toFixed(2)}
+                                                            {minimumCreditMc > 0 ? ` / ${minimumCreditMc.toFixed(2)} mc` : ""}
+                                                          </div>
+                                                        )}
+                                                      </div>
+                                                    )}
+                                                    {recuperoReading && (
+                                                      <div className="mt-3 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-xs text-cyan-800">
+                                                        <div className="font-bold uppercase tracking-wide">
+                                                          Lettura in recupero
+                                                        </div>
+                                                        <div className="mt-1">
+                                                          {recuperoNote}
+                                                        </div>
+                                                        <div className="mt-1">
+                                                          Se lo stato non e S, la lettura attuale viene allineata alla precedente e il consumo base resta 0. Con stato Y resta possibile inserire un consumo manuale.
+                                                        </div>
+                                                      </div>
+                                                    )}
                                                   </div>
                                                 </div>
 
