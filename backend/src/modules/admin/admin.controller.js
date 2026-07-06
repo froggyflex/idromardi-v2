@@ -1,5 +1,5 @@
 const pool = require("../../config/db");
-const { geocodeAddress } = require("../geocoding/geocoding.services");
+const { geocodeAddress, cleanAddress } = require("../geocoding/geocoding.services");
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
@@ -14,7 +14,10 @@ exports.listGeocodeMissingCondomini = async (req, res) => {
 
   res.json({
     total: rows.length,
-    rows,
+    rows: rows.map((row) => ({
+      ...row,
+      indirizzo_ricerca: cleanAddress(row.indirizzo),
+    })),
   });
 };
 
@@ -47,19 +50,21 @@ exports.batchGeocodeCondomini = async (req, res) => {
           codice: c.codice,
           nome: c.nome,
           indirizzo: c.indirizzo,
+          indirizzo_ricerca: cleanAddress(c.indirizzo),
           citta: c.citta,
           reason: "Nessun risultato",
         });
       }
     } catch (error) {
       failed++;
-      failures.push({
-        codice: c.codice,
-        nome: c.nome,
-        indirizzo: c.indirizzo,
-        citta: c.citta,
-        reason: error.message || error.code || "Errore geocoding",
-      });
+        failures.push({
+          codice: c.codice,
+          nome: c.nome,
+          indirizzo: c.indirizzo,
+          indirizzo_ricerca: cleanAddress(c.indirizzo),
+          citta: c.citta,
+          reason: error.message || error.code || "Errore geocoding",
+        });
     }
 
     await delay(1100);

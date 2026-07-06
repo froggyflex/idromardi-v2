@@ -7,6 +7,7 @@ type MissingCondominio = {
   codice?: number | string;
   nome?: string;
   indirizzo?: string;
+  indirizzo_ricerca?: string;
   cap?: string;
   citta?: string;
   latitude?: number | null;
@@ -26,11 +27,44 @@ type GeocodeResult = {
   }>;
 };
 
+const BUILDING_META_RE =
+  /\b(is|isolato|sc|scala|lotto|palazzo|palazzina|fabbricato|interno|int)\.?\b/i;
+
 function normalize(value: unknown) {
   return String(value || "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function suggestedLookupAddress(value: unknown) {
+  const raw = String(value || "").trim();
+  const parts = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  let base = raw;
+
+  if (parts.length > 1) {
+    const kept: string[] = [];
+
+    for (const part of parts) {
+      if (BUILDING_META_RE.test(part)) break;
+      kept.push(part);
+    }
+
+    base = kept.length ? kept.join(", ") : parts[0];
+  }
+
+  return base
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\bp\.?\s*co\b/gi, "Parco")
+    .replace(/\b(is|isolato|sc|scala|lotto|palazzo|palazzina|fabbricato|interno|int)\.?\s+[a-z0-9/.-]+\b/gi, " ")
+    .replace(/\b(gas|utenze condominiali)\b/gi, " ")
+    .replace(/[-,;]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -107,6 +141,10 @@ export default function AdminTools() {
         detailedRows
           .filter((row: any) => (row.stato || "ATTIVO") === "ATTIVO")
           .filter(hasMissingCoordinates)
+          .map((row: any) => ({
+            ...row,
+            indirizzo_ricerca: row.indirizzo_ricerca || suggestedLookupAddress(row.indirizzo),
+          }))
           .sort((a: any, b: any) => Number(a.codice || 0) - Number(b.codice || 0))
       );
     } catch (err: any) {
@@ -244,6 +282,7 @@ export default function AdminTools() {
                 <Th>Codice</Th>
                 <Th>Condominio</Th>
                 <Th>Indirizzo attuale</Th>
+                <Th>Ricerca usata</Th>
                 <Th>CAP</Th>
                 <Th>Citta</Th>
                 <Th>Motivo</Th>
@@ -253,7 +292,7 @@ export default function AdminTools() {
             <tbody className="divide-y divide-slate-100 bg-white">
               {loadingMissing ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                     Caricamento lista...
                   </td>
                 </tr>
@@ -269,6 +308,11 @@ export default function AdminTools() {
                     <Td>
                       <div className="max-w-[360px] truncate text-slate-700">
                         {row.indirizzo || "-"}
+                      </div>
+                    </Td>
+                    <Td>
+                      <div className="max-w-[280px] truncate font-semibold text-blue-700">
+                        {row.indirizzo_ricerca || suggestedLookupAddress(row.indirizzo) || "-"}
                       </div>
                     </Td>
                     <Td>{row.cap || "-"}</Td>
@@ -290,7 +334,7 @@ export default function AdminTools() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-emerald-700">
+                  <td colSpan={8} className="px-4 py-8 text-center text-emerald-700">
                     Nessun condominio richiede correzione manuale.
                   </td>
                 </tr>

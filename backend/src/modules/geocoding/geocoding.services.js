@@ -5,11 +5,35 @@ const NOMINATIM_HEADERS = {
   "User-Agent": "IdromardiApp/1.0 (admin@idromardi.it)",
 };
 
+const BUILDING_META_RE =
+  /\b(is|isolato|sc|scala|lotto|palazzo|palazzina|fabbricato|scala|interno|int)\.?\b/i;
+
+function stripBuildingMetadata(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const parts = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) return raw;
+
+  const kept = [];
+
+  for (const part of parts) {
+    if (BUILDING_META_RE.test(part)) break;
+    kept.push(part);
+  }
+
+  return (kept.length ? kept.join(", ") : parts[0]).trim();
+}
+
 function cleanAddress(value) {
-  return String(value || "")
+  return stripBuildingMetadata(value)
     .replace(/\([^)]*\)/g, " ")
     .replace(/\bp\.?\s*co\b/gi, "Parco")
-    .replace(/\b(is|isolato|sc|scala|lotto|palazzo)\.?\s+[a-z0-9/.-]+\b/gi, " ")
+    .replace(/\b(is|isolato|sc|scala|lotto|palazzo|palazzina|fabbricato|interno|int)\.?\s+[a-z0-9/.-]+\b/gi, " ")
     .replace(/\b(gas|utenze condominiali)\b/gi, " ")
     .replace(/[-,;]+/g, " ")
     .replace(/\s+/g, " ")
