@@ -348,6 +348,7 @@ export default function Dashboard() {
           subtitle={`${formatNumber(validMapData.length)} condomini con coordinate valide`}
           icon={MapPin}
           compact
+          fill
         >
           <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div className="relative min-w-0 flex-1">
@@ -381,7 +382,7 @@ export default function Dashboard() {
               center={defaultCenter}
               zoom={12}
               className="dashboard-map"
-              style={{ height: 440, minHeight: 440, width: "100%" }}
+              style={{ height: "100%", minHeight: 640, width: "100%" }}
               scrollWheelZoom
             >
               <TileLayer
@@ -564,15 +565,21 @@ function Panel({
   icon: Icon,
   children,
   compact = false,
+  fill = false,
 }: {
   title: string;
   subtitle: string;
   icon: LucideIcon;
   children: ReactNode;
   compact?: boolean;
+  fill?: boolean;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+    <section
+      className={`rounded-xl border border-slate-200 bg-white shadow-sm ${
+        fill ? "flex h-full min-h-[760px] flex-col" : ""
+      }`}
+    >
       <div className={`flex items-start gap-2 border-b border-slate-200 ${compact ? "px-4 py-3" : "px-5 py-4"}`}>
         <div className="rounded-lg bg-slate-100 p-1.5 text-slate-600">
           <Icon className="h-3.5 w-3.5" />
@@ -582,7 +589,9 @@ function Panel({
           <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>
         </div>
       </div>
-      <div className={compact ? "p-3" : "p-5"}>{children}</div>
+      <div className={`${compact ? "p-3" : "p-5"} ${fill ? "flex flex-1 flex-col" : ""}`}>
+        {children}
+      </div>
     </section>
   );
 }
