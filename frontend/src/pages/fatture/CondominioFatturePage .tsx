@@ -52,6 +52,7 @@ type PeriodMode = "all" | "acconto" | "non_acconto";
 export default function CondominioFatturePage() {
 
     const importedDocsScrollRef = useRef<HTMLDivElement | null>(null);
+    const parsingAlertRef = useRef<HTMLDivElement | null>(null);
 
     const navigate = useNavigate();
     const { condominioId, id: fatturaId } = useParams();
@@ -214,6 +215,17 @@ export default function CondominioFatturePage() {
       availableTypes: string[];
       grouped: Record<string, { oldest: LetturaItem; newest: LetturaItem; items: LetturaItem[] }>;
     }>(null);
+
+    useEffect(() => {
+      if (!parsingAlert) return;
+
+      window.setTimeout(() => {
+        parsingAlertRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }, 80);
+    }, [parsingAlert]);
 
     const [importedDocs, setImportedDocs] = useState<ImportedInvoiceDocument[]>([]);
     const [selectedImportedId, setSelectedImportedId] = useState<string | null>(null);
@@ -4308,7 +4320,10 @@ return (
               </div>
 
               {parsingAlert && (
-                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <div
+                  ref={parsingAlertRef}
+                  className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+                >
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                       <div className="font-bold">Lettura a giro non trovata</div>

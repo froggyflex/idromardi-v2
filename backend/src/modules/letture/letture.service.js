@@ -328,17 +328,23 @@ exports.getSessionGrid = async function ({ sessionId }) {
       }
     }
 
-    const grid = utenze.map((u) => ({
-      utenza: u,
-      current: righeMap.get(u.id)
-        ? {
-            valore: righeMap.get(u.id).valore_lettura,
-            stato: righeMap.get(u.id).stato_lettura,
-           
-          }
-        : { valore: null, stato: "C" },
-      history: historyMap.get(u.id) || [],
-    }));
+    const grid = utenze.map((u) => {
+      const currentRow = righeMap.get(u.id);
+      const historyRows = historyMap.get(u.id) || [];
+      const latestPreviousState = String(historyRows[0]?.stato_lettura || "").trim().toUpperCase();
+      const defaultState = latestPreviousState === "Y" ? "Y" : "C";
+
+      return {
+        utenza: u,
+        current: currentRow
+          ? {
+              valore: currentRow.valore_lettura,
+              stato: currentRow.stato_lettura,
+            }
+          : { valore: null, stato: defaultState },
+        history: historyRows,
+      };
+    });
       console.log( "Grid data:",  utenze);
     return { session, states, grid };
   } finally {
