@@ -1163,11 +1163,6 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
         ? `Nessuna lettura valida di tipo "a_giro" trovata. Tipi disponibili: ${availableTypes.join(", ")}. Seleziona manualmente quali valori usare per Valore Precedente e Valore Attuale.`
         : `Nessuna grouped_letture disponibile nel payload.`;
 
-    alert(message);
-
-    setValPrec(0);
-    setValAtt(0);
-
     if (typeof setParsingAlert === "function") {
       setParsingAlert({
         type: "warning",
@@ -1179,6 +1174,23 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
   } catch (err) {
     console.error("Errore durante il parsing del payload:", err);
   }
+}
+
+function applyParsedReadingBucket(type: string) {
+  const bucket = parsingAlert?.grouped?.[type];
+  const oldest = bucket?.oldest;
+  const newest = bucket?.newest;
+
+  if (oldest?.lettura_mc == null || newest?.lettura_mc == null) {
+    setError(`La lettura "${type}" non contiene valori sufficienti.`);
+    return;
+  }
+
+  setValPrec(String(oldest.lettura_mc));
+  setValAtt(String(newest.lettura_mc));
+  setGiorniConsumi(diffDaysExclusive(oldest.data_lettura, newest.data_lettura) ?? 0);
+  setParsingAlert(null);
+  setError(null);
 }
 
   function parseItalianDateToIso(dateStr?: string | null): string | null {
@@ -4294,6 +4306,72 @@ return (
                   )}
 
               </div>
+
+              {parsingAlert && (
+                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="font-bold">Lettura a giro non trovata</div>
+                      <div className="mt-1 max-w-4xl text-xs leading-5 text-amber-800">
+                        {parsingAlert.message}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setParsingAlert(null)}
+                      className="self-start rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs font-bold text-amber-800 transition hover:bg-amber-100"
+                    >
+                      Chiudi
+                    </button>
+                  </div>
+
+                  {parsingAlert.availableTypes.length > 0 && (
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {parsingAlert.availableTypes.map((type) => {
+                        const bucket = parsingAlert.grouped?.[type];
+                        const oldest = bucket?.oldest;
+                        const newest = bucket?.newest;
+                        const canApply =
+                          oldest?.lettura_mc != null && newest?.lettura_mc != null;
+
+                        return (
+                          <button
+                            key={type}
+                            type="button"
+                            disabled={!canApply}
+                            onClick={() => applyParsedReadingBucket(type)}
+                            className="rounded-xl border border-amber-200 bg-white p-3 text-left transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <div className="text-xs font-black uppercase tracking-wide text-amber-700">
+                              Usa {type}
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                              <div>
+                                <div className="font-bold text-slate-500">Precedente</div>
+                                <div className="font-semibold text-slate-900">
+                                  {oldest?.lettura_mc ?? "-"} mc
+                                </div>
+                                <div className="text-slate-500">
+                                  {oldest?.data_lettura || "-"}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="font-bold text-slate-500">Attuale</div>
+                                <div className="font-semibold text-slate-900">
+                                  {newest?.lettura_mc ?? "-"} mc
+                                </div>
+                                <div className="text-slate-500">
+                                  {newest?.data_lettura || "-"}
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="bg-white border rounded-2xl p-6">
                 {/* CONTATORE GENERALE RIBBON */}
