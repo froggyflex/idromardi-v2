@@ -5013,8 +5013,9 @@ return (
                       )}
                     </section>
 
-                    <br></br>
-                    {/* GENERATED PDFS */}
+                    {/* Legacy per-user PDF list hidden for now. The archive section above
+                        shows the latest prospetto and complete bollette for the session. */}
+                    {false && (
                     <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                       <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
@@ -5198,6 +5199,7 @@ return (
                         </div>
                       )}
                     </section>
+                    )}
               </div></>
             )}
 
