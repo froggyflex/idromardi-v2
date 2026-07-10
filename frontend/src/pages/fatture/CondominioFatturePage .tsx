@@ -940,6 +940,47 @@ function getInternalPeriodDate(period: any): string | null {
   ]);
 }
 
+function formatItalianDateValue(value?: string | null): string {
+  const date = parseItalianDate(value);
+  if (!date) return value ? String(value) : "";
+
+  return date.toLocaleDateString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function formatPeriodMonthYear(period: any): string {
+  const periodDate = getInternalPeriodDate(period);
+  const parsedDate = parseItalianDate(periodDate);
+
+  if (parsedDate) {
+    return `${String(parsedDate.getMonth() + 1).padStart(2, "0")}/${parsedDate.getFullYear()}`;
+  }
+
+  const month = Number(period?.period_month || 0);
+  const year = Number(period?.period_year || 0);
+
+  if (month && year) {
+    return `${String(month).padStart(2, "0")}/${year}`;
+  }
+
+  return "";
+}
+
+function buildRipartizionePeriodLabel(periodoPrecedente?: any, periodoAttuale?: any): string {
+  const from = formatPeriodMonthYear(periodoPrecedente);
+  const to = formatPeriodMonthYear(periodoAttuale);
+
+  if (from && to) return `${from} - ${to}`;
+  return from || to || "-";
+}
+
+function buildRipartizioneDataLettura(periodoAttuale?: any): string {
+  return formatItalianDateValue(getInternalPeriodDate(periodoAttuale)) || "-";
+}
+
 function resolveGiorniInterniFromPeriods(
   periodoPrecedente?: any,
   periodoAttuale?: any
@@ -2816,6 +2857,8 @@ const apiBaseUrl = configuredApiBaseUrl.startsWith("http")
   ? configuredApiBaseUrl.replace(/\/api\/?$/, "")
   : "";
 const logoUrl = apiBaseUrl ? `${apiBaseUrl}/images/logo_colorato.png` : "";
+const ripartizionePeriodLabel = buildRipartizionePeriodLabel(periodoPrecedente, periodoAttuale);
+const ripartizioneDataLettura = buildRipartizioneDataLettura(periodoAttuale);
 
 const handleExportPdf = async () => {
   try {
@@ -2826,8 +2869,8 @@ const handleExportPdf = async () => {
     const { data } = await api.post("/fatture/export-ripartizione-pdf/start", {
       righe,
       dettaglioByUtenza,
-      trimestreLabel: "07.25 - 01.2025",
-      dataLettura: "12/01/2026",
+      trimestreLabel: ripartizionePeriodLabel,
+      dataLettura: ripartizioneDataLettura,
       logoUrl: logoUrl || undefined,
       condominioId,
       fatturaId,
@@ -5246,8 +5289,8 @@ return (
                       key={`${r?.id ?? r?.utenza?.id_user ?? idx}-${pageIndex}`}
                       r={r}
                       logoUrl="/images/idromardi-logo.png"
-                      trimestreLabel={`1`}
-                      dataLettura={`1`}
+                      trimestreLabel={ripartizionePeriodLabel}
+                      dataLettura={ripartizioneDataLettura}
                     />
                   ))}
                 </div>
