@@ -688,22 +688,31 @@ export default function CondominioFatturePage() {
       const summary = parsedSummary ?? summarizePeriodiAndTariffe(payload || null);
       const grouped = payload?.grouped_letture || {};
       const aGiro = grouped.a_giro;
+      const mediaLike = grouped.media || grouped.acconto || grouped.acconto_a_giro;
+      const hasAGiro = hasAGiroConsumption(payload, summary);
       const resolvedAcconto = resolveAccontoPeriodFromPayload(payload, summary);
+      const mainPeriod = hasAGiro ? null : getEstimatedConsumptionPeriod(payload, summary);
+      const mainOldest = hasAGiro ? null : mediaLike?.oldest;
+      const mainNewest = hasAGiro ? null : mediaLike?.newest;
 
       return {
         giorniQF: deriveGiorniQfFromPayload(payload),
         giorniConsumi:
           aGiro?.oldest?.data_lettura && aGiro?.newest?.data_lettura
             ? diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura)
+            : mainOldest?.data_lettura && mainNewest?.data_lettura
+            ? diffDaysExclusive(mainOldest.data_lettura, mainNewest.data_lettura)
+            : mainPeriod?.data_inizio && mainPeriod?.data_fine
+            ? diffDaysExclusive(mainPeriod.data_inizio, mainPeriod.data_fine)
             : null,
         giorniAcconto:
-          resolvedAcconto?.dataInizio && resolvedAcconto?.dataFine
+          hasAGiro && resolvedAcconto?.dataInizio && resolvedAcconto?.dataFine
             ? diffDaysExclusive(resolvedAcconto.dataInizio, resolvedAcconto.dataFine)
-            : null,
+            : 0,
         mcAcconto:
-          resolvedAcconto?.consumo !== undefined && resolvedAcconto?.consumo !== null
+          hasAGiro && resolvedAcconto?.consumo !== undefined && resolvedAcconto?.consumo !== null
             ? Number(resolvedAcconto.consumo)
-            : null,
+            : 0,
       };
     } catch {
       return {};
@@ -1137,6 +1146,10 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setParsedImpCons(parsedBuckets.aGiro.acquedotto);
       setDepFog(parsedBuckets.aGiro.depFog);
       setOneriPerequazione(parsedBuckets.aGiro.oneri);
+    } else if (parsedBuckets.acconto.hasPeriod) {
+      setParsedImpCons(parsedBuckets.acconto.acquedotto);
+      setDepFog(parsedBuckets.acconto.depFog);
+      setOneriPerequazione(parsedBuckets.acconto.oneri);
     } else {
       parsedConsumoFromParsedPayload(parsedSummary);
     }
@@ -1165,6 +1178,28 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       }
        
 
+      setParsingAlert?.(null);
+      return;
+    }
+
+    const estimatedOnly = !hasAGiroConsumption(payload, parsedSummary);
+    const estimatedReadings = grouped.media || grouped.acconto || grouped.acconto_a_giro;
+
+    if (
+      estimatedOnly &&
+      estimatedReadings?.oldest?.lettura_mc != null &&
+      estimatedReadings?.newest?.lettura_mc != null
+    ) {
+      setValPrec(String(estimatedReadings.oldest.lettura_mc));
+      setValAtt(String(estimatedReadings.newest.lettura_mc));
+      setGiorniConsumi(
+        diffDaysExclusive(
+          estimatedReadings.oldest.data_lettura,
+          estimatedReadings.newest.data_lettura
+        ) ?? 0
+      );
+      parseStornoFromParsedPayload(payloadJson);
+      parseQFFromParsedPayload(payloadJson);
       setParsingAlert?.(null);
       return;
     }
@@ -1311,6 +1346,10 @@ function resetParsedDocumentState() {
 }
 
 function resolveAccontoPeriodFromPayload(payload: any, parsedSummary?: any) {
+  if (!hasAGiroConsumption(payload, parsedSummary)) {
+    return null;
+  }
+
   const periodi = Array.isArray(payload?.periodi_fatturazione)
     ? payload.periodi_fatturazione
     : [];
@@ -1512,6 +1551,29 @@ function closeQuantity(a: any, b: any) {
 function getTypedPeriod(parsedSummary: any[] | undefined, tipo: "a_giro" | "media") {
   return Array.isArray(parsedSummary)
     ? parsedSummary.find((period: any) => String(period?.tipo_lettura || "").toLowerCase() === tipo)
+    : null;
+}
+
+function hasAGiroConsumption(payload: any, parsedSummary?: any) {
+  const grouped = payload?.grouped_letture || {};
+  if (grouped?.a_giro?.oldest && grouped?.a_giro?.newest) return true;
+
+  return Array.isArray(parsedSummary)
+    ? parsedSummary.some((period: any) => {
+        const tipo = String(period?.tipo_lettura || "").trim().toLowerCase();
+        return tipo === "a_giro" && Number(period?.consumo_periodo_mc ?? 0) > 0;
+      })
+    : false;
+}
+
+function getEstimatedConsumptionPeriod(payload: any, parsedSummary?: any) {
+  const summaryPeriod = Array.isArray(parsedSummary)
+    ? parsedSummary.find((period: any) => isAccontoLike(period?.tipo_lettura))
+    : null;
+  if (summaryPeriod) return summaryPeriod;
+
+  return Array.isArray(payload?.periodi_fatturazione)
+    ? payload.periodi_fatturazione.find((period: any) => isAccontoLike(period?.tipo_lettura))
     : null;
 }
 
@@ -2233,7 +2295,14 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           ? getParsedBuckets(parsedPayloadObject, parsedSummaryForCalc)
           : null;
         const parsedStornoForCalc = getStornoValuesFromPayload(parsedPayloadObject);
-        const parsedOneriNormaleForCalc = parsedBucketsForCalc?.aGiro?.oneri ?? Number(oneriPerequazione || 0);
+        const parsedMainBucketForCalc =
+          parsedBucketsForCalc?.aGiro?.hasPeriod
+            ? parsedBucketsForCalc.aGiro
+            : parsedBucketsForCalc?.acconto?.hasPeriod
+            ? parsedBucketsForCalc.acconto
+            : null;
+        const parsedOneriNormaleForCalc =
+          parsedMainBucketForCalc?.oneri ?? Number(oneriPerequazione || 0);
         const parsedParamsForCalc = getParsedCalculationParams(parsedPayloadForCalc);
         const manualTfForSession =
           manualTfOverrideRef.current.sessionId === targetSessionId
