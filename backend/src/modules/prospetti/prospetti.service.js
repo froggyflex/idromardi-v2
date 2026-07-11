@@ -237,18 +237,29 @@ function buildHeader({ session, condominio, contatto, periodoAttuale, periodoPre
         </div>
 
         <div class="condo-box">
-          ${logoUrl ? `<img class="header-logo" src="${esc(logoUrl)}" alt="Idromardi" />` : ""}
-          <div class="condo-title">CONDOMINIO: ${esc(condominio?.nome || condominio?.indirizzo || "-")}</div>
-          <div class="condo-meta">
-            NUAE: ${esc(condominio?.nuae ?? "-")} - T.F.: ${esc(session?.tf_code || session?.tf || "-")} - Data lett.: ${esc(dataLettura || "-")}
+          <div class="condo-letterhead">
+            <div class="letterhead-text">
+              <div class="document-label">Prospetto amministrativo interno</div>
+              <div class="condo-title">CONDOMINIO: ${esc(condominio?.nome || condominio?.indirizzo || "-")}</div>
+            </div>
+            <div class="brand-panel">
+              ${logoUrl ? `<img class="header-logo" src="${esc(logoUrl)}" alt="Idromardi" />` : `<span>Idromardi</span>`}
+            </div>
           </div>
-          <div class="admin-line">
-            <span>Amministratore</span>
-            <strong>${esc(contatto?.nome || "-")}</strong>
-            <span>${esc(contatto?.telefono || "")}</span>
+          <div class="condo-details">
+            <div class="condo-meta">
+              <span>NUAE: <strong>${esc(condominio?.nuae ?? "-")}</strong></span>
+              <span>T.F.: <strong>${esc(session?.tf_code || session?.tf || "-")}</strong></span>
+              <span>Data lett.: <strong>${esc(dataLettura || "-")}</strong></span>
+            </div>
+            <div class="admin-line">
+              <span>Amministratore</span>
+              <strong>${esc(contatto?.nome || "-")}</strong>
+              <span>${esc(contatto?.telefono || "")}</span>
+            </div>
+            <div class="address-line">${esc(contatto?.indirizzo || condominio?.indirizzo || "")}</div>
+            <div class="address-line">Sez ${esc(condominio?.sezione || "")} Cat. ${esc(condominio?.categoria || "")} Ruolo ${esc(condominio?.ruolo || "")}</div>
           </div>
-          <div class="address-line">${esc(contatto?.indirizzo || condominio?.indirizzo || "")}</div>
-          <div class="address-line">Sez ${esc(condominio?.sezione || "")} Cat. ${esc(condominio?.categoria || "")} Ruolo ${esc(condominio?.ruolo || "")}</div>
         </div>
 
         <div class="general-box">
@@ -466,9 +477,11 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
             background: #ffffff;
           }
           .boxed {
-            padding: 2mm;
+            padding: 2.2mm;
             display: grid;
             gap: 2mm;
+            background: #f8fbff;
+            border-color: #94a3b8;
           }
           .kv span,
           .general-title,
@@ -485,48 +498,96 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
             font-size: 11pt;
           }
           .condo-box {
-            min-height: 23mm;
-            padding: 2mm 40mm 2mm 2.5mm;
-            position: relative;
+            min-height: 27mm;
+            padding: 0;
+            overflow: hidden;
+            border-color: #94a3b8;
+          }
+          .condo-letterhead {
+            min-height: 12mm;
+            display: flex;
+            align-items: stretch;
+            justify-content: space-between;
+            border-bottom: 1px solid #d7e0ea;
+            background: linear-gradient(90deg, #f8fbff 0%, #ffffff 62%, #f8fbff 100%);
+          }
+          .letterhead-text {
+            min-width: 0;
+            padding: 2mm 3mm 1.8mm;
+          }
+          .document-label {
+            margin-bottom: 0.9mm;
+            color: #1d4ed8;
+            font-size: 5.8pt;
+            font-weight: 900;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+          }
+          .brand-panel {
+            width: 42mm;
+            border-left: 1px solid #d7e0ea;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.4mm 3mm;
+            background: #ffffff;
+            color: #0f3d91;
+            font-size: 11pt;
+            font-weight: 900;
           }
           .header-logo {
-            position: absolute;
-            top: 50%;
-            right: 4mm;
             width: 34mm;
-            max-height: 15mm;
-            transform: translateY(-50%);
+            max-height: 12mm;
             object-fit: contain;
           }
           .condo-title {
-            font-size: 11pt;
+            font-size: 10.5pt;
             font-weight: 900;
-            margin-bottom: 1mm;
+            line-height: 1.1;
           }
-          .condo-meta,
+          .condo-details {
+            padding: 1.7mm 3mm 2mm;
+          }
+          .condo-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2.5mm;
+            color: #475569;
+            font-size: 6.6pt;
+          }
+          .condo-meta strong {
+            color: #0f172a;
+          }
           .address-line {
-            margin-top: 0.8mm;
+            margin-top: 0.7mm;
+            color: #334155;
           }
           .admin-line {
             display: flex;
-            gap: 6mm;
+            gap: 4mm;
             align-items: baseline;
-            margin-top: 1.5mm;
+            margin-top: 1.4mm;
           }
           .admin-line strong {
             font-size: 8.5pt;
           }
           .general-box {
-            padding: 2mm;
+            padding: 0;
+            overflow: hidden;
+            border-color: #94a3b8;
           }
           .general-title {
+            padding: 1.6mm 2mm 1.3mm;
+            background: #f1f6fc;
+            border-bottom: 1px solid #d7e0ea;
             text-align: center;
-            margin-bottom: 1.5mm;
+            margin-bottom: 0;
           }
           .general-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 0.7mm 2mm;
+            gap: 0.65mm 2mm;
+            padding: 1.7mm 2mm 1.9mm;
           }
           .general-grid strong {
             text-align: right;
