@@ -92,7 +92,8 @@ export default function InvoicePrintCard({
         <div className="cell"><div className="label">Dep</div><div className="value">€ {euro(r?.riga?.imp_depurazione)}</div></div>
         <div className="cell"><div className="label">QF</div><div className="value">€ {euro(r?.riga?.imp_qf)}</div></div>
         <div className="cell"><div className="label">Cong.</div><div className="value">€ {euro(r?.riga?.conguaglio)}</div></div>
-        <div className="cell"><div className="label">Oneri</div><div className="value">€ {euro(r?.riga?.imp_oneri)}</div></div>
+        <div className="cell"><div className="label">Oneri</div><div className="value">€ {euro(r?.riga?.imp_oneri_base_display ?? r?.riga?.imp_oneri)}</div></div>
+        <div className="cell"><div className="label">Oneri pereq.</div><div className="value">€ {euro(r?.riga?.imp_oneri_perequazione_display)}</div></div>
         <div className="cell"><div className="label">IVA</div><div className="value">€ {euro(r?.riga?.imp_iva)}</div></div>
         <div className="cell"><div className="label">Acconto mc</div><div className="value">{euro(r?.riga?.consumo_acconto)} mc</div></div>
         <div className="cell"><div className="label">Acconto €</div><div className="value">€ {euro(r?.riga?.imp_acconto)}</div></div>
