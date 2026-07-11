@@ -106,6 +106,90 @@ function sum(rows, getter) {
   return rows.reduce((total, row) => total + n(getter(row)), 0);
 }
 
+function roundMoney(value) {
+  return Math.round((n(value) + Number.EPSILON) * 100) / 100;
+}
+
+function parseCalculationContext(session) {
+  if (!session?.calculation_context_json) return {};
+
+  try {
+    return typeof session.calculation_context_json === "string"
+      ? JSON.parse(session.calculation_context_json)
+      : session.calculation_context_json;
+  } catch {
+    return {};
+  }
+}
+
+function allocateRounded(total, items, decimals = 2, weightGetter = null) {
+  if (!items.length) return [];
+
+  const factor = Math.pow(10, decimals);
+  const totalUnits = Math.round(Math.abs(n(total)) * factor);
+  const sign = n(total) < 0 ? -1 : 1;
+  const weights = weightGetter
+    ? items.map((item) => Math.max(0, n(weightGetter(item))))
+    : items.map(() => 1);
+  const weightTotal = weights.reduce((acc, value) => acc + value, 0);
+  const safeWeights = weightTotal > 0 ? weights : items.map(() => 1);
+  const safeWeightTotal = weightTotal > 0 ? weightTotal : items.length;
+  const raw = safeWeights.map((weight) => (totalUnits * weight) / safeWeightTotal);
+  const floored = raw.map(Math.floor);
+  const assigned = floored.reduce((acc, value) => acc + value, 0);
+  const remainder = totalUnits - assigned;
+  const order = raw
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((a, b) => b.frac - a.frac);
+
+  for (let i = 0; i < remainder; i += 1) {
+    floored[order[i % order.length].index] += 1;
+  }
+
+  return floored.map((units) => sign * (units / factor));
+}
+
+function enrichRowsWithSeparatedOneri(rows, session) {
+  const context = parseCalculationContext(session);
+  const parsedOneriNormale = roundMoney(context.parsedOneriPerequazione);
+  const parsedOneriAcconto = roundMoney(context.parsedOneriPerequazioneAcconto);
+  const hasParsedPerequazione = parsedOneriNormale !== 0 || parsedOneriAcconto !== 0;
+
+  if (!hasParsedPerequazione) {
+    return rows.map((row) => ({
+      ...row,
+      imp_oneri_base_display: n(row.imp_oneri),
+      imp_oneri_perequazione_display: 0,
+    }));
+  }
+
+  const chargeableRows = rows.filter((row) => n(row.imp_oneri) !== 0);
+  const normaleShares = allocateRounded(parsedOneriNormale, chargeableRows);
+  const accontoShares = allocateRounded(
+    parsedOneriAcconto,
+    chargeableRows,
+    2,
+    (row) => row.consumo_normale
+  );
+  const shareByRowId = new Map();
+
+  chargeableRows.forEach((row, index) => {
+    shareByRowId.set(
+      row.id,
+      roundMoney(n(normaleShares[index]) + n(accontoShares[index]))
+    );
+  });
+
+  return rows.map((row) => {
+    const perequazione = roundMoney(shareByRowId.get(row.id) || 0);
+    return {
+      ...row,
+      imp_oneri_base_display: Math.max(0, roundMoney(n(row.imp_oneri) - perequazione)),
+      imp_oneri_perequazione_display: perequazione,
+    };
+  });
+}
+
 function buildTotals(rows) {
   return {
     count: rows.length,
@@ -117,7 +201,8 @@ function buildTotals(rows) {
     depFog: sum(rows, (r) => n(r.imp_fognatura) + n(r.imp_depurazione)),
     qf: sum(rows, (r) => r.imp_qf),
     conguaglio: sum(rows, (r) => r.conguaglio),
-    oneri: sum(rows, (r) => r.imp_oneri),
+    oneri: sum(rows, (r) => r.imp_oneri_base_display ?? r.imp_oneri),
+    oneriPerequazione: sum(rows, (r) => r.imp_oneri_perequazione_display),
     iva: sum(rows, (r) => r.imp_iva),
     arr: sum(rows, (r) => r.imp_arr),
     totale: sum(rows, (r) => r.totale),
@@ -207,7 +292,8 @@ function rowHtml(row) {
       <td class="money">${money(n(row.imp_fognatura) + n(row.imp_depurazione))}</td>
       <td class="money">${money(row.imp_qf)}</td>
       <td class="money">${money(row.conguaglio)}</td>
-      <td class="money">${money(row.imp_oneri)}</td>
+      <td class="money">${money(row.imp_oneri_base_display ?? row.imp_oneri)}</td>
+      <td class="money">${money(row.imp_oneri_perequazione_display)}</td>
       <td class="money">${money(row.imp_iva)}</td>
       <td class="money">${money(row.imp_arr)}</td>
       <td class="money total">${money(row.totale)}</td>
@@ -228,6 +314,7 @@ function totalRow(totals) {
       <td class="money">${money(totals.qf)}</td>
       <td class="money">${money(totals.conguaglio)}</td>
       <td class="money">${money(totals.oneri)}</td>
+      <td class="money">${money(totals.oneriPerequazione)}</td>
       <td class="money">${money(totals.iva)}</td>
       <td class="money">${money(totals.arr)}</td>
       <td class="money total">€ ${money(totals.totale)}</td>
@@ -257,6 +344,7 @@ function tableHtml(rows, totals) {
           <th>Q.F.</th>
           <th>Cong.</th>
           <th>Oneri</th>
+          <th>Oneri Pereq.</th>
           <th>IVA</th>
           <th>Arr.</th>
           <th>Tot. bolletta</th>
@@ -323,7 +411,7 @@ function replacementHtml(rows) {
 }
 
 function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrecedente, rows }) {
-  const orderedRows = [...rows].sort(compareTableRows);
+  const orderedRows = enrichRowsWithSeparatedOneri([...rows], session).sort(compareTableRows);
   const totals = buildTotals(orderedRows);
   const pages = chunkRows(orderedRows);
   const logoUrl = getLogoColoratoDataUrl();
