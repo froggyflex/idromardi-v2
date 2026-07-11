@@ -1296,6 +1296,92 @@ function groupRowsByUtenza(righe) {
   }, {});
 }
 
+function parseCalculationContextJson(value) {
+  if (!value) return {};
+
+  try {
+    return typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    return {};
+  }
+}
+
+function allocateRoundedForDisplay(total, items, decimals = 2, weightGetter = null) {
+  if (!items.length) return [];
+
+  const factor = Math.pow(10, decimals);
+  const totalUnits = Math.round(Math.abs(n2(total)) * factor);
+  const sign = n2(total) < 0 ? -1 : 1;
+  const weights = weightGetter
+    ? items.map((item) => Math.max(0, n2(weightGetter(item))))
+    : items.map(() => 1);
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+  const safeWeights = weightTotal > 0 ? weights : items.map(() => 1);
+  const safeWeightTotal = weightTotal > 0 ? weightTotal : items.length;
+  const raw = safeWeights.map((weight) => (totalUnits * weight) / safeWeightTotal);
+  const floored = raw.map(Math.floor);
+  const assigned = floored.reduce((sum, value) => sum + value, 0);
+  const remainder = totalUnits - assigned;
+  const order = raw
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((a, b) => b.frac - a.frac);
+
+  for (let i = 0; i < remainder; i += 1) {
+    floored[order[i % order.length].index] += 1;
+  }
+
+  return floored.map((units) => sign * (units / factor));
+}
+
+async function enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId) {
+  if (!fatturaId || !Array.isArray(righe) || !righe.length) {
+    return righe;
+  }
+
+  const [[sessionRow]] = await db.query(
+    `SELECT calculation_context_json FROM fatture_sessioni WHERE id = ? LIMIT 1`,
+    [fatturaId]
+  );
+  const context = parseCalculationContextJson(sessionRow?.calculation_context_json);
+  const parsedOneriNormale = round2(context.parsedOneriPerequazione);
+  const parsedOneriAcconto = round2(context.parsedOneriPerequazioneAcconto);
+  const clonedRows = righe.map((row) => ({ ...row, riga: { ...(row.riga || {}) } }));
+
+  if (!parsedOneriNormale && !parsedOneriAcconto) {
+    return clonedRows.map((row) => {
+      row.riga.imp_oneri_base_display = n2(row?.riga?.imp_oneri ?? row?.imp_oneri);
+      row.riga.imp_oneri_perequazione_display = 0;
+      return row;
+    });
+  }
+
+  const chargeableRows = clonedRows.filter((row) => n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0);
+  const normaleShares = allocateRoundedForDisplay(parsedOneriNormale, chargeableRows);
+  const accontoShares = allocateRoundedForDisplay(
+    parsedOneriAcconto,
+    chargeableRows,
+    2,
+    (row) => row?.riga?.consumo_normale ?? row?.consumo_normale
+  );
+  const shareByIndex = new Map();
+
+  chargeableRows.forEach((row, index) => {
+    shareByIndex.set(
+      clonedRows.indexOf(row),
+      round2(n2(normaleShares[index]) + n2(accontoShares[index]))
+    );
+  });
+
+  return clonedRows.map((row, index) => {
+    const originalOneri = n2(row?.riga?.imp_oneri ?? row?.imp_oneri);
+    const perequazione = round2(shareByIndex.get(index) || 0);
+
+    row.riga.imp_oneri_base_display = Math.max(0, round2(originalOneri - perequazione));
+    row.riga.imp_oneri_perequazione_display = perequazione;
+    return row;
+  });
+}
+
 exports.startRipartizionePdfJob = async ({
   righe,
   dettaglioByUtenza,
@@ -1311,7 +1397,8 @@ exports.startRipartizionePdfJob = async ({
     throw err;
   }
 
-  const rowsByUtenza = groupRowsByUtenza(righe);
+  const enrichedRighe = await enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId);
+  const rowsByUtenza = groupRowsByUtenza(enrichedRighe);
   const total = Object.keys(rowsByUtenza).length;
   const periodKey = makeSafeDateFolder(dataLettura);
 
@@ -1372,7 +1459,8 @@ exports.exportRipartizioniPerUtenza = async ({
     throw err;
   }
 
-  const rowsByUtenza = righe.reduce((acc, row) => {
+  const enrichedRighe = await enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId);
+  const rowsByUtenza = enrichedRighe.reduce((acc, row) => {
     const idUtenza =
       row?.utenza?.id ||
       row?.id_utenza ||

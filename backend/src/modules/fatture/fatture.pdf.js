@@ -203,7 +203,8 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
                   ${moneyRow("Depurazione", r?.riga?.imp_depurazione)}
                   ${moneyRow("Quota fissa", r?.riga?.imp_qf)}
                   ${moneyRow("Conguaglio", r?.riga?.conguaglio)}
-                  ${moneyRow("Oneri", r?.riga?.imp_oneri)}
+                  ${moneyRow("Oneri", r?.riga?.imp_oneri_base_display ?? r?.riga?.imp_oneri)}
+                  ${moneyRow("Oneri perequazione", r?.riga?.imp_oneri_perequazione_display)}
                   ${moneyRow("IVA", r?.riga?.imp_iva)}
                   ${qtyMoneyRow("Acconto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto)}
                   ${moneyRow("Acconto dep./fog.", r?.riga?.depfog_acconto)}
