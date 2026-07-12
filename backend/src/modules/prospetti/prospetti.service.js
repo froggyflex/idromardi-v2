@@ -15,6 +15,18 @@ function money(value) {
   });
 }
 
+function hasValue(value) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+}
+
+function moneyOrDash(value) {
+  return hasValue(value) ? `€ ${money(value)}` : "-";
+}
+
+function intOrDash(value) {
+  return hasValue(value) ? intValue(value) : "-";
+}
+
 function intValue(value) {
   const num = Number(value);
   return Number.isFinite(num) ? String(Math.round(num)) : "";
@@ -250,18 +262,12 @@ function statusNeedsReplacement(status) {
 }
 
 function buildHeader({ session, condominio, contatto, periodoAttuale, periodoPrecedente, totals, logoUrl }) {
-  const currentGeneral = periodoAttuale?.contatore_generale_valore;
-  const previousGeneral = periodoPrecedente?.contatore_generale_valore;
-  const generalConsumption =
-    currentGeneral != null && previousGeneral != null
-      ? n(currentGeneral) - n(previousGeneral)
-      : totals.consumo;
-
   const periodo = periodRangeLabel(periodoPrecedente, periodoAttuale, session);
   const dataLettura =
     operatorDate(periodoAttuale) ||
     dateIt(session?.data_casa_idrica) ||
     dateIt(session?.data_fattura);
+  const context = parseCalculationContext(session);
   const totaleDocumento = totals.totaleDocumento || totals.totale;
 
   return `
@@ -301,14 +307,16 @@ function buildHeader({ session, condominio, contatto, periodoAttuale, periodoPre
         <div class="general-box">
           <div class="general-title">SITUAZIONE CONTATORE GENERALE</div>
           <div class="general-grid">
-            <span>Attuale</span><strong>${esc(intValue(currentGeneral))}</strong>
-            <span>Precedente</span><strong>${esc(intValue(previousGeneral))}</strong>
-            <span>Consumo</span><strong>${esc(intValue(generalConsumption))}</strong>
-            <span>Imp. cons.</span><strong>${money(session?.tot_acquedotto ?? totals.acquedotto)}</strong>
-            <span>Dep./fogn.</span><strong>${money(totals.depFog)}</strong>
-            <span>Q.F.</span><strong>${money(totals.qf)}</strong>
-            <span>Varie</span><strong>${money(session?.varie)}</strong>
-            <span>Totale fattura</span><strong class="grand">€ ${money(totaleDocumento)}</strong>
+            <span>Consumo mc</span><strong>${esc(intOrDash(context.parsedConsumoNormale))}</strong>
+            <span>Acquedotto</span><strong>${esc(moneyOrDash(context.parsedAcquedottoNormale))}</strong>
+            <span>Dep./fogn.</span><strong>${esc(moneyOrDash(context.parsedDepFogNormale))}</strong>
+            <span>Q.F.</span><strong>${esc(moneyOrDash(context.parsedQuotaFissa))}</strong>
+            <span>Oneri pereq.</span><strong>${esc(moneyOrDash(context.parsedOneriPerequazione))}</strong>
+            <span>Varie</span><strong>${esc(moneyOrDash(context.parsedVarie))}</strong>
+            <span>Tot. a giro</span><strong>${esc(moneyOrDash(context.parsedTotaleLetturaAGiro))}</strong>
+            <span>Acconto</span><strong>${esc(moneyOrDash(context.parsedAccontoTotale))}</strong>
+            <span>Storno</span><strong>${esc(moneyOrDash(context.eurStorno))}</strong>
+            <span>Tot. documento</span><strong class="grand">€ ${money(totaleDocumento)}</strong>
           </div>
         </div>
       </div>
@@ -634,8 +642,10 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
           .general-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 0.65mm 2mm;
-            padding: 1.7mm 2mm 1.9mm;
+            gap: 0.38mm 1.8mm;
+            padding: 1.2mm 2mm 1.4mm;
+            font-size: 6.1pt;
+            line-height: 1.08;
           }
           .general-grid strong {
             text-align: right;

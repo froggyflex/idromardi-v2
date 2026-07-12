@@ -1747,6 +1747,16 @@ function getParsedBuckets(payload: any, parsedSummary: any[] | undefined) {
   };
 }
 
+function getParsedQuotaFissaFromPayload(payload: any) {
+  const rows = Array.isArray(payload?.componente_quota_tariffa_acqua)
+    ? payload.componente_quota_tariffa_acqua
+    : [];
+
+  return rows
+    .filter((row: any) => Number(row?.importo || 0) > 0)
+    .reduce((sum: number, row: any) => sum + Number(row?.importo || 0), 0);
+}
+
 function getFornituraSummaryByType(payload: any, tipo: "a_giro" | "media") {
   const summaries = Array.isArray(payload?.forniture_summary)
     ? payload.forniture_summary
@@ -2342,12 +2352,26 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           ? getParsedBuckets(parsedPayloadObject, parsedSummaryForCalc)
           : null;
         const parsedStornoForCalc = getStornoValuesFromPayload(parsedPayloadObject);
+        const parsedDocumentTotalForCalc = Number(
+          calculationDocument?.importo_totale_da_pagare ??
+            totaleDocumento ??
+            0
+        );
         const parsedMainBucketForCalc =
           parsedBucketsForCalc?.aGiro?.hasPeriod
             ? parsedBucketsForCalc.aGiro
             : parsedBucketsForCalc?.acconto?.hasPeriod
             ? parsedBucketsForCalc.acconto
             : null;
+        const parsedFornituraAGiroForCalc = parsedPayloadObject
+          ? getFornituraSummaryByType(parsedPayloadObject, "a_giro")
+          : null;
+        const parsedTotaleLetturaAGiroForCalc =
+          Number(parsedFornituraAGiroForCalc?.totale_fornitura || 0) ||
+          Number(parsedDocumentTotalForCalc || 0) - Number(totaleAcconto || 0);
+        const parsedQuotaFissaForCalc = parsedPayloadObject
+          ? getParsedQuotaFissaFromPayload(parsedPayloadObject)
+          : 0;
         const parsedOneriNormaleForCalc =
           parsedMainBucketForCalc?.oneri ?? Number(oneriPerequazione || 0);
         const parsedParamsForCalc = getParsedCalculationParams(parsedPayloadForCalc);
@@ -2384,11 +2408,6 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           parsedPayloadForCalc
         );
         const calcMcAcconto = parsedAccontoForCalc?.mc ?? Number(mcAcconto || 0);
-        const parsedDocumentTotalForCalc = Number(
-          calculationDocument?.importo_totale_da_pagare ??
-            totaleDocumento ??
-            0
-        );
   
         const res = await api.post(`/fatture/sessioni/${targetSessionId}/calcola`, {
           tfCode: selectedTfCode,
@@ -2426,6 +2445,14 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             mcAcconto: parsedParamsForCalc.mcAcconto ?? null,
             mcStorno: parsedStornoForCalc.mc || Number(mcStorno || 0),
             eurStorno: parsedStornoForCalc.euro || Number(eurStorno || 0),
+            parsedConsumoNormale: parsedMainBucketForCalc?.consumoMc ?? null,
+            parsedAcquedottoNormale: parsedMainBucketForCalc?.acquedotto ?? null,
+            parsedDepFogNormale: parsedMainBucketForCalc?.depFog ?? null,
+            parsedQuotaFissa: parsedQuotaFissaForCalc || null,
+            parsedVarie: Number(varie || 0),
+            parsedTotaleLetturaAGiro: Number.isFinite(parsedTotaleLetturaAGiroForCalc)
+              ? parsedTotaleLetturaAGiroForCalc
+              : null,
             parsedAccontoImporto: parsedAccontoForCalc?.acquedotto ?? null,
             parsedAccontoDepFog: parsedAccontoForCalc?.depFog ?? null,
             parsedAccontoTotale: parsedAccontoForCalc?.totale ?? null,
