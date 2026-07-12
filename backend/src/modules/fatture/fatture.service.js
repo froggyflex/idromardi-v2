@@ -317,17 +317,32 @@ function summarizeTariffeAcquedotto(rows) {
     importoPos: 0,
     importoNeg: 0,
     quantitaPos: 0,
-    quantitaNeg: 0
+    quantitaNeg: 0,
+    importoStorno: 0,
+    quantitaStorno: 0
   };
 
   for (const r of rows) {
-    if (r.importo >= 0) {
-      summary.importoPos += r.importo;
-      summary.quantitaPos += r.quantita;
-    } else {
-      summary.importoNeg += r.importo;
-      summary.quantitaNeg += r.quantita;
+    const importo = n2(r.importo);
+    const quantita = n2(r.quantita);
+
+    if (r.is_storno_acconto) {
+      summary.importoStorno += importo;
+      summary.quantitaStorno += quantita;
     }
+
+    if (importo >= 0) {
+      summary.importoPos += importo;
+      summary.quantitaPos += quantita;
+    } else {
+      summary.importoNeg += importo;
+      summary.quantitaNeg += quantita;
+    }
+  }
+
+  if (summary.importoStorno !== 0 || summary.quantitaStorno !== 0) {
+    summary.importoNeg = summary.importoStorno;
+    summary.quantitaNeg = summary.quantitaStorno;
   }
 
   return summary;
@@ -618,6 +633,7 @@ function deriveAbcTxtComponentRows(rawText) {
         quantita,
         tariffa: amount.tariffa,
         importo,
+        is_storno_acconto: isStorno,
       });
 
       isStorno = false;
@@ -3269,19 +3285,6 @@ async function calculateInterni(
               const note = `Lettura attuale inferiore alla precedente su interno ${gx.Interno || gx.id}: recupero applicato`;
               recuperoNotes.push(note);
               recuperoNoteByUtenza.set(gx.id, note);
-
-              await conn.query(
-                `
-                UPDATE letture_righe
-                SET valore_lettura = ?
-                WHERE id_sessione = ? AND id_utenza = ?
-                `,
-                [previousValue, session.id_periodo_attuale, gx.id]
-              );
-
-              if (ra) {
-                ra.valore_lettura = previousValue;
-              }
             }
           } else {
             consumoSomma += currentValue - previousValue;
@@ -3312,19 +3315,6 @@ async function calculateInterni(
             recuperoNotes.push("Lettura attuale inferiore alla precedente: recupero applicato");
             recuperoByUtenza.set(first.id, true);
             recuperoNoteByUtenza.set(first.id, "Lettura attuale inferiore alla precedente: recupero applicato");
-
-            await conn.query(
-              `
-              UPDATE letture_righe
-              SET valore_lettura = ?
-              WHERE id_sessione = ? AND id_utenza = ?
-              `,
-              [previousValue, session.id_periodo_attuale, first.id]
-            );
-
-            if (ra0) {
-              ra0.valore_lettura = previousValue;
-            }
           }
         } else {
           consumoNorm = round3(currentValue - previousValue);
@@ -3670,7 +3660,7 @@ async function calculateInterni(
     if (
       hasParsedOneri &&
       parsedOneriRemainder !== 0 &&
-      ["TF1", "NONE"].includes(upper(tfCode, "TF1"))
+      ["TF2", "TF3"].includes(upper(tfCode, "TF1"))
     ) {
       const remainderShares = allocateByWeight(parsedOneriRemainder, primaries, moneyWeightFn, 2);
 

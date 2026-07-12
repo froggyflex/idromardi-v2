@@ -80,6 +80,27 @@ function dateIt(value) {
   return d.toLocaleDateString("it-IT");
 }
 
+function operatorDate(periodo) {
+  return (
+    dateIt(periodo?.data_lettura_operatore) ||
+    dateIt(periodo?.dataOperatore) ||
+    dateIt(periodo?.data_operatore) ||
+    dateIt(periodo?.data_lettura) ||
+    dateIt(periodo?.created_at)
+  );
+}
+
+function periodRangeLabel(periodoPrecedente, periodoAttuale, session) {
+  const from = operatorDate(periodoPrecedente);
+  const to = operatorDate(periodoAttuale);
+
+  if (from && to) {
+    return `dal ${from} al ${to}`;
+  }
+
+  return periodLabel(periodoAttuale, session);
+}
+
 function compareTableRows(a, b) {
   const rowA = Number(a?.id_user ?? 0);
   const rowB = Number(b?.id_user ?? 0);
@@ -190,7 +211,19 @@ function enrichRowsWithSeparatedOneri(rows, session) {
   });
 }
 
-function buildTotals(rows) {
+function buildTotals(rows, session) {
+  const context = parseCalculationContext(session);
+  const parsedAccontoTotale = roundMoney(context.parsedAccontoTotale);
+  const parsedAccontoAcquedotto = roundMoney(context.parsedAccontoImporto);
+  const parsedAccontoDepFog = roundMoney(context.parsedAccontoDepFog);
+  const parsedOneriPerequazioneAcconto = roundMoney(context.parsedOneriPerequazioneAcconto);
+  const parsedIvaAcconto = roundMoney(
+    parsedAccontoTotale -
+      parsedAccontoAcquedotto -
+      parsedAccontoDepFog -
+      parsedOneriPerequazioneAcconto
+  );
+
   return {
     count: rows.length,
     consumo: sum(rows, (r) => r.consumo_totale),
@@ -204,8 +237,11 @@ function buildTotals(rows) {
     oneri: sum(rows, (r) => r.imp_oneri_base_display ?? r.imp_oneri),
     oneriPerequazione: sum(rows, (r) => r.imp_oneri_perequazione_display),
     iva: sum(rows, (r) => r.imp_iva),
+    ivaAcconto: Math.max(0, parsedIvaAcconto),
+    oneriPerequazioneAcconto: parsedOneriPerequazioneAcconto,
     arr: sum(rows, (r) => r.imp_arr),
     totale: sum(rows, (r) => r.totale),
+    totaleDocumento: roundMoney(context.totaleDocumento),
   };
 }
 
@@ -221,19 +257,19 @@ function buildHeader({ session, condominio, contatto, periodoAttuale, periodoPre
       ? n(currentGeneral) - n(previousGeneral)
       : totals.consumo;
 
-  const scad = periodLabel(periodoAttuale, session);
+  const periodo = periodRangeLabel(periodoPrecedente, periodoAttuale, session);
   const dataLettura =
+    operatorDate(periodoAttuale) ||
     dateIt(session?.data_casa_idrica) ||
-    dateIt(session?.data_fattura) ||
-    dateIt(periodoAttuale?.dataOperatore) ||
-    dateIt(periodoAttuale?.created_at);
+    dateIt(session?.data_fattura);
+  const totaleDocumento = totals.totaleDocumento || totals.totale;
 
   return `
     <header class="doc-header">
       <div class="top-grid">
         <div class="boxed">
           <div class="kv"><span>CODICE</span><strong>${esc(condominio?.codice || "")}</strong></div>
-          <div class="kv"><span>SCAD</span><strong>${esc(scad)}</strong></div>
+          <div class="kv"><span>PERIODO</span><strong>${esc(periodo)}</strong></div>
         </div>
 
         <div class="condo-box">
@@ -272,7 +308,7 @@ function buildHeader({ session, condominio, contatto, periodoAttuale, periodoPre
             <span>Dep./fogn.</span><strong>${money(totals.depFog)}</strong>
             <span>Q.F.</span><strong>${money(totals.qf)}</strong>
             <span>Varie</span><strong>${money(session?.varie)}</strong>
-            <span>Totale ivato</span><strong class="grand">€ ${money(totals.totale)}</strong>
+            <span>Totale fattura</span><strong class="grand">€ ${money(totaleDocumento)}</strong>
           </div>
         </div>
       </div>
@@ -313,6 +349,9 @@ function rowHtml(row) {
 }
 
 function totalRow(totals) {
+  const hasAccontoDetails =
+    n(totals.ivaAcconto) !== 0 || n(totals.oneriPerequazioneAcconto) !== 0;
+
   return `
     <tr class="totals">
       <td colspan="8">TOTALI</td>
@@ -330,6 +369,15 @@ function totalRow(totals) {
       <td class="money">${money(totals.arr)}</td>
       <td class="money total">€ ${money(totals.totale)}</td>
     </tr>
+    ${
+      hasAccontoDetails
+        ? `<tr class="totals-detail">
+            <td colspan="21">
+              Dettaglio acconto: IVA acconto € ${money(totals.ivaAcconto)} · Oneri perequazione acconto € ${money(totals.oneriPerequazioneAcconto)}
+            </td>
+          </tr>`
+        : ""
+    }
   `;
 }
 
@@ -423,7 +471,7 @@ function replacementHtml(rows) {
 
 function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrecedente, rows }) {
   const orderedRows = enrichRowsWithSeparatedOneri([...rows], session).sort(compareTableRows);
-  const totals = buildTotals(orderedRows);
+  const totals = buildTotals(orderedRows, session);
   const pages = chunkRows(orderedRows);
   const logoUrl = getLogoColoratoDataUrl();
   const header = buildHeader({
@@ -681,6 +729,13 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
           .detail-table .totals td {
             background: #dbeafe !important;
             font-weight: 900;
+          }
+          .detail-table .totals-detail td {
+            background: #eef6ff !important;
+            color: #334155;
+            font-size: 6.2pt;
+            font-weight: 700;
+            text-align: right;
           }
           .legend {
             margin-top: 2mm;
