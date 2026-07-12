@@ -3832,11 +3832,18 @@ async function calculateInterni(
       parsedOneriRemainder !== 0 &&
       ["TF2", "TF3"].includes(upper(tfCode, "TF1"))
     ) {
-      const remainderShares = allocateByWeight(parsedOneriRemainder, primaries, moneyWeightFn, 2);
+      const tfCodeUpper = upper(tfCode, "TF1");
+      const tfEligibleRows = primaries.filter(
+        (r) => r.tfEligible && n2(r.consumo_totale) > 0
+      );
+      const remainderShares =
+        tfCodeUpper === "TF2"
+          ? allocateByWeight(parsedOneriRemainder, tfEligibleRows, () => 1, 2)
+          : allocateByWeight(parsedOneriRemainder, tfEligibleRows, mcWeightFn, 2);
 
-      for (let i = 0; i < primaries.length; i++) {
-        primaries[i].conguaglio = round2(
-          n2(primaries[i].conguaglio) + n2(remainderShares[i] || 0)
+      for (let i = 0; i < tfEligibleRows.length; i++) {
+        tfEligibleRows[i].conguaglio = round2(
+          n2(tfEligibleRows[i].conguaglio) + n2(remainderShares[i] || 0)
         );
       }
     }
@@ -4416,7 +4423,7 @@ exports.deleteSession = async function ({ sessionId }) {
   if (code === "TF1" || code === "NONE") return;
 
   // ============================
-  // TF2N = EQUAL DISTRIBUTION
+  // TF2 = equal distribution across eligible users
   // ============================
   if (code === "TF2" || code === "TF2N" || code === "EQUAL") {
     const each = delta / eligible.length;
@@ -4427,7 +4434,7 @@ exports.deleteSession = async function ({ sessionId }) {
         i === eligible.length - 1
           ? round2(delta - applied)
           : round2(each);
-v
+
       eligible[i].conguaglio = share;
       applied = round2(applied + share);
     }
@@ -4436,7 +4443,7 @@ v
   }
 
   // ============================
-  // TF3N = PROPORTIONAL
+  // TF3 = proportional distribution by each eligible user's consumption
   // ============================
   if (code === "TF3" || code === "TF3N" || code === "PROP") {
     const sumCons = eligible.reduce(
