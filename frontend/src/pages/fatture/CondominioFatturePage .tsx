@@ -3301,9 +3301,39 @@ const isRecuperoReadingRow = (row: any) => {
 const roundMoney = (value: number) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const getIvaAccontoTotal = () => {
+  const explicitIvaAcconto = Number(ivaAcconto || 0);
+  if (explicitIvaAcconto > 0) return explicitIvaAcconto;
+
+  return Math.max(
+    0,
+    roundMoney(Number(totals?.accontoExtra || 0) - Number(oneriPerequazioneAcconto || 0))
+  );
+};
+
+const getRowIvaAcconto = (row: any) => {
+  const r = row?.riga || {};
+  const totaleExtraAcconto = Number(totals?.accontoExtra || 0);
+  const totaleIvaAcconto = getIvaAccontoTotal();
+
+  if (!totaleExtraAcconto || !totaleIvaAcconto) return 0;
+
+  const rowExtraAcconto = roundMoney(
+    Number(r.acconto || 0) -
+      Number(r.imp_acconto || 0) -
+      Number(r.depfog_acconto || 0)
+  );
+
+  if (rowExtraAcconto <= 0) return 0;
+
+  return roundMoney((rowExtraAcconto / totaleExtraAcconto) * totaleIvaAcconto);
+};
+
 const getExpectedRowTotal = (row: any) => {
   const r = row?.riga || {};
 
+  // The acconto total already includes its IVA. The IVA column also includes it
+  // for visibility, so remove only that portion from the row total formula.
   return roundMoney(
     Number(r.imp_acquedotto || 0) +
       Number(r.imp_fognatura || 0) +
@@ -3315,7 +3345,8 @@ const getExpectedRowTotal = (row: any) => {
       Number(r.conguaglio || 0) +
       Number(r.imp_arr || 0) +
       Number(r.acconto || 0) +
-      Number(r.storno_acconto || 0)
+      Number(r.storno_acconto || 0) -
+      getRowIvaAcconto(row)
   );
 };
 
