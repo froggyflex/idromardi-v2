@@ -730,9 +730,14 @@ export default function CondominioFatturePage() {
 
   function getStornoValuesFromPayload(payload: any) {
     const summary = payload?.summaryTariffeAcquedotto || {};
+    const stornoEuro =
+      Number(summary.importoStorno || 0) || Number(summary.importoNeg || 0);
+    const stornoMc =
+      Number(summary.quantitaStorno || 0) || Number(summary.quantitaNeg || 0);
+
     return {
-      mc: Number(summary.quantitaNeg || 0),
-      euro: Number(summary.importoNeg || 0),
+      mc: stornoMc,
+      euro: stornoEuro,
     };
   }
 
@@ -1829,9 +1834,10 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     if (!payloadJson) return; 
     try {
       const payload = JSON.parse(payloadJson);
-      if (payload.summaryTariffeAcquedotto?.quantitaNeg !== 0) {
-          setMcStorno(payload.summaryTariffeAcquedotto.quantitaNeg);
-          setEurStorno(payload.summaryTariffeAcquedotto.importoNeg);
+      const parsedStorno = getStornoValuesFromPayload(payload);
+      if (parsedStorno.mc !== 0 || parsedStorno.euro !== 0) {
+          setMcStorno(parsedStorno.mc);
+          setEurStorno(parsedStorno.euro);
          
       }
       
