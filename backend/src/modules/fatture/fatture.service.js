@@ -3702,16 +3702,12 @@ async function calculateInterni(
     const oneriAccShares = hasParsedOneri
       ? allocateByWeight(parsedOneriAcconto, primaries, mcWeightFn, 2)
       : primaries.map(() => 0);
-    const accontoTotaleIncludesParsedOneri = hasParsedAccontoTotale && hasParsedOneri;
 
     for (let i = 0; i < primaries.length; i++) {
       const r = primaries[i];
       const oneriAccShare = round2(oneriAccShares[i] || 0);
 
-      r.acconto = round2(
-        n2(accEuroShares[i] || 0) +
-          (accontoTotaleIncludesParsedOneri ? 0 : oneriAccShare)
-      );
+      r.acconto = round2(accEuroShares[i] || 0);
       r.imp_acconto = round2(impConsAccShares[i] || 0);
       r.depfog_acconto = round2(depFogAccShares[i] || 0);
       r.consumo_acconto = round3(accMcShares[i] || 0);
@@ -3720,10 +3716,7 @@ async function calculateInterni(
 
       const basePrimaStorno = round2(
         n2(r.base_totale) +
-        n2(r.imp_acconto) +
-        n2(r.depfog_acconto) +
-        oneriAccShare +
-        n2(ivaAccShares[i] || 0)
+        n2(r.acconto)
       );
 
       r._base_prima_storno = basePrimaStorno;

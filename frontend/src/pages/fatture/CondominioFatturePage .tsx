@@ -3294,8 +3294,7 @@ const getExpectedRowTotal = (row: any) => {
       Number(r.imp_iva || 0) +
       Number(r.conguaglio || 0) +
       Number(r.imp_arr || 0) +
-      Number(r.imp_acconto || 0) +
-      Number(r.depfog_acconto || 0) +
+      Number(r.acconto || 0) +
       Number(r.storno_acconto || 0)
   );
 };
