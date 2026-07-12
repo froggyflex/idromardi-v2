@@ -3742,16 +3742,6 @@ async function calculateInterni(
       2
     );
     const depFogAccShares = allocateByWeight(totDepFogAcc, primaries, mcWeightFn, 2);
-    const totIvaAcc = round2(
-      Math.max(
-        0,
-        n2(totAccEuro) -
-          n2(totImpConsAcc) -
-          n2(totDepFogAcc) -
-          (hasParsedOneri ? n2(parsedOneriAcconto) : 0)
-      )
-    );
-    const ivaAccShares = allocateByWeight(totIvaAcc, primaries, mcWeightFn, 2);
     const accMcShares = allocateByWeight(totConsAccMc, primaries, mcWeightFn, 3);
     for (let i = 0; i < primaries.length; i++) {
       const r = primaries[i];
@@ -3760,7 +3750,6 @@ async function calculateInterni(
       r.imp_acconto = round2(impConsAccShares[i] || 0);
       r.depfog_acconto = round2(depFogAccShares[i] || 0);
       r.consumo_acconto = round3(accMcShares[i] || 0);
-      r.imp_iva = round2(n2(r.imp_iva) + n2(ivaAccShares[i] || 0));
 
       const basePrimaStorno = round2(
         n2(r.base_totale) +
