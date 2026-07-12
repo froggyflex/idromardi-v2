@@ -1442,26 +1442,21 @@ async function enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId) {
 
   const chargeableRows = clonedRows.filter((row) => n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0);
   const normaleShares = allocateRoundedForDisplay(parsedOneriNormale, chargeableRows);
-  const accontoShares = allocateRoundedForDisplay(
-    parsedOneriAcconto,
-    chargeableRows,
-    2,
-    (row) => row?.riga?.consumo_normale ?? row?.consumo_normale
-  );
   const shareByIndex = new Map();
 
   chargeableRows.forEach((row, index) => {
-    shareByIndex.set(
-      clonedRows.indexOf(row),
-      round2(n2(normaleShares[index]) + n2(accontoShares[index]))
-    );
+    shareByIndex.set(clonedRows.indexOf(row), round2(n2(normaleShares[index])));
   });
 
   return clonedRows.map((row, index) => {
     const originalOneri = n2(row?.riga?.imp_oneri ?? row?.imp_oneri);
+    const configuredOneri = row?.riga?.imp_oneri_base_display;
     const perequazione = round2(shareByIndex.get(index) || 0);
 
-    row.riga.imp_oneri_base_display = Math.max(0, round2(originalOneri - perequazione));
+    row.riga.imp_oneri_base_display =
+      configuredOneri !== undefined && configuredOneri !== null
+        ? n2(configuredOneri)
+        : Math.max(0, round2(originalOneri - perequazione));
     row.riga.imp_oneri_perequazione_display = perequazione;
     return row;
   });
@@ -1999,7 +1994,12 @@ function round2(x) {
 
 function getMinimumPayableForRow(r) {
   const qf = n2(r.imp_qf);
-  return round2(n2(r.imp_oneri) + qf + round2(qf * 0.10));
+  const configuredOneri =
+    r.configured_oneri ??
+    r.imp_oneri_base_display ??
+    r.oneri_base_display ??
+    r.imp_oneri;
+  return round2(n2(configuredOneri) + qf + round2(qf * 0.10));
 }
 
 function getAvailableStornoReductionEuro(r) {
@@ -2507,6 +2507,30 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
 
     const mapAtt = new Map(righeAtt.map((r) => [r.id_utenza, r]));
     const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
+    const context = parseCalculationContextJson(session.calculation_context_json);
+    const parsedOneriNormale = round2(context.parsedOneriPerequazione);
+    const eligiblePereqRows = righeRows.filter(
+      (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
+    );
+    const pereqShares = parsedOneriNormale
+      ? allocateRoundedForDisplay(parsedOneriNormale, eligiblePereqRows)
+      : eligiblePereqRows.map(() => 0);
+    const pereqByRowId = new Map();
+
+    eligiblePereqRows.forEach((row, index) => {
+      pereqByRowId.set(row.id, round2(pereqShares[index] || 0));
+    });
+
+    righeRows.forEach((row) => {
+      const configuredOneri = row.doppio_contatore
+        ? round2(n2(session.oneri_doppio_snapshot))
+        : round2(n2(session.oneri_snapshot));
+      const perequazione = round2(pereqByRowId.get(row.id) || 0);
+
+      row.configured_oneri = configuredOneri;
+      row.imp_oneri_base_display = configuredOneri;
+      row.imp_oneri_perequazione_display = perequazione;
+    });
     righeRows.forEach(annotateMinimumPayableRow);
     const mapRighe = new Map(righeRows.map((r) => [r.id_utenza, r]));
 
@@ -2700,10 +2724,35 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     [sessionId]
   );
   
+  const session = sessionRows[0];
+  const context = parseCalculationContextJson(session.calculation_context_json);
+  const parsedOneriNormale = round2(context.parsedOneriPerequazione);
+  const eligiblePereqRows = righeRows.filter(
+    (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
+  );
+  const pereqShares = parsedOneriNormale
+    ? allocateRoundedForDisplay(parsedOneriNormale, eligiblePereqRows)
+    : eligiblePereqRows.map(() => 0);
+  const pereqByRowId = new Map();
+
+  eligiblePereqRows.forEach((row, index) => {
+    pereqByRowId.set(row.id, round2(pereqShares[index] || 0));
+  });
+
+  righeRows.forEach((row) => {
+    const configuredOneri = row.doppio_contatore
+      ? round2(n2(session.oneri_doppio_snapshot))
+      : round2(n2(session.oneri_snapshot));
+    const perequazione = round2(pereqByRowId.get(row.id) || 0);
+
+    row.configured_oneri = configuredOneri;
+    row.imp_oneri_base_display = configuredOneri;
+    row.imp_oneri_perequazione_display = perequazione;
+  });
   righeRows.forEach(annotateMinimumPayableRow);
   righeRows.dettaglio_consumi = interniTotals?.dettaglio_consumi;
   return {
-    session: sessionRows[0],
+    session,
     righe: righeRows, 
     generale: generaleResult?.generale || null
      
@@ -3544,6 +3593,9 @@ async function calculateInterni(
         imp_depurazione: impDep,
         imp_qf: impQf,
         imp_oneri: impOneri,
+        configured_oneri: impOneri,
+        imp_oneri_base_display: impOneri,
+        imp_oneri_perequazione_display: 0,
         imp_iva: impIva,
         
 
@@ -3598,6 +3650,9 @@ async function calculateInterni(
             imp_depurazione: 0,
             imp_qf: 0,
             imp_oneri: 0,
+            configured_oneri: 0,
+            imp_oneri_base_display: 0,
+            imp_oneri_perequazione_display: 0,
             imp_iva: 0,
 
             imp_acconto: 0,
@@ -3665,17 +3720,21 @@ async function calculateInterni(
     const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
 
     if (hasParsedOneri) {
+      const perequazioneRows = primaries.filter((r) => r.tfEligible);
       const oneriNormaleShares = allocateEqualRounded(
         parsedOneriNormale,
-        primaries,
+        perequazioneRows,
         2
       );
 
-      for (let i = 0; i < primaries.length; i++) {
-        const r = primaries[i];
+      for (let i = 0; i < perequazioneRows.length; i++) {
+        const r = perequazioneRows[i];
         const share = round2(oneriNormaleShares[i] || 0);
 
         r.imp_oneri = round2(n2(r.imp_oneri) + share);
+        r.imp_oneri_perequazione_display = round2(
+          n2(r.imp_oneri_perequazione_display) + share
+        );
         r.base_totale = round2(n2(r.base_totale) + share);
       }
     }
@@ -3699,19 +3758,13 @@ async function calculateInterni(
     );
     const ivaAccShares = allocateByWeight(totIvaAcc, primaries, mcWeightFn, 2);
     const accMcShares = allocateByWeight(totConsAccMc, primaries, mcWeightFn, 3);
-    const oneriAccShares = hasParsedOneri
-      ? allocateByWeight(parsedOneriAcconto, primaries, mcWeightFn, 2)
-      : primaries.map(() => 0);
-
     for (let i = 0; i < primaries.length; i++) {
       const r = primaries[i];
-      const oneriAccShare = round2(oneriAccShares[i] || 0);
 
       r.acconto = round2(accEuroShares[i] || 0);
       r.imp_acconto = round2(impConsAccShares[i] || 0);
       r.depfog_acconto = round2(depFogAccShares[i] || 0);
       r.consumo_acconto = round3(accMcShares[i] || 0);
-      r.imp_oneri = round2(n2(r.imp_oneri) + oneriAccShare);
       r.imp_iva = round2(n2(r.imp_iva) + n2(ivaAccShares[i] || 0));
 
       const basePrimaStorno = round2(
@@ -3788,9 +3841,7 @@ async function calculateInterni(
     }
 
     totaleOneri = round2(rows.reduce((s, r) => s + n2(r.imp_oneri), 0));
-    parsedOneriRemainder = hasParsedOneri
-      ? round2(n2(parsedOneriNormale) + n2(parsedOneriAcconto) - totaleOneri)
-      : 0;
+    parsedOneriRemainder = 0;
     generale.totaleOneri = totaleOneri;
 
     // -------------------------------------------------------------------
@@ -3847,20 +3898,22 @@ async function calculateInterni(
 
       if (beforeRound < minimumPayable) {
         r._minimum_payable_adjustment = round2(minimumPayable - beforeRound);
-        r.conguaglio = round2(n2(r.conguaglio) + n2(r._minimum_payable_adjustment));
       } else {
         r._minimum_payable_adjustment = 0;
       }
     }
 
-    // Apply conguaglio + rounding adjustment
+    // Apply conguaglio, minimum payable correction and rounding adjustment.
+    // Keep the TF conguaglio value visible as calculated; the minimum correction
+    // is carried by ARR so TF2 remains equal across eligible rows.
     for (const r of rows) {
-      const beforeRound = round2(n2(r.base_totale) + n2(r.conguaglio));
+      const beforeMinimum = round2(n2(r.base_totale) + n2(r.conguaglio));
+      const beforeRound = round2(beforeMinimum + n2(r._minimum_payable_adjustment));
       const rounded = roundToNearestTenth(beforeRound);
-      const arr = round2(rounded - beforeRound);
+      const arr = round2(n2(r._minimum_payable_adjustment) + rounded - beforeRound);
 
       r.imp_arr = arr;
-      r.totale = round2(beforeRound + arr);
+      r.totale = round2(beforeMinimum + arr);
     }
 
     // ------------------------------------------------------------

@@ -198,26 +198,21 @@ function enrichRowsWithSeparatedOneri(rows, session) {
 
   const chargeableRows = rows.filter((row) => n(row.imp_oneri) !== 0);
   const normaleShares = allocateRounded(parsedOneriNormale, chargeableRows);
-  const accontoShares = allocateRounded(
-    parsedOneriAcconto,
-    chargeableRows,
-    2,
-    (row) => row.consumo_normale
-  );
   const shareByRowId = new Map();
 
   chargeableRows.forEach((row, index) => {
-    shareByRowId.set(
-      row.id,
-      roundMoney(n(normaleShares[index]) + n(accontoShares[index]))
-    );
+    shareByRowId.set(row.id, roundMoney(n(normaleShares[index])));
   });
 
   return rows.map((row) => {
     const perequazione = roundMoney(shareByRowId.get(row.id) || 0);
+    const configuredOneri = row.imp_oneri_base_display;
     return {
       ...row,
-      imp_oneri_base_display: Math.max(0, roundMoney(n(row.imp_oneri) - perequazione)),
+      imp_oneri_base_display:
+        configuredOneri !== undefined && configuredOneri !== null
+          ? n(configuredOneri)
+          : Math.max(0, roundMoney(n(row.imp_oneri) - perequazione)),
       imp_oneri_perequazione_display: perequazione,
     };
   });

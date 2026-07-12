@@ -3214,7 +3214,7 @@ const totaleOneri = Number(totals?.oneri ?? 0);
 const selectedDocHasParsedOneri = hasOneriPerequazioneRows(
   activeImportedDocument?.parsed_payload_json
 );
-const totaleParsedOneriPereq = Number(oneriPerequazione || 0) + Number(oneriPerequazioneAcconto || 0);
+const totaleParsedOneriPereq = Number(oneriPerequazione || 0);
 const displayedOneriPereqShare = useMemo(() => {
   if (!selectedDocHasParsedOneri) return 0;
 
@@ -3234,12 +3234,16 @@ const deltaOk = Math.abs(deltaTotali) < 0.5;
 const isGreen:any = totaleDocumentoConOneri? (totaleDocumentoConOneri <= totaleInterni) : false;
 
 const getRowOneriPerequazione = (row: any) =>
-  selectedDocHasParsedOneri && Number(row?.riga?.imp_oneri || 0) !== 0
+  Number(row?.riga?.imp_oneri_perequazione_display ?? NaN) >= 0
+    ? Number(row?.riga?.imp_oneri_perequazione_display || 0)
+    : selectedDocHasParsedOneri && Number(row?.riga?.imp_oneri || 0) !== 0
     ? displayedOneriPereqShare
     : 0;
 
 const getRowOneri = (row: any) =>
-  selectedDocHasParsedOneri
+  Number(row?.riga?.imp_oneri_base_display ?? NaN) >= 0
+    ? Number(row?.riga?.imp_oneri_base_display || 0)
+    : selectedDocHasParsedOneri
     ? Math.max(0, Number(row?.riga?.imp_oneri ?? 0) - getRowOneriPerequazione(row))
     : Number(row?.riga?.imp_oneri ?? 0);
 
@@ -3254,7 +3258,23 @@ const getMinimumPayableAmount = (row: any) => {
 
   if (fromBackend > 0) return fromBackend;
 
-  return roundMoney(Number(r.imp_oneri || 0) + qf + qf * 0.1);
+  return roundMoney(getRowOneri(row) + qf + qf * 0.1);
+};
+
+const getMinimumPayableBreakdown = (row: any) => {
+  const r = row?.riga || {};
+  const qf = Number(r.imp_qf || 0);
+  const oneri = getRowOneri(row);
+  const ivaQf = roundMoney(qf * 0.1);
+  const minimum = getMinimumPayableAmount(row);
+
+  return {
+    qf,
+    oneri,
+    ivaQf,
+    minimum,
+    label: `Minimo: oneri EUR ${oneri.toFixed(2)} + QF EUR ${qf.toFixed(2)} + IVA QF EUR ${ivaQf.toFixed(2)} = EUR ${minimum.toFixed(2)}`,
+  };
 };
 
 const isMinimumPayableApplied = (row: any) => {
@@ -4738,7 +4758,7 @@ return (
 
                                     const tiers = dettaglioByUtenza[utenzaKey] ?? [];
                                     const minimumPayableApplied = isMinimumPayableApplied(r);
-                                    const minimumPayableAmount = getMinimumPayableAmount(r);
+                                    const minimumPayableBreakdown = getMinimumPayableBreakdown(r);
                                     const minimumCreditEuro = Number(r.riga?.minimum_payable_credit_euro || 0);
                                     const minimumCreditMc = Number(r.riga?.minimum_payable_credit_mc || 0);
                                     const recuperoReading = isRecuperoReadingRow(r);
@@ -4782,7 +4802,7 @@ return (
                                             {minimumPayableApplied && (
                                               <div
                                                 className="mx-auto mt-1 inline-flex rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700"
-                                                title={`Ridotto al minimo fatturabile: EUR ${minimumPayableAmount.toFixed(2)}`}
+                                                title={minimumPayableBreakdown.label}
                                               >
                                                 Minimo
                                               </div>
@@ -4928,7 +4948,7 @@ return (
                                                           Minimo fatturabile applicato
                                                         </div>
                                                         <div className="mt-1">
-                                                          Questa utenza e stata mantenuta al minimo di EUR {minimumPayableAmount.toFixed(2)} per preservare oneri, quota fissa e IVA quota fissa.
+                                                          {minimumPayableBreakdown.label}. Il valore puo differire tra utenze quando la quota oneri assegnata non e identica.
                                                         </div>
                                                         {(minimumCreditEuro > 0 || minimumCreditMc > 0) && (
                                                           <div className="mt-1 font-semibold">
