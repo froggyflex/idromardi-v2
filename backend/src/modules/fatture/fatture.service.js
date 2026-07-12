@@ -2522,10 +2522,8 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     });
 
     righeRows.forEach((row) => {
-      const configuredOneri = row.doppio_contatore
-        ? round2(n2(session.oneri_doppio_snapshot))
-        : round2(n2(session.oneri_snapshot));
       const perequazione = round2(pereqByRowId.get(row.id) || 0);
+      const configuredOneri = Math.max(0, round2(n2(row.imp_oneri) - perequazione));
 
       row.configured_oneri = configuredOneri;
       row.imp_oneri_base_display = configuredOneri;
@@ -2740,10 +2738,8 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
   });
 
   righeRows.forEach((row) => {
-    const configuredOneri = row.doppio_contatore
-      ? round2(n2(session.oneri_doppio_snapshot))
-      : round2(n2(session.oneri_snapshot));
     const perequazione = round2(pereqByRowId.get(row.id) || 0);
+    const configuredOneri = Math.max(0, round2(n2(row.imp_oneri) - perequazione));
 
     row.configured_oneri = configuredOneri;
     row.imp_oneri_base_display = configuredOneri;
@@ -3564,9 +3560,8 @@ async function calculateInterni(
       const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
       const impQf = flatTipo === "SPECIAL" ? 0 : round2(qfPerNuae * nuaeU);
 
-      const impOneri = isMulti
-        ? round2(n2(session.oneri_doppio_snapshot))
-        : round2(n2(session.oneri_snapshot));
+      const meterCount = Math.max(1, group.length);
+      const impOneri = round2(n2(session.oneri_snapshot) * meterCount);
 
       totaleOneri += impOneri;
 
