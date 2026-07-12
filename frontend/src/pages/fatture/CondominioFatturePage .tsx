@@ -728,8 +728,55 @@ export default function CondominioFatturePage() {
     }
   }
 
+  function isMainAcquedottoTariffRow(row: any) {
+    const code = String(row?.codice_componente || row?.component_code || "").toUpperCase();
+    const text = `${code} ${row?.descrizione || ""} ${row?.quota_descrizione || ""}`.toUpperCase();
+    const isOneri =
+      /\bONERI\b/.test(text) ||
+      /\bPEREQUAZIONE\b/.test(text) ||
+      /^C_(UI[1-4]|MTI3)/.test(code) ||
+      code.includes("_UI") ||
+      code.includes("_MTI3");
+
+    if (isOneri) return false;
+
+    return (
+      code.startsWith("C_TARI") ||
+      text.includes("TARIFFA ACQUEDOTTO") ||
+      text.includes("TARIFFA ACQUA") ||
+      text.includes("QUOTA VARIABILE ACQUEDOTTO")
+    );
+  }
+
+  function getStornoValuesFromTariffRows(payload: any) {
+    const rows = Array.isArray(payload?.componente_tariffa_acquedotto)
+      ? payload.componente_tariffa_acquedotto
+      : [];
+    const explicitRows = rows.filter((row: any) => row?.is_storno_acconto && isMainAcquedottoTariffRow(row));
+    const fallbackRows = rows.filter(
+      (row: any) => Number(row?.importo || 0) < 0 && isMainAcquedottoTariffRow(row)
+    );
+    const targetRows = explicitRows.length ? explicitRows : fallbackRows;
+
+    return targetRows.reduce(
+      (acc: { mc: number; euro: number }, row: any) => ({
+        mc: acc.mc + Number(row?.quantita || 0),
+        euro: acc.euro + Number(row?.importo || 0),
+      }),
+      { mc: 0, euro: 0 }
+    );
+  }
+
   function getStornoValuesFromPayload(payload: any) {
     const summary = payload?.summaryTariffeAcquedotto || {};
+    const rowsTotal = getStornoValuesFromTariffRows(payload);
+    if (rowsTotal.mc !== 0 || rowsTotal.euro !== 0) {
+      return {
+        mc: Number(rowsTotal.mc.toFixed(3)),
+        euro: Number(rowsTotal.euro.toFixed(2)),
+      };
+    }
+
     const stornoEuro =
       Number(summary.importoStorno || 0) || Number(summary.importoNeg || 0);
     const stornoMc =

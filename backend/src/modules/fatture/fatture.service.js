@@ -312,6 +312,26 @@ function toMysqlDate(value) {
   return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 }
 
+function isMainAcquedottoTariffRow(row) {
+  const code = String(row?.codice_componente || row?.component_code || "").toUpperCase();
+  const text = `${code} ${row?.descrizione || ""} ${row?.quota_descrizione || ""}`.toUpperCase();
+  const isOneri =
+    /\bONERI\b/.test(text) ||
+    /\bPEREQUAZIONE\b/.test(text) ||
+    /^C_(UI[1-4]|MTI3)/.test(code) ||
+    code.includes("_UI") ||
+    code.includes("_MTI3");
+
+  if (isOneri) return false;
+
+  return (
+    code.startsWith("C_TARI") ||
+    text.includes("TARIFFA ACQUEDOTTO") ||
+    text.includes("TARIFFA ACQUA") ||
+    text.includes("QUOTA VARIABILE ACQUEDOTTO")
+  );
+}
+
 function summarizeTariffeAcquedotto(rows) {
   const summary = {
     importoPos: 0,
@@ -321,12 +341,15 @@ function summarizeTariffeAcquedotto(rows) {
     importoStorno: 0,
     quantitaStorno: 0
   };
+  let importoNegMainTariff = 0;
+  let quantitaNegMainTariff = 0;
 
   for (const r of rows) {
     const importo = n2(r.importo);
     const quantita = n2(r.quantita);
+    const isMainTariff = isMainAcquedottoTariffRow(r);
 
-    if (r.is_storno_acconto) {
+    if (r.is_storno_acconto && isMainTariff) {
       summary.importoStorno += importo;
       summary.quantitaStorno += quantita;
     }
@@ -337,15 +360,61 @@ function summarizeTariffeAcquedotto(rows) {
     } else {
       summary.importoNeg += importo;
       summary.quantitaNeg += quantita;
+      if (isMainTariff) {
+        importoNegMainTariff += importo;
+        quantitaNegMainTariff += quantita;
+      }
     }
   }
 
   if (summary.importoStorno !== 0 || summary.quantitaStorno !== 0) {
     summary.importoNeg = summary.importoStorno;
     summary.quantitaNeg = summary.quantitaStorno;
+  } else if (importoNegMainTariff !== 0 || quantitaNegMainTariff !== 0) {
+    summary.importoNeg = importoNegMainTariff;
+    summary.quantitaNeg = quantitaNegMainTariff;
+  }
+
+  for (const key of Object.keys(summary)) {
+    summary[key] = round2(summary[key]);
   }
 
   return summary;
+}
+
+function getStornoValuesFromParsedPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { euro: 0, mc: 0, source: "none" };
+  }
+
+  const rows = Array.isArray(payload?.componente_tariffa_acquedotto)
+    ? payload.componente_tariffa_acquedotto
+    : [];
+  const explicitRows = rows.filter(
+    (row) => row?.is_storno_acconto && isMainAcquedottoTariffRow(row)
+  );
+  const fallbackRows = rows.filter(
+    (row) => n2(row?.importo) < 0 && isMainAcquedottoTariffRow(row)
+  );
+  const targetRows = explicitRows.length ? explicitRows : fallbackRows;
+
+  if (targetRows.length) {
+    return {
+      euro: round2(targetRows.reduce((sum, row) => sum + n2(row?.importo), 0)),
+      mc: round3(targetRows.reduce((sum, row) => sum + n2(row?.quantita), 0)),
+      source: explicitRows.length ? "tariff_rows_explicit" : "tariff_rows_negative",
+    };
+  }
+
+  const summary = payload?.summaryTariffeAcquedotto || {};
+  const euro = n2(summary.importoStorno) || n2(summary.importoNeg);
+  const mc = n2(summary.quantitaStorno) || n2(summary.quantitaNeg);
+
+  return {
+    euro: round2(euro),
+    mc: round3(mc),
+    source: euro || mc ? "summary" : "none",
+  };
 }
  
 function summarizeImporto(rows) {
@@ -3061,6 +3130,76 @@ async function calculateInterni(
     return items.map(() => share);
   };
 
+  const allocateByWeightWithCapacity = (total, items, getWeight, getCapacity, decimals = 2) => {
+    const factor = Math.pow(10, decimals);
+    const targetUnits = Math.round(Math.max(0, n2(total)) * factor);
+    const allocations = items.map(() => 0);
+    const capacityUnits = items.map((item) =>
+      Math.max(0, Math.round(n2(getCapacity(item)) * factor))
+    );
+
+    if (!items.length || targetUnits <= 0) {
+      return items.map(() => 0);
+    }
+
+    let remaining = Math.min(
+      targetUnits,
+      capacityUnits.reduce((sum, value) => sum + value, 0)
+    );
+    let guard = 0;
+
+    while (remaining > 0 && guard < items.length * 4 + 10) {
+      guard += 1;
+      const active = items
+        .map((item, index) => ({
+          item,
+          index,
+          capLeft: capacityUnits[index] - allocations[index],
+          weight: Math.max(0, n2(getWeight(item))),
+        }))
+        .filter((entry) => entry.capLeft > 0);
+
+      if (!active.length) break;
+
+      const weightTotal = active.reduce((sum, entry) => sum + entry.weight, 0);
+      const safeWeight = weightTotal > 0 ? weightTotal : active.length;
+      const planned = active.map((entry) => {
+        const raw = (remaining * (weightTotal > 0 ? entry.weight : 1)) / safeWeight;
+        const units = Math.min(entry.capLeft, Math.floor(raw));
+        return {
+          ...entry,
+          units,
+          frac: raw - Math.floor(raw),
+        };
+      });
+
+      let assigned = 0;
+      for (const entry of planned) {
+        if (entry.units <= 0) continue;
+        allocations[entry.index] += entry.units;
+        assigned += entry.units;
+      }
+
+      remaining -= assigned;
+      if (remaining <= 0) break;
+
+      const remainderOrder = planned
+        .filter((entry) => capacityUnits[entry.index] - allocations[entry.index] > 0)
+        .sort((a, b) => b.frac - a.frac);
+
+      if (!remainderOrder.length) break;
+
+      for (const entry of remainderOrder) {
+        if (remaining <= 0) break;
+        if (capacityUnits[entry.index] - allocations[entry.index] <= 0) continue;
+        allocations[entry.index] += 1;
+        remaining -= 1;
+      }
+    }
+
+    return allocations.map((units) => units / factor);
+  };
+
   try {
     // ---------- Load periods ----------
     const [[periodoAttuale]] = await conn.query(
@@ -3560,13 +3699,6 @@ async function calculateInterni(
     );
     const ivaAccShares = allocateByWeight(totIvaAcc, primaries, mcWeightFn, 2);
     const accMcShares = allocateByWeight(totConsAccMc, primaries, mcWeightFn, 3);
-    const stornoCalcShares = allocateByWeight(totStornoCalcolato, primaries, moneyWeightFn, 2);
-    const stornoCalcMcShares = allocateByWeight(
-      Math.abs(n2(session.mcStorno ?? 0)),
-      primaries,
-      moneyWeightFn,
-      3
-    );
     const oneriAccShares = hasParsedOneri
       ? allocateByWeight(parsedOneriAcconto, primaries, mcWeightFn, 2)
       : primaries.map(() => 0);
@@ -3594,34 +3726,72 @@ async function calculateInterni(
         n2(ivaAccShares[i] || 0)
       );
 
-      const stornoShare = round2(stornoCalcShares[i] || 0);
-      const stornoMcShare = round3(stornoCalcMcShares[i] || 0);
+      r._base_prima_storno = basePrimaStorno;
+      r.storno_calcolato = 0;
+      r._storno_calcolato_mc = 0;
+      r._storno_credit_euro = 0;
+      r._storno_credit_mc = 0;
+      r.base_totale = basePrimaStorno;
+    }
 
-      if (stornoShare < 0) {
-        const maxReduction = Math.max(
-          0,
-          round2(basePrimaStorno - getMinimumPayableForRow(r))
-        );
-        const intendedReduction = Math.abs(stornoShare);
-        const appliedReduction = Math.min(intendedReduction, maxReduction);
-        const unappliedReduction = round2(intendedReduction - appliedReduction);
-        const appliedRatio =
-          intendedReduction > 0 ? appliedReduction / intendedReduction : 0;
+    if (totStornoCalcolato < 0) {
+      const requestedReduction = round2(Math.abs(totStornoCalcolato));
+      const totalCapacity = round2(
+        primaries.reduce((sum, r) => sum + getAvailableStornoReductionEuro(r), 0)
+      );
+      const appliedReductionTotal = Math.min(requestedReduction, totalCapacity);
+      const totalStornoMc = Math.abs(n2(session.mcStorno ?? 0));
+      const appliedMcTotal =
+        requestedReduction > 0
+          ? round3((totalStornoMc * appliedReductionTotal) / requestedReduction)
+          : 0;
+      const appliedReductionShares = allocateByWeightWithCapacity(
+        appliedReductionTotal,
+        primaries,
+        moneyWeightFn,
+        getAvailableStornoReductionEuro,
+        2
+      );
+      const appliedMcShares = allocateByWeight(
+        appliedMcTotal,
+        appliedReductionShares.map((share) => ({ share })),
+        (item) => n2(item.share),
+        3
+      );
+      const unappliedReductionTotal = round2(requestedReduction - appliedReductionTotal);
+      const unappliedReductionShares =
+        unappliedReductionTotal > 0
+          ? allocateByWeight(unappliedReductionTotal, primaries, moneyWeightFn, 2)
+          : primaries.map(() => 0);
+      const unappliedMcShares =
+        unappliedReductionTotal > 0
+          ? allocateByWeight(
+              round3(
+                totalStornoMc - appliedMcShares.reduce((sum, value) => sum + n2(value), 0)
+              ),
+              primaries,
+              moneyWeightFn,
+              3
+            )
+          : primaries.map(() => 0);
+
+      for (let i = 0; i < primaries.length; i++) {
+        const r = primaries[i];
+        const appliedReduction = round2(appliedReductionShares[i] || 0);
 
         r.storno_calcolato = round2(-appliedReduction);
-        r._storno_calcolato_mc = round3(stornoMcShare * appliedRatio);
-        r._storno_credit_euro = unappliedReduction;
-        r._storno_credit_mc = round3(
-          Math.max(0, stornoMcShare - n2(r._storno_calcolato_mc))
-        );
-      } else {
-        r.storno_calcolato = stornoShare;
-        r._storno_calcolato_mc = 0;
-        r._storno_credit_euro = 0;
-        r._storno_credit_mc = 0;
+        r._storno_calcolato_mc = round3(appliedMcShares[i] || 0);
+        r._storno_credit_euro = round2(unappliedReductionShares[i] || 0);
+        r._storno_credit_mc = round3(unappliedMcShares[i] || 0);
+        r.base_totale = round2(n2(r._base_prima_storno) + n2(r.storno_calcolato));
       }
-
-      r.base_totale = round2(basePrimaStorno + n2(r.storno_calcolato));
+    } else {
+      const positiveStornoShares = allocateByWeight(totStornoCalcolato, primaries, moneyWeightFn, 2);
+      for (let i = 0; i < primaries.length; i++) {
+        const r = primaries[i];
+        r.storno_calcolato = round2(positiveStornoShares[i] || 0);
+        r.base_totale = round2(n2(r._base_prima_storno) + n2(r.storno_calcolato));
+      }
     }
 
     totaleOneri = round2(rows.reduce((s, r) => s + n2(r.imp_oneri), 0));
@@ -3906,16 +4076,58 @@ exports.calculateSession = async function ({
     });
     const resolvedImportedDocumentId =
       importedDocumentId ?? calculationContext?.importedDocumentId ?? null;
+    let resolvedEurStorno = eurStorno;
+    let resolvedMcStorno = calculationContext?.mcStorno ?? session.mcStorno;
+    let resolvedStornoSource = "request";
+
+    if (resolvedImportedDocumentId) {
+      const [docRows] = await conn.query(
+        `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+        [resolvedImportedDocumentId]
+      );
+      const importedDoc = docRows[0] ? enrichImportedDocumentWithStoredTxtSummary(docRows[0]) : null;
+      let importedPayload = null;
+
+      try {
+        importedPayload =
+          typeof importedDoc?.parsed_payload_json === "string"
+            ? JSON.parse(importedDoc.parsed_payload_json)
+            : importedDoc?.parsed_payload_json || null;
+      } catch {
+        importedPayload = null;
+      }
+
+      const stornoFromDoc = getStornoValuesFromParsedPayload(importedPayload);
+      if (stornoFromDoc.euro !== 0 || stornoFromDoc.mc !== 0) {
+        resolvedEurStorno = stornoFromDoc.euro;
+        resolvedMcStorno = stornoFromDoc.mc;
+        resolvedStornoSource = stornoFromDoc.source;
+      }
+    }
+
+    console.log("calculateSession storno resolved", {
+      sessionId,
+      requestEurStorno: eurStorno,
+      resolvedEurStorno,
+      resolvedMcStorno,
+      resolvedStornoSource,
+      importedDocumentId: resolvedImportedDocumentId,
+    });
+
     const calculationContextJson = calculationContext
       ? JSON.stringify({
           ...calculationContext,
           tfCode: effectiveTfCode,
           importedDocumentId: resolvedImportedDocumentId,
+          eurStorno: resolvedEurStorno,
+          mcStorno: resolvedMcStorno,
+          stornoSource: resolvedStornoSource,
           savedAt: new Date().toISOString(),
         })
       : null;
 
-    const generaleResult = await calculateGenerale(conn, sessionId, annoAtt, annoPrec, eurStorno, parsedQF);
+    session.mcStorno = resolvedMcStorno;
+    const generaleResult = await calculateGenerale(conn, sessionId, annoAtt, annoPrec, resolvedEurStorno, parsedQF);
  
     const g = generaleResult.generale;
  
@@ -3928,7 +4140,7 @@ exports.calculateSession = async function ({
       effectiveTfCode,
       annoAtt,
       annoPrec,
-      eurStorno,
+      resolvedEurStorno,
       totaleParsedWithOneri,
       parsedOneriPerequazione,
       parsedOneriPerequazioneAcconto,
