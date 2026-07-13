@@ -1355,10 +1355,9 @@ async function enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId) {
   );
   const context = parseCalculationContextJson(sessionRow?.calculation_context_json);
   const parsedOneriNormale = round2(context.parsedOneriPerequazione);
-  const parsedOneriAcconto = round2(context.parsedOneriPerequazioneAcconto);
   const clonedRows = righe.map((row) => ({ ...row, riga: { ...(row.riga || {}) } }));
 
-  if (!parsedOneriNormale && !parsedOneriAcconto) {
+  if (!parsedOneriNormale) {
     return clonedRows.map((row) => {
       row.riga.imp_oneri_base_display = n2(row?.riga?.imp_oneri ?? row?.imp_oneri);
       row.riga.imp_oneri_perequazione_display = 0;
@@ -1366,7 +1365,11 @@ async function enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId) {
     });
   }
 
-  const chargeableRows = clonedRows.filter((row) => n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0);
+  const chargeableRows = clonedRows.filter(
+    (row) =>
+      n2(row?.riga?.consumo_totale ?? row?.consumo_totale) > 0 &&
+      n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0
+  );
   const normaleShares = allocateRoundedForDisplay(parsedOneriNormale, chargeableRows);
   const shareByIndex = new Map();
 
@@ -3670,7 +3673,9 @@ async function calculateInterni(
     const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
 
     if (hasParsedOneri) {
-      const perequazioneRows = primaries.filter((r) => r.tfEligible);
+      const perequazioneRows = primaries.filter(
+        (r) => r.tfEligible && n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
+      );
       const oneriNormaleShares = allocateEqualRounded(
         parsedOneriNormale,
         perequazioneRows,
