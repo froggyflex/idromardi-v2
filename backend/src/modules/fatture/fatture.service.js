@@ -1191,37 +1191,64 @@ async function processRipartizionePdfJob({
 
   await fs.mkdir(uploadDir, { recursive: true });
 
-  const entries = Object.entries(rowsByUtenza);
+  const entries = Object.entries(rowsByUtenza).sort((a, b) => {
+    const aRow = a[1]?.[0];
+    const bRow = b[1]?.[0];
+    const aOrder = Number(aRow?.utenza?.id_user ?? a[0] ?? 0);
+    const bOrder = Number(bRow?.utenza?.id_user ?? b[0] ?? 0);
+    return aOrder - bOrder;
+  });
 
   let processed = 0;
   let saved = 0;
   let failed = 0;
-  const savedPdfParts = [];
 
   let browser;
 
   try {
     browser = await launchBrowser();
+    let completeBuffer;
+    let splitBuffers;
 
-    for (const [idUtenza, utenzaRighe] of entries) {
+    try {
+      const allRows = entries.flatMap(([, utenzaRighe]) => utenzaRighe);
+      const completeBufferRaw = await generateRipartizionePdfBuffer({
+        browser,
+        righe: allRows,
+        dettaglioByUtenza,
+        trimestreLabel,
+        dataLettura,
+        logoUrl,
+      });
+      completeBuffer = Buffer.from(completeBufferRaw);
+
+      if (completeBuffer.slice(0, 4).toString() !== "%PDF") {
+        throw new Error("PDF completo non valido");
+      }
+
+      splitBuffers = await splitRipartizionePdfByUtenza(completeBuffer, entries);
+    } catch (splitError) {
+      console.warn(
+        "Generazione bollette in singolo render non utilizzabile, fallback per utenza:",
+        splitError?.message || splitError
+      );
+      const fallback = await generateRipartizionePdfPartsSequential({
+        browser,
+        entries,
+        dettaglioByUtenza,
+        trimestreLabel,
+        dataLettura,
+        logoUrl,
+      });
+      completeBuffer = fallback.completeBuffer;
+      splitBuffers = fallback.splitBuffers;
+    }
+
+    for (const [idUtenza] of entries) {
       try {
-        const dettaglio =
-          dettaglioByUtenza?.[idUtenza] ||
-          dettaglioByUtenza?.[String(idUtenza)] ||
-          {};
+        const pdfBuffer = splitBuffers.get(String(idUtenza));
 
-        const pdfBufferRaw = await generateRipartizionePdfBuffer({
-          browser,
-          righe: utenzaRighe,
-          dettaglioByUtenza: { [idUtenza]: dettaglio },
-          trimestreLabel,
-          dataLettura,
-          logoUrl,
-        });
-
-        const pdfBuffer = Buffer.from(pdfBufferRaw);
-
-        if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
+        if (!pdfBuffer || pdfBuffer.slice(0, 4).toString() !== "%PDF") {
           throw new Error(`PDF non valido per utenza ${idUtenza}`);
         }
 
@@ -1260,11 +1287,6 @@ async function processRipartizionePdfJob({
           },
         });
 
-        savedPdfParts.push({
-          idUtenza,
-          buffer: pdfBuffer,
-        });
-
         saved += 1;
       } catch (error) {
         failed += 1;
@@ -1285,16 +1307,7 @@ async function processRipartizionePdfJob({
       }
     }
 
-    if (savedPdfParts.length > 0) {
-      const orderedParts = savedPdfParts.sort((a, b) => {
-        const aRow = rowsByUtenza[a.idUtenza]?.[0];
-        const bRow = rowsByUtenza[b.idUtenza]?.[0];
-        const aOrder = Number(aRow?.utenza?.id_user ?? a.idUtenza ?? 0);
-        const bOrder = Number(bRow?.utenza?.id_user ?? b.idUtenza ?? 0);
-        return aOrder - bOrder;
-      });
-      const completeBuffer = await mergePdfBuffers(orderedParts.map((item) => item.buffer));
-
+    if (saved > 0) {
       await saveGeneratedDocument({
         condominioId,
         fatturaId,
@@ -1700,6 +1713,47 @@ async function generateRipartizionePdfBuffer({
   } finally {
     if (page) await page.close();
   }
+}
+
+async function generateRipartizionePdfPartsSequential({
+  browser,
+  entries,
+  dettaglioByUtenza,
+  trimestreLabel,
+  dataLettura,
+  logoUrl,
+}) {
+  const splitBuffers = new Map();
+  const completeParts = [];
+
+  for (const [idUtenza, utenzaRighe] of entries) {
+    const dettaglio =
+      dettaglioByUtenza?.[idUtenza] ||
+      dettaglioByUtenza?.[String(idUtenza)] ||
+      {};
+    const pdfBuffer = Buffer.from(
+      await generateRipartizionePdfBuffer({
+        browser,
+        righe: utenzaRighe,
+        dettaglioByUtenza: { [idUtenza]: dettaglio },
+        trimestreLabel,
+        dataLettura,
+        logoUrl,
+      })
+    );
+
+    if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
+      throw new Error(`PDF non valido per utenza ${idUtenza}`);
+    }
+
+    splitBuffers.set(String(idUtenza), pdfBuffer);
+    completeParts.push(pdfBuffer);
+  }
+
+  return {
+    splitBuffers,
+    completeBuffer: await mergePdfBuffers(completeParts),
+  };
 }
 
 exports.parseImportedDocument = async (id) => {
@@ -4607,6 +4661,43 @@ async function mergePdfBuffers(buffers) {
   }
 
   return Buffer.from(await mergedPdf.save());
+}
+
+async function splitRipartizionePdfByUtenza(completeBuffer, entries) {
+  const sourcePdf = await PDFDocument.load(completeBuffer);
+  const pageCount = sourcePdf.getPageCount();
+  const expectedPageCount = entries.reduce(
+    (total, [, utenzaRighe]) => total + Math.max(1, Array.isArray(utenzaRighe) ? utenzaRighe.length : 0),
+    0
+  );
+
+  if (pageCount !== expectedPageCount) {
+    throw new Error(
+      `PDF completo non allineato: ${pageCount} pagine generate su ${expectedPageCount} attese`
+    );
+  }
+
+  const result = new Map();
+  let pageCursor = 0;
+
+  for (const [idUtenza, utenzaRighe] of entries) {
+    const pagesForUtenza = Math.max(
+      1,
+      Array.isArray(utenzaRighe) ? utenzaRighe.length : 0
+    );
+    const userPdf = await PDFDocument.create();
+    const pageIndexes = Array.from(
+      { length: pagesForUtenza },
+      (_, index) => pageCursor + index
+    );
+    const copiedPages = await userPdf.copyPages(sourcePdf, pageIndexes);
+
+    copiedPages.forEach((page) => userPdf.addPage(page));
+    result.set(String(idUtenza), Buffer.from(await userPdf.save()));
+    pageCursor += pagesForUtenza;
+  }
+
+  return result;
 }
 
 exports.getLatestGeneratedDocument = getLatestGeneratedDocument;
