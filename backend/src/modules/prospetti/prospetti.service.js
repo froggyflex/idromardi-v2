@@ -185,8 +185,7 @@ function allocateRounded(total, items, decimals = 2, weightGetter = null) {
 function enrichRowsWithSeparatedOneri(rows, session) {
   const context = parseCalculationContext(session);
   const parsedOneriNormale = roundMoney(context.parsedOneriPerequazione);
-  const parsedOneriAcconto = roundMoney(context.parsedOneriPerequazioneAcconto);
-  const hasParsedPerequazione = parsedOneriNormale !== 0 || parsedOneriAcconto !== 0;
+  const hasParsedPerequazione = parsedOneriNormale !== 0;
 
   if (!hasParsedPerequazione) {
     return rows.map((row) => ({
@@ -196,7 +195,9 @@ function enrichRowsWithSeparatedOneri(rows, session) {
     }));
   }
 
-  const chargeableRows = rows.filter((row) => n(row.imp_oneri) !== 0);
+  const chargeableRows = rows.filter(
+    (row) => n(row.consumo_totale) > 0 && n(row.imp_oneri) !== 0
+  );
   const normaleShares = allocateRounded(parsedOneriNormale, chargeableRows);
   const shareByRowId = new Map();
 
