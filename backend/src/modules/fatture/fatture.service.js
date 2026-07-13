@@ -10,6 +10,7 @@ const fs1 = require("fs");
 const { launchBrowser } = require("../../utils/puppeteer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
+const { PDFDocument } = require("pdf-lib");
 const {
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
@@ -1197,16 +1198,14 @@ async function processRipartizionePdfJob({
   try {
     browser = await launchBrowser();
     const allRows = entries.flatMap(([, utenzaRighe]) => utenzaRighe);
-    const completeBuffer = Buffer.from(
-      await generateRipartizionePdfBuffer({
-        browser,
-        righe: allRows,
-        dettaglioByUtenza,
-        trimestreLabel,
-        dataLettura,
-        logoUrl,
-      })
-    );
+    const completeBuffer = await generateRipartizioneCompletePdfBuffer({
+      browser,
+      righe: allRows,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+    });
 
     if (completeBuffer.slice(0, 4).toString() !== "%PDF") {
       throw new Error("PDF completo non valido");
@@ -1498,16 +1497,14 @@ exports.exportRipartizioniPerUtenza = async ({
 
   try {
     browser = await launchBrowser();
-    const pdfBuffer = Buffer.from(
-      await generateRipartizionePdfBuffer({
-        browser,
-        righe: allRows,
-        dettaglioByUtenza,
-        trimestreLabel,
-        dataLettura,
-        logoUrl,
-      })
-    );
+    const pdfBuffer = await generateRipartizioneCompletePdfBuffer({
+      browser,
+      righe: allRows,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+    });
 
     if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
       throw new Error("PDF completo non valido");
@@ -1599,6 +1596,65 @@ async function generateRipartizionePdfBuffer({
   } finally {
     if (page) await page.close();
   }
+}
+
+async function generateRipartizioneCompletePdfBuffer({
+  browser,
+  righe,
+  dettaglioByUtenza,
+  trimestreLabel,
+  dataLettura,
+  logoUrl,
+}) {
+  const rows = Array.isArray(righe) ? righe : [];
+  const chunkSize = Math.max(1, Number(process.env.RIPARTIZIONE_PDF_CHUNK_SIZE || 8));
+
+  if (rows.length <= chunkSize) {
+    return Buffer.from(
+      await generateRipartizionePdfBuffer({
+        browser,
+        righe: rows,
+        dettaglioByUtenza,
+        trimestreLabel,
+        dataLettura,
+        logoUrl,
+      })
+    );
+  }
+
+  const chunks = [];
+
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    chunks.push(
+      Buffer.from(
+        await generateRipartizionePdfBuffer({
+          browser,
+          righe: rows.slice(index, index + chunkSize),
+          dettaglioByUtenza,
+          trimestreLabel,
+          dataLettura,
+          logoUrl,
+        })
+      )
+    );
+  }
+
+  return mergePdfBuffers(chunks);
+}
+
+async function mergePdfBuffers(buffers) {
+  const mergedPdf = await PDFDocument.create();
+
+  for (const buffer of buffers) {
+    const sourcePdf = await PDFDocument.load(buffer);
+    const copiedPages = await mergedPdf.copyPages(
+      sourcePdf,
+      sourcePdf.getPageIndices()
+    );
+    copiedPages.forEach((page) => mergedPdf.addPage(page));
+  }
+
+  return Buffer.from(await mergedPdf.save());
 }
 
 exports.parseImportedDocument = async (id) => {
