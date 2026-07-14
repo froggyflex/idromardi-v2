@@ -2863,16 +2863,21 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
  
 const ripartizionePollRef = useRef<number | null>(null); 
+const ripartizionePollGenerationRef = useRef(0);
 const pollRipartizioneJob = (jobId: number) => {
+  const pollGeneration = ++ripartizionePollGenerationRef.current;
   if (ripartizionePollRef.current) {
-    window.clearInterval(ripartizionePollRef.current);
+    window.clearTimeout(ripartizionePollRef.current);
   }
+  let consecutivePollErrors = 0;
 
-  ripartizionePollRef.current = window.setInterval(async () => {
+  const poll = async () => {
     try {
       const { data } = await api.get(
         `/fatture/export-ripartizione-pdf/jobs/${jobId}`
       );
+      if (pollGeneration !== ripartizionePollGenerationRef.current) return;
+      consecutivePollErrors = 0;
 
       setExportJob(data);
 
@@ -2880,40 +2885,55 @@ const pollRipartizioneJob = (jobId: number) => {
       const processed = Number(data.processed || 0);
       const failed = Number(data.failed || 0);
 
+      if (data.status === "pending") {
+        setExportMessage("Preparazione generazione PDF...");
+      }
+
       if (data.status === "processing") {
-        setExportMessage(`Generazione PDF: ${processed}/${total}`);
+        setExportMessage(
+          total > 0 && processed >= total
+            ? "Finalizzazione e salvataggio PDF..."
+            : `Generazione PDF: ${processed}/${total}`
+        );
       }
 
       if (data.status === "done") {
-        if (ripartizionePollRef.current) {
-          window.clearInterval(ripartizionePollRef.current);
-          ripartizionePollRef.current = null;
-        }
-
+        ripartizionePollRef.current = null;
         setExportingRipartizioni(false);
-        setExportMessage(`PDF generati: ${processed}/${total}. Errori: ${failed}.`);
+        setExportMessage(
+          failed > 0
+            ? `Generazione completata con ${failed} errori.`
+            : "Bollette generate e salvate correttamente."
+        );
 
-        await loadRipartizionePdfs?.();
-        await loadGeneratedDocuments?.();
+        await Promise.allSettled([
+          Promise.resolve(loadRipartizionePdfs?.()),
+          Promise.resolve(loadGeneratedDocuments?.()),
+        ]);
+        return;
       }
 
       if (data.status === "error") {
-        if (ripartizionePollRef.current) {
-          window.clearInterval(ripartizionePollRef.current);
-          ripartizionePollRef.current = null;
-        }
-
+        ripartizionePollRef.current = null;
         setExportingRipartizioni(false);
         setExportMessage(
           data.error_message || "Errore durante la generazione PDF."
         );
-      }
-    } catch (error: any) {
-      if (ripartizionePollRef.current) {
-        window.clearInterval(ripartizionePollRef.current);
-        ripartizionePollRef.current = null;
+        return;
       }
 
+      ripartizionePollRef.current = window.setTimeout(poll, 1000);
+    } catch (error: any) {
+      if (pollGeneration !== ripartizionePollGenerationRef.current) return;
+      consecutivePollErrors += 1;
+
+      if (consecutivePollErrors < 3) {
+        setExportMessage("Connessione temporaneamente instabile, nuovo tentativo...");
+        ripartizionePollRef.current = window.setTimeout(poll, 1500);
+        return;
+      }
+
+      ripartizionePollRef.current = null;
       setExportingRipartizioni(false);
       setExportMessage(
         error?.response?.data?.error ||
@@ -2921,13 +2941,16 @@ const pollRipartizioneJob = (jobId: number) => {
           "Errore durante il controllo dello stato del job."
       );
     }
-  }, 1500);
+  };
+
+  void poll();
 };
 
 useEffect(() => {
   return () => {
+    ripartizionePollGenerationRef.current += 1;
     if (ripartizionePollRef.current) {
-      window.clearInterval(ripartizionePollRef.current);
+      window.clearTimeout(ripartizionePollRef.current);
     }
   };
 }, []);
@@ -2960,6 +2983,14 @@ const handleExportPdf = async () => {
       throw new Error("Job ID non ricevuto dal server.");
     }
 
+    setExportJob({
+      id: data.jobId,
+      status: data.status || "pending",
+      total: Number(data.total || 0),
+      processed: 0,
+      saved: 0,
+      failed: 0,
+    });
     setExportMessage("Generazione PDF in corso...");
     pollRipartizioneJob(data.jobId);
   } catch (error: any) {
@@ -4494,11 +4525,20 @@ return (
                       <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600">
                         <span>{exportMessage}</span>
                         <span>
-                          {exportJob.processed || 0}/{exportJob.total || 0}
+                          {exportJob.total
+                            ? `${Math.round((Number(exportJob.processed || 0) / Number(exportJob.total)) * 100)}%`
+                            : "0%"}
                         </span>
                       </div>
 
-                      <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-2 overflow-hidden rounded-full bg-slate-200"
+                        role="progressbar"
+                        aria-label="Avanzamento generazione bollette"
+                        aria-valuemin={0}
+                        aria-valuemax={Number(exportJob.total || 0)}
+                        aria-valuenow={Number(exportJob.processed || 0)}
+                      >
                         <div
                           className="h-full rounded-full bg-slate-900 transition-all duration-500"
                           style={{

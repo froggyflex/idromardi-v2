@@ -1,6 +1,6 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode, SVGProps } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearAuthSession, getAuthUser } from "../auth";
 
 type Props = {
@@ -254,6 +254,8 @@ export default function MainLayout({ children }: Props) {
   const match = location.pathname.match(/^\/condomini\/([^/]+)/);
   const condominioId = match?.[1];
   const user = getAuthUser();
+  const mainRef = useRef<HTMLElement | null>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   function handleLogout() {
     clearAuthSession();
@@ -361,7 +363,27 @@ export default function MainLayout({ children }: Props) {
         </div>
       </aside>
 
-      <main className="flex-1 p-6 overflow-auto">{children}</main>
+      <main
+        ref={mainRef}
+        onScroll={(event) => setShowScrollTop(event.currentTarget.scrollTop > 500)}
+        className="flex-1 p-6 overflow-auto"
+      >
+        {children}
+      </main>
+
+      {showScrollTop && (
+        <button
+          type="button"
+          onClick={() => mainRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Torna in cima"
+          title="Torna in cima"
+          className="fixed bottom-6 right-6 z-50 inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m6 15 6-6 6 6" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

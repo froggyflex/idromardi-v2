@@ -1205,6 +1205,19 @@ async function processRipartizionePdfJob({
       trimestreLabel,
       dataLettura,
       logoUrl,
+      onChunkComplete: async () => {
+        processed += 1;
+        try {
+          await db.query(
+            `UPDATE ripartizione_pdf_jobs SET processed = GREATEST(processed, ?) WHERE id = ?`,
+            [processed, jobId]
+          );
+        } catch (error) {
+          // Progress reporting is best-effort and must never invalidate an
+          // otherwise valid PDF. The final job update remains authoritative.
+          console.warn("Impossibile aggiornare il progresso PDF:", error?.message);
+        }
+      },
     });
 
     if (completeBuffer.slice(0, 4).toString() !== "%PDF") {
@@ -1229,7 +1242,7 @@ async function processRipartizionePdfJob({
       },
     });
 
-    processed = 1;
+    processed = Math.max(processed, 1);
     saved = 1;
     failed = 0;
 
@@ -1305,6 +1318,16 @@ function groupRowsByUtenza(righe) {
 
     return acc;
   }, {});
+}
+
+function getPositiveIntegerEnv(name, fallback, max) {
+  const parsed = Number(process.env[name]);
+  const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  return Math.min(value, max);
+}
+
+function getRipartizionePdfChunkSize() {
+  return getPositiveIntegerEnv("RIPARTIZIONE_PDF_CHUNK_SIZE", 8, 100);
 }
 
 function parseCalculationContextJson(value) {
@@ -1408,7 +1431,16 @@ exports.startRipartizionePdfJob = async ({
 
   const enrichedRighe = await enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId);
   const rowsByUtenza = groupRowsByUtenza(enrichedRighe);
-  const total = 1;
+  const renderRowCount = Object.values(rowsByUtenza).reduce(
+    (count, utenzaRighe) => count + utenzaRighe.length,
+    0
+  );
+  if (renderRowCount === 0) {
+    const err = new Error("Nessuna riga valida disponibile per generare i PDF");
+    err.statusCode = 400;
+    throw err;
+  }
+  const total = Math.ceil(renderRowCount / getRipartizionePdfChunkSize());
   const periodKey = makeSafeDateFolder(dataLettura);
 
   const [result] = await db.query(
@@ -1435,15 +1467,19 @@ exports.startRipartizionePdfJob = async ({
   }).catch(async (error) => {
     console.error("Errore job ripartizione PDF:", error);
 
-    await db.query(
-      `
-      UPDATE ripartizione_pdf_jobs
-      SET status = 'error',
-          error_message = ?
-      WHERE id = ?
-      `,
-      [error?.message || "Errore generazione PDF", jobId]
-    );
+    try {
+      await db.query(
+        `
+        UPDATE ripartizione_pdf_jobs
+        SET status = 'error',
+            error_message = ?
+        WHERE id = ?
+        `,
+        [error?.message || "Errore generazione PDF", jobId]
+      );
+    } catch (statusError) {
+      console.error("Impossibile salvare lo stato di errore del job PDF:", statusError);
+    }
   });
 
   return {
@@ -1608,12 +1644,13 @@ async function generateRipartizioneCompletePdfBuffer({
   trimestreLabel,
   dataLettura,
   logoUrl,
+  onChunkComplete,
 }) {
   const rows = Array.isArray(righe) ? righe : [];
-  const chunkSize = Math.max(1, Number(process.env.RIPARTIZIONE_PDF_CHUNK_SIZE || 8));
+  const chunkSize = getRipartizionePdfChunkSize();
 
   if (rows.length <= chunkSize) {
-    return Buffer.from(
+    const buffer = Buffer.from(
       await generateRipartizionePdfBuffer({
         browser,
         righe: rows,
@@ -1623,24 +1660,67 @@ async function generateRipartizioneCompletePdfBuffer({
         logoUrl,
       })
     );
+    if (onChunkComplete) await onChunkComplete(0, 1);
+    return buffer;
   }
 
-  const chunks = [];
-
+  const chunkRows = [];
   for (let index = 0; index < rows.length; index += chunkSize) {
-    chunks.push(
-      Buffer.from(
-        await generateRipartizionePdfBuffer({
-          browser,
-          righe: rows.slice(index, index + chunkSize),
-          dettaglioByUtenza,
-          trimestreLabel,
-          dataLettura,
-          logoUrl,
-        })
-      )
-    );
+    chunkRows.push(rows.slice(index, index + chunkSize));
   }
+
+  // Keep concurrency deliberately bounded: parallel pages are faster, while
+  // an unlimited page fan-out can exhaust memory on larger condominiums.
+  const concurrency = Math.max(
+    1,
+    Math.min(
+      getPositiveIntegerEnv("RIPARTIZIONE_PDF_CONCURRENCY", 2, 4),
+      chunkRows.length
+    )
+  );
+  const chunks = new Array(chunkRows.length);
+  let nextChunkIndex = 0;
+  let firstError = null;
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (!firstError) {
+      const chunkIndex = nextChunkIndex;
+      nextChunkIndex += 1;
+      if (chunkIndex >= chunkRows.length) return;
+
+      try {
+        let renderedChunk;
+        let lastRenderError;
+
+        // A fresh Puppeteer page is created on every attempt, so retrying once
+        // safely handles occasional Chromium page crashes or timeout spikes.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            renderedChunk = await generateRipartizionePdfBuffer({
+              browser,
+              righe: chunkRows[chunkIndex],
+              dettaglioByUtenza,
+              trimestreLabel,
+              dataLettura,
+              logoUrl,
+            });
+            break;
+          } catch (error) {
+            lastRenderError = error;
+          }
+        }
+
+        if (!renderedChunk) throw lastRenderError;
+        chunks[chunkIndex] = Buffer.from(renderedChunk);
+        if (onChunkComplete) await onChunkComplete(chunkIndex, chunkRows.length);
+      } catch (error) {
+        firstError = error;
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  if (firstError) throw firstError;
 
   return mergePdfBuffers(chunks);
 }
