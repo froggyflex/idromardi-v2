@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Idromardi Letture",
+    "slug": "idromardi-letture",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "it.idromardi.letture"
+    },
+    "android": {
+      "package": "it.idromardi.letture"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-sqlite"
+    ]
+  }
+}

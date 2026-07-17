@@ -19,6 +19,7 @@ import CondominioFatturePage from "./pages/fatture/CondominioFatturePage ";
 import FinancialSummaryPageTemplate from "./pages/admin/FinancialSummaryPageTemplate";
 import LoginPage from "./pages/LoginPage";
 import PasswordSettings from "./pages/admin/PasswordSettings";
+import MobileReadingsReview from "./pages/admin/MobileReadingsReview";
 import { isAuthenticated } from "./auth";
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -60,6 +61,7 @@ function App() {
                   <Route path="/admin/tariffe" element={<AdminTariffe />} />
                   <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />
                   <Route path="/admin/password" element={<PasswordSettings />} />
+                  <Route path="/admin/mobile-readings" element={<MobileReadingsReview />} />
                 </Routes>
               </MainLayout>
             </RequireAuth>

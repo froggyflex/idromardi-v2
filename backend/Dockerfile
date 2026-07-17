@@ -12,7 +12,7 @@ COPY server.js ./
 COPY uploads ./uploads
 
 # Create uploads directories if they don't exist
-RUN mkdir -p uploads/fatture-import
+RUN mkdir -p uploads/fatture-import runtime_uploads/mobile-readings
 
 # Expose port
 EXPOSE 4000

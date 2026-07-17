@@ -10,7 +10,8 @@ services:
       MYSQL_PASSWORD: idromardi123
     volumes:
       - db_data:/var/lib/mysql
-      - ./miteamx1_fatturazione.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./miteamx1_fatturazione.sql:/docker-entrypoint-initdb.d/001_base.sql:ro
+      - ./database/migrations/001_mobile_readings.sql:/docker-entrypoint-initdb.d/002_mobile_readings.sql:ro
     ports:
       - "3306:3306"
     healthcheck:
@@ -39,6 +40,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/uploads:/app/uploads
+      - ./backend/runtime_uploads:/app/runtime_uploads
 
   # Frontend
   frontend:

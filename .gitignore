@@ -1,0 +1,10 @@
+.tools/
+**/node_modules/
+**/.env
+!**/.env.example
+mobile/.expo/
+mobile/android/
+mobile/ios/
+backend/uploads/mobile-readings/
+**/runtime_uploads/
+*.log

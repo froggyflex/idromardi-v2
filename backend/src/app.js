@@ -13,6 +13,7 @@ const financialSummaryRoutes = require("./modules/financialSummary/financialSumm
 const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 const adminRoutes = require("./modules/admin/admin.routes");
 const authRoutes = require("./modules/auth/auth.routes");
+const mobileReadingsRoutes = require("./modules/mobileReadings/mobileReadings.routes");
 const { requireAuth } = require("./modules/auth/auth.middleware");
 
 const app = express();
@@ -40,7 +41,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Photo-Sha256"],
 };
 
 app.use(cors(corsOptions));
@@ -63,6 +64,9 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Keep any legacy meter-photo paths private even if an older deployment wrote
+// files below the otherwise public uploads directory.
+app.use("/uploads/mobile-readings", (req, res) => res.status(404).end());
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api/auth", authRoutes);
@@ -73,6 +77,7 @@ app.use("/api", utenzeRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/letture", lettureRoutes);
+app.use("/api/mobile-readings", mobileReadingsRoutes);
 app.use("/api/tariffe", tariffeRoutes);
 app.use("/api", billingGroupsRoutes);
 app.use("/api", prospettoRoutes);
@@ -96,8 +101,8 @@ app.use((err, req, res, next) => {
     });
   }
 
-  return res.status(err.status || 500).json({
-    message: err.message || "Internal server error",
+  return res.status(err.statusCode || err.status || 500).json({
+    error: err.message || "Internal server error",
   });
 });
 

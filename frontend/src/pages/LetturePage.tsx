@@ -9,6 +9,7 @@ import {
 
 import { useParams } from "react-router-dom";
 import type { Stato, GridRow, Session } from "../api/letture_interface";
+import MobileAssignmentControls from "./components/MobileAssignmentControls";
 
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -626,6 +627,13 @@ export default function LetturePage() {
       )}
 
     </div>
+
+      {session && (
+        <MobileAssignmentControls
+          sessionId={session.id}
+          disabled={loading || session.stato === "CHIUSA"}
+        />
+      )}
 
       {/* GRID */}
 

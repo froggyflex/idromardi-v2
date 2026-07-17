@@ -23,6 +23,19 @@ function requireAuth(req, res, next) {
   return next();
 }
 
+function requireRole(...allowedRoles) {
+  const allowed = new Set(allowedRoles.map((role) => String(role).toUpperCase()));
+  return (req, res, next) => {
+    const fallbackRole = req.user?.username === "admin" ? "ADMIN" : null;
+    const role = String(req.user?.role || fallbackRole || "").toUpperCase();
+    if (!allowed.has(role)) {
+      return res.status(403).json({ error: "Permessi insufficienti" });
+    }
+    return next();
+  };
+}
+
 module.exports = {
   requireAuth,
+  requireRole,
 };
