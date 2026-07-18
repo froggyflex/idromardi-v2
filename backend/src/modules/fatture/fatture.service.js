@@ -10,7 +10,6 @@ const fs1 = require("fs");
 const { launchBrowser } = require("../../utils/puppeteer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
-const { PDFDocument } = require("pdf-lib");
 const {
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
@@ -1647,97 +1646,18 @@ async function generateRipartizioneCompletePdfBuffer({
   onChunkComplete,
 }) {
   const rows = Array.isArray(righe) ? righe : [];
-  const chunkSize = getRipartizionePdfChunkSize();
-
-  if (rows.length <= chunkSize) {
-    const buffer = Buffer.from(
-      await generateRipartizionePdfBuffer({
-        browser,
-        righe: rows,
-        dettaglioByUtenza,
-        trimestreLabel,
-        dataLettura,
-        logoUrl,
-      })
-    );
-    if (onChunkComplete) await onChunkComplete(0, 1);
-    return buffer;
-  }
-
-  const chunkRows = [];
-  for (let index = 0; index < rows.length; index += chunkSize) {
-    chunkRows.push(rows.slice(index, index + chunkSize));
-  }
-
-  // Keep concurrency deliberately bounded: parallel pages are faster, while
-  // an unlimited page fan-out can exhaust memory on larger condominiums.
-  const concurrency = Math.max(
-    1,
-    Math.min(
-      getPositiveIntegerEnv("RIPARTIZIONE_PDF_CONCURRENCY", 2, 4),
-      chunkRows.length
-    )
+  const buffer = Buffer.from(
+    await generateRipartizionePdfBuffer({
+      browser,
+      righe: rows,
+      dettaglioByUtenza,
+      trimestreLabel,
+      dataLettura,
+      logoUrl,
+    })
   );
-  const chunks = new Array(chunkRows.length);
-  let nextChunkIndex = 0;
-  let firstError = null;
-
-  const workers = Array.from({ length: concurrency }, async () => {
-    while (!firstError) {
-      const chunkIndex = nextChunkIndex;
-      nextChunkIndex += 1;
-      if (chunkIndex >= chunkRows.length) return;
-
-      try {
-        let renderedChunk;
-        let lastRenderError;
-
-        // A fresh Puppeteer page is created on every attempt, so retrying once
-        // safely handles occasional Chromium page crashes or timeout spikes.
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          try {
-            renderedChunk = await generateRipartizionePdfBuffer({
-              browser,
-              righe: chunkRows[chunkIndex],
-              dettaglioByUtenza,
-              trimestreLabel,
-              dataLettura,
-              logoUrl,
-            });
-            break;
-          } catch (error) {
-            lastRenderError = error;
-          }
-        }
-
-        if (!renderedChunk) throw lastRenderError;
-        chunks[chunkIndex] = Buffer.from(renderedChunk);
-        if (onChunkComplete) await onChunkComplete(chunkIndex, chunkRows.length);
-      } catch (error) {
-        firstError = error;
-      }
-    }
-  });
-
-  await Promise.all(workers);
-  if (firstError) throw firstError;
-
-  return mergePdfBuffers(chunks);
-}
-
-async function mergePdfBuffers(buffers) {
-  const mergedPdf = await PDFDocument.create();
-
-  for (const buffer of buffers) {
-    const sourcePdf = await PDFDocument.load(buffer);
-    const copiedPages = await mergedPdf.copyPages(
-      sourcePdf,
-      sourcePdf.getPageIndices()
-    );
-    copiedPages.forEach((page) => mergedPdf.addPage(page));
-  }
-
-  return Buffer.from(await mergedPdf.save());
+  if (onChunkComplete) await onChunkComplete(0, 1);
+  return buffer;
 }
 
 exports.parseImportedDocument = async (id) => {
