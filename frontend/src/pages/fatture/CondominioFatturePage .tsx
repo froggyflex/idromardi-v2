@@ -283,9 +283,7 @@ export default function CondominioFatturePage() {
       if (!search) return true;
 
       const linkedDoc = getSessionLinkedImportedDocument(s);
-      const periodLabel = s.periodo_precedente_mese && s.periodo_attuale_mese
-        ? `${s.periodo_precedente_mese}/${s.periodo_precedente_anno} ${s.periodo_attuale_mese}/${s.periodo_attuale_anno}`
-        : "";
+      const periodLabel = getImportedDocumentPeriodLabel(linkedDoc);
 
       return [
         periodLabel,
@@ -573,6 +571,16 @@ export default function CondominioFatturePage() {
     }
 
     return cleanImportedFilename(doc.original_filename);
+  }
+
+  function getImportedDocumentPeriodLabel(doc?: ImportedInvoiceDocument | null) {
+    if (!doc) return "Periodo TXT non disponibile";
+
+    const from = formatImportedDocDate(doc.data_inizio_periodo);
+    const to = formatImportedDocDate(doc.data_fine_periodo);
+
+    if (from && to) return `${from} - ${to}`;
+    return from || to || "Periodo TXT non disponibile";
   }
 
   function findSessionById(sessionId?: string | null) {
@@ -3426,14 +3434,37 @@ const formatScaglioneRange = (scaglione: any) => {
     : Number(scaglione.mc_a_base);
   return `${from}-${to}`;
 };
+const isSessionPreparing = Boolean(
+  loadingDetail ||
+    loadingImportedDetail ||
+    autoCalculatingSessionId ||
+    pendingAutoCalculateSessionId
+);
 
 return (
-    <div className=" ">
-      <div className="screen-only">
+    <div className="relative" aria-busy={isSessionPreparing}>
+      {isSessionPreparing && (
+        <div
+          className="fixed inset-0 z-[100] flex cursor-wait items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[2px]"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-2xl">
+            <Loader2 size={22} className="shrink-0 animate-spin text-blue-600" />
+            <div>
+              <div className="font-semibold text-slate-900">Preparazione sessione</div>
+              <div className="mt-0.5 text-sm text-slate-500">
+                Attendere prego, sto caricando documento, tariffa e calcoli.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="screen-only" inert={isSessionPreparing}>
       {/* SUMMARY */}
-      <div className="sticky top-0 z-50 -mt-px border-b bg-white shadow-sm">
-        <div className="max-w-full px-6 py-4 space-y-4">
-          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+      <div className="sticky top-0 z-50 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur">
+        <div className="max-w-full space-y-2 px-4 py-2">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div>
                 {/* ERROR */}
                 {error && (
@@ -3485,7 +3516,7 @@ return (
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Tariffa applicata
@@ -3523,8 +3554,11 @@ return (
               )}
             </div>
           </div>
+        </div>
+      </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+      <div className="max-w-full px-6 pt-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
             <div className="flex items-center justify-between gap-4 mb-3">
               <div>
                 <div className="text-sm font-semibold text-slate-900">
@@ -3559,16 +3593,17 @@ return (
                 Nessun periodo trovato con questa ricerca.
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+              <div className="flex flex-wrap gap-3">
                 {filteredSessions.map((s: any) => {
                   const linkedDoc = getSessionLinkedImportedDocument(s);
                   const linkedDocName = linkedDoc ? getImportedDocumentName(linkedDoc) : "Nessun documento collegato";
+                  const linkedDocPeriod = getImportedDocumentPeriodLabel(linkedDoc);
                   const isAutoLoading = String(autoCalculatingSessionId || pendingAutoCalculateSessionId || "") === String(s.id);
 
                   return (
                   <div
                     key={s.id}
-                    className={`group flex items-center gap-3 rounded-2xl border px-3 py-3 transition ${
+                    className={`group relative w-full max-w-[520px] rounded-xl border p-3 transition ${
                       fatturaId === s.id
                         ? "border-blue-500 bg-blue-50"
                         : "border-slate-200 bg-white hover:bg-slate-50"
@@ -3577,7 +3612,7 @@ return (
                     <button
                       onClick={() => handleSelectSession(s)}
                       disabled={isAutoLoading || loadingCalc}
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left disabled:cursor-wait"
+                      className="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2 pr-7 text-left disabled:cursor-wait sm:grid-cols-[auto_minmax(0,1fr)_auto]"
                     >
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
@@ -3590,13 +3625,11 @@ return (
                       </span>
 
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-slate-800">
-                          {s.periodo_precedente_mese && s.periodo_attuale_mese
-                            ? `${s.periodo_precedente_mese}/${s.periodo_precedente_anno} -> ${s.periodo_attuale_mese}/${s.periodo_attuale_anno}`
-                            : String(s.id).slice(0, 8) + "..."}
+                        <span className="block text-sm font-semibold text-slate-800">
+                          Periodo ABC: {linkedDocPeriod}
                         </span>
                         <span
-                            className={`block max-w-[260px] truncate text-[11px] ${
+                            className={`mt-0.5 block break-words text-[11px] leading-4 ${
                             linkedDoc ? "text-slate-500" : "text-amber-600"
                           }`}
                           title={linkedDocName}
@@ -3609,17 +3642,19 @@ return (
                         € {Number(s.grand_total ?? 0).toFixed(2)}
                       </span> */}
 
+                      <span className="col-span-2 flex items-center justify-end gap-2 sm:col-span-1">
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
                         {normalizeTfCode(s.tf_code || s.tf)}
                       </span>
 
-                      <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                      <span className="rounded-lg bg-slate-900 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
                         Apri
                       </span>
 
                       {isAutoLoading && (
                         <Loader2 size={16} className="animate-spin text-blue-600" />
                       )}
+                      </span>
                     </button>
 
                     {s.stato === "BOZZA" && (
@@ -3628,7 +3663,7 @@ return (
                           e.stopPropagation();
                           handleDelete(s.id);
                         }}
-                        className="rounded-full p-1 opacity-60 transition hover:opacity-100 hover:bg-red-50"
+                        className="absolute right-2 top-2 rounded-full p-1 opacity-60 transition hover:bg-red-50 hover:opacity-100"
                         title="Elimina Bozza"
                         disabled={isAutoLoading}
                       >
@@ -3644,15 +3679,8 @@ return (
               </div>
             )}
 
-            {(autoCalculatingSessionId || pendingAutoCalculateSessionId) && (
-              <div className="mt-3 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700">
-                <Loader2 size={14} className="animate-spin" />
-                Attendere prego, sto preparando la sessione selezionata...
-              </div>
-            )}
           </div>
         </div>
-      </div> 
             <br></br>
 
       {!fatturaId ? (
@@ -4746,9 +4774,9 @@ return (
                         {totalAudit.totalsOk ? "OK" : "Da verificare"}
                       </div>
                     </div>
-                      <div className="overflow-x-auto">
-                          <table className="w-full text-xs border border-slate-200">
-                                <thead className="bg-slate-100 sticky top-0 z-20 uppercase shadow-sm">
+                      <div className="max-h-[72vh] overflow-auto rounded-lg border border-slate-200">
+                          <table className="min-w-[1800px] w-full text-xs">
+                                <thead className="sticky top-0 z-30 bg-slate-100 uppercase shadow-sm">
                                   <tr>
                                     <th className="p-2">ID</th>
                                     <th className="p-2">Utente</th>

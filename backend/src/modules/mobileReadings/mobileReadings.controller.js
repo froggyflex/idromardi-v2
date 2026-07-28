@@ -23,6 +23,22 @@ exports.listAssignments = async (req, res) => {
   }
 };
 
+exports.listCondominiumCatalog = async (req, res) => {
+  try {
+    res.json(await service.listCondominiumCatalog(req.query || {}, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
+exports.prepareWorkspace = async (req, res) => {
+  try {
+    res.json(await service.prepareWorkspace(req.body || {}, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
 exports.getAssignment = async (req, res) => {
   try {
     res.json(

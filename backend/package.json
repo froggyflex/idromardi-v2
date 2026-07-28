@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
+    "migrate:mobile": "node scripts/run-mobile-migration.js",
     "check": "node --check server.js && node --check src/app.js && node --check src/modules/auth/auth.service.js && node --check src/modules/mobileReadings/mobileReadings.controller.js && node --check src/modules/mobileReadings/mobileReadings.routes.js && node --check src/modules/mobileReadings/mobileReadings.service.js && node --check src/utils/readingPhotos.js"
   },
   "keywords": [],

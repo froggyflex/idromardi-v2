@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const db = require("../../config/db");
 const { getReadingPhoto, saveReadingPhoto } = require("../../utils/readingPhotos");
+const lettureService = require("../letture/letture.service");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FINAL_SUBMISSION_STATUSES = new Set(["ACCEPTED", "REJECTED"]);
@@ -404,6 +405,114 @@ async function listAssignments(actor) {
     params
   );
   return { assignments: rows };
+}
+
+async function listCondominiumCatalog({ periodYear, periodMonth }, actor) {
+  const year = Number(periodYear);
+  const month = Number(periodMonth);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw httpError(400, "Anno non valido", "INVALID_PERIOD_YEAR");
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw httpError(400, "Mese non valido", "INVALID_PERIOD_MONTH");
+  }
+  const { start, end } = monthBounds(year, month);
+  const [rows] = await db.query(
+    `SELECT c.id AS condominio_id,
+            c.nome AS condominio_nome,
+            c.indirizzo AS condominio_indirizzo,
+            c.codice AS condominio_codice,
+            s.id AS session_id,
+            s.stato AS session_status,
+            s.data_lettura_operatore,
+            own_assignment.id AS assignment_id,
+            (
+              SELECT COUNT(*)
+              FROM utenze_v2 u
+              WHERE u.condominio_id = c.id
+                AND (
+                  u.stato = 'ATTIVA' OR
+                  (u.data_chiusura IS NOT NULL AND u.data_chiusura >= ?)
+                )
+                AND (u.data_attivazione IS NULL OR u.data_attivazione <= ?)
+                AND (u.data_chiusura IS NULL OR u.data_chiusura >= ?)
+            ) AS utenze_count
+     FROM condomini_v2 c
+     LEFT JOIN letture_sessioni s
+       ON s.id_condominio = c.id
+      AND s.period_year = ?
+      AND s.period_month = ?
+     LEFT JOIN mobile_reading_assignments own_assignment
+       ON own_assignment.session_id = s.id
+      AND own_assignment.operator_id = ?
+     WHERE c.stato = 'ATTIVO'
+     ORDER BY c.codice ASC, c.nome ASC`,
+    [start, end, start, year, month, actor.sub]
+  );
+  return { periodYear: year, periodMonth: month, condomini: rows };
+}
+
+async function prepareWorkspace({ condominioIds, periodYear, periodMonth, dataOperatore }, actor) {
+  const year = Number(periodYear);
+  const month = Number(periodMonth);
+  const ids = [...new Set((Array.isArray(condominioIds) ? condominioIds : []).map(String))];
+  if (!ids.length) {
+    throw httpError(400, "Seleziona almeno un condominio", "NO_CONDOMINIUM_SELECTED");
+  }
+  if (ids.length > 100) {
+    throw httpError(400, "Puoi preparare al massimo 100 condomini alla volta", "TOO_MANY_CONDOMINIUMS");
+  }
+  ids.forEach((id) => assertUuid(id, "condominioId"));
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw httpError(400, "Anno non valido", "INVALID_PERIOD_YEAR");
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw httpError(400, "Mese non valido", "INVALID_PERIOD_MONTH");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dataOperatore || ""))) {
+    throw httpError(400, "Data lettura non valida", "INVALID_READING_DATE");
+  }
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const [activeCondomini] = await db.query(
+    `SELECT id, nome FROM condomini_v2
+     WHERE stato = 'ATTIVO' AND id IN (${placeholders})`,
+    ids
+  );
+  const names = new Map(activeCondomini.map((row) => [row.id, row.nome]));
+  const assignments = [];
+  const errors = [];
+
+  for (const condominioId of ids) {
+    if (!names.has(condominioId)) {
+      errors.push({ condominioId, error: "Condominio non attivo o non trovato" });
+      continue;
+    }
+    try {
+      const { session } = await lettureService.createOrLoadSession({
+        idCondominio: condominioId,
+        periodYear: year,
+        periodMonth: month,
+        dataOperatore,
+        note: "Preparato da app mobile",
+      });
+      assignments.push(
+        await createAssignment(
+          { sessionId: session.id, operatorId: actor.sub },
+          actor
+        )
+      );
+    } catch (error) {
+      errors.push({
+        condominioId,
+        condominioNome: names.get(condominioId),
+        error: error.message || "Preparazione non riuscita",
+        code: error.code || null,
+      });
+    }
+  }
+
+  return { assignments, errors };
 }
 
 async function createSubmission(input, actor) {
@@ -948,7 +1057,9 @@ module.exports = {
   createSubmission,
   getAssignmentPackage,
   listAssignments,
+  listCondominiumCatalog,
   listReviewQueue,
+  prepareWorkspace,
   readSubmissionPhoto,
   reconcileSubmissionStatuses,
   rejectSubmission,

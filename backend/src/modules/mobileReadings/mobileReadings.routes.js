@@ -29,6 +29,16 @@ router.get(
   controller.listAssignments
 );
 router.get(
+  "/catalog",
+  requireRole("ADMIN", "METER_READER"),
+  controller.listCondominiumCatalog
+);
+router.post(
+  "/workspace/prepare",
+  requireRole("ADMIN", "METER_READER"),
+  controller.prepareWorkspace
+);
+router.get(
   "/assignments/:id",
   requireRole("ADMIN", "METER_READER"),
   controller.getAssignment

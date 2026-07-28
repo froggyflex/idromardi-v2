@@ -28,6 +28,24 @@ export type AssignmentSummary = {
   accepted_count?: number;
 };
 
+export type CondominiumCatalogItem = {
+  condominio_id: string;
+  condominio_codice?: number | string | null;
+  data_lettura_operatore?: string | null;
+  condominio_nome: string;
+  condominio_indirizzo?: string | null;
+  session_id?: string | null;
+  session_status?: string | null;
+  assignment_id?: string | null;
+  utenze_count: number;
+};
+
+export type ReadingState = {
+  codice: string;
+  descrizione: string;
+  richiede_valore: number;
+};
+
 export type AssignmentItem = {
   assignment_id: string;
   utenza_id: string;
@@ -47,6 +65,7 @@ export type AssignmentItem = {
     meterSerial?: string;
   };
   reading_value?: number | null;
+  reading_state?: string | null;
   local_status?: LocalCaptureStatus | null;
   server_status?: ServerWorkflowStatus | null;
 };
@@ -54,11 +73,7 @@ export type AssignmentItem = {
 export type AssignmentPackage = {
   assignment: AssignmentSummary;
   items: AssignmentItem[];
-  readingStates: Array<{
-    codice: string;
-    descrizione: string;
-    richiede_valore: number;
-  }>;
+  readingStates: ReadingState[];
 };
 
 export type LocalCapture = {

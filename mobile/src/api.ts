@@ -1,5 +1,9 @@
 import { getToken, saveSession } from "./auth";
-import type { AssignmentPackage, AssignmentSummary } from "./types";
+import type {
+  AssignmentPackage,
+  AssignmentSummary,
+  CondominiumCatalogItem,
+} from "./types";
 
 const API_URL = String(process.env.EXPO_PUBLIC_API_URL || "").replace(/\/$/, "");
 
@@ -68,6 +72,34 @@ export async function login(username: string, password: string) {
 
 export function listAssignments() {
   return request<{ assignments: AssignmentSummary[] }>("/mobile-readings/assignments");
+}
+
+export function listCondominiumCatalog(periodYear: number, periodMonth: number) {
+  return request<{
+    periodYear: number;
+    periodMonth: number;
+    condomini: CondominiumCatalogItem[];
+  }>(`/mobile-readings/catalog?periodYear=${periodYear}&periodMonth=${periodMonth}`);
+}
+
+export function prepareWorkspace(payload: {
+  condominioIds: string[];
+  periodYear: number;
+  periodMonth: number;
+  dataOperatore: string;
+}) {
+  return request<{
+    assignments: AssignmentPackage[];
+    errors: Array<{
+      condominioId: string;
+      condominioNome?: string;
+      error: string;
+      code?: string | null;
+    }>;
+  }>("/mobile-readings/workspace/prepare", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function downloadAssignment(id: string) {

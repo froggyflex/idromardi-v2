@@ -1,6 +1,12 @@
 import * as Crypto from "expo-crypto";
 import * as SQLite from "expo-sqlite";
-import type { AssignmentItem, AssignmentPackage, AssignmentSummary, LocalCapture } from "./types";
+import type {
+  AssignmentItem,
+  AssignmentPackage,
+  AssignmentSummary,
+  LocalCapture,
+  ReadingState,
+} from "./types";
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -19,6 +25,7 @@ export async function initializeDatabase() {
       id TEXT PRIMARY KEY NOT NULL,
       operator_id TEXT,
       data_json TEXT NOT NULL,
+      reading_states_json TEXT NOT NULL DEFAULT '[]',
       context_version TEXT NOT NULL,
       downloaded_at TEXT NOT NULL
     );
@@ -73,6 +80,11 @@ export async function initializeDatabase() {
   if (!assignmentColumns.some((column) => column.name === "operator_id")) {
     await database.execAsync("ALTER TABLE assignments ADD COLUMN operator_id TEXT");
   }
+  if (!assignmentColumns.some((column) => column.name === "reading_states_json")) {
+    await database.execAsync(
+      "ALTER TABLE assignments ADD COLUMN reading_states_json TEXT NOT NULL DEFAULT '[]'"
+    );
+  }
   const legacyAssignments = await database.getAllAsync<{ id: string; data_json: string }>(
     "SELECT id, data_json FROM assignments WHERE operator_id IS NULL"
   );
@@ -92,20 +104,26 @@ export async function initializeDatabase() {
   }
 }
 
-export async function saveAssignmentPackage(payload: AssignmentPackage) {
+export async function saveAssignmentPackage(
+  payload: AssignmentPackage,
+  localOperatorId = payload.assignment.operator_id
+) {
   const database = await getDatabase();
   await database.withTransactionAsync(async () => {
     await database.runAsync(
-      `INSERT INTO assignments (id, operator_id, data_json, context_version, downloaded_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO assignments
+         (id, operator_id, data_json, reading_states_json, context_version, downloaded_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          operator_id = excluded.operator_id,
          data_json = excluded.data_json,
+         reading_states_json = excluded.reading_states_json,
          context_version = excluded.context_version,
          downloaded_at = excluded.downloaded_at`,
       payload.assignment.id,
-      payload.assignment.operator_id,
+      localOperatorId,
       JSON.stringify(payload.assignment),
+      JSON.stringify(payload.readingStates || []),
       payload.assignment.context_version,
       new Date().toISOString()
     );
@@ -128,6 +146,19 @@ export async function saveAssignmentPackage(payload: AssignmentPackage) {
   });
 }
 
+export async function listReadingStates(assignmentId: string): Promise<ReadingState[]> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<{ reading_states_json: string }>(
+    "SELECT reading_states_json FROM assignments WHERE id = ?",
+    assignmentId
+  );
+  try {
+    return JSON.parse(row?.reading_states_json || "[]") as ReadingState[];
+  } catch {
+    return [];
+  }
+}
+
 export async function listLocalAssignments(operatorId: string): Promise<AssignmentSummary[]> {
   const database = await getDatabase();
   const rows = await database.getAllAsync<{ data_json: string }>(
@@ -147,10 +178,12 @@ export async function listAssignmentItems(
   const rows = await database.getAllAsync<{
     data_json: string;
     reading_value: number | null;
+    reading_state: string | null;
     local_status: AssignmentItem["local_status"];
     server_status: AssignmentItem["server_status"];
   }>(
-    `SELECT ai.data_json, c.reading_value, c.local_status, c.server_status
+    `SELECT ai.data_json, c.reading_value, c.reading_state,
+            c.local_status, c.server_status
      FROM assignment_items ai
      LEFT JOIN captures c
        ON c.assignment_id = ai.assignment_id AND c.utenza_id = ai.utenza_id
@@ -163,6 +196,7 @@ export async function listAssignmentItems(
   return rows.map((row) => ({
     ...(JSON.parse(row.data_json) as AssignmentItem),
     reading_value: row.reading_value,
+    reading_state: row.reading_state,
     local_status: row.local_status,
     server_status: row.server_status,
   }));
