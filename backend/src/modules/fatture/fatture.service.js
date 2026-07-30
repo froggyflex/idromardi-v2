@@ -2466,6 +2466,9 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     const mapAtt = new Map(righeAtt.map((r) => [r.id_utenza, r]));
     const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
     const context = parseCalculationContextJson(session.calculation_context_json);
+    const calculationWarnings = Array.isArray(context.calculationWarnings)
+      ? context.calculationWarnings
+      : [];
     const parsedOneriNormale = round2(context.parsedOneriPerequazione);
     const eligiblePereqRows = righeRows.filter(
       (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
@@ -2536,6 +2539,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
       linkedImportedDocument,
       contatoreGenerale: { attuale: contGenAtt, precedente: contGenPrec },
       grid,
+      calculationWarnings,
     };
   } finally {
     conn.release();
@@ -2682,6 +2686,11 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
   
   const session = sessionRows[0];
   const context = parseCalculationContextJson(session.calculation_context_json);
+  const calculationWarnings = Array.isArray(interniTotals?.calculationWarnings)
+    ? interniTotals.calculationWarnings
+    : Array.isArray(context.calculationWarnings)
+    ? context.calculationWarnings
+    : [];
   const parsedOneriNormale = round2(context.parsedOneriPerequazione);
   const eligiblePereqRows = righeRows.filter(
     (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
@@ -2708,7 +2717,8 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
   return {
     session,
     righe: righeRows, 
-    generale: generaleResult?.generale || null
+    generale: generaleResult?.generale || null,
+    calculationWarnings,
      
   };
 }
@@ -3883,16 +3893,6 @@ async function calculateInterni(
       ["TF2", "TF3"].includes(normalizedTfCode) ||
       canReconcileTf1Rounding;
 
-    if (normalizedTfCode === "TF1" && !canReconcileTf1Rounding) {
-      const error = new Error(
-        `TF1 non riconciliata: il totale calcolato differisce di EUR ${Math.abs(
-          tf1UnexplainedDifference
-        ).toFixed(2)} dal totale ABC + oneri. Correggere tariffe/dati oppure usare TF2 o TF3.`
-      );
-      error.statusCode = 422;
-      throw error;
-    }
-
     const finalReconciliation = shouldReconcile
       ? reconcileRowsToTarget(rows, targetInterniTotal)
       : {
@@ -3903,7 +3903,10 @@ async function calculateInterni(
           ),
         };
 
-    if (Math.abs(finalReconciliation.residual) >= 0.01) {
+    if (
+      normalizedTfCode !== "TF1" &&
+      Math.abs(finalReconciliation.residual) >= 0.01
+    ) {
       const error = new Error(
         `Impossibile riconciliare il totale interni: residuo EUR ${finalReconciliation.residual.toFixed(
           2
@@ -3912,6 +3915,23 @@ async function calculateInterni(
       error.statusCode = 422;
       throw error;
     }
+
+    const calculationWarnings =
+      normalizedTfCode === "TF1" &&
+      Math.abs(tf1UnexplainedDifference) > 0.05
+        ? [
+            {
+              code: "TF1_NOT_RECONCILED",
+              level: "suggestion",
+              difference: tf1UnexplainedDifference,
+              message: `TF1 applicata con conguaglio pari a zero. La ripartizione differisce di EUR ${Math.abs(
+                tf1UnexplainedDifference
+              ).toFixed(
+                2
+              )} dal totale ABC + oneri. Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
+            },
+          ]
+        : [];
 
     // ------------------------------------------------------------
     // Persist fatture_righe
@@ -4075,6 +4095,7 @@ async function calculateInterni(
       targetInterniTotal,
       reconciledTotal: finalReconciliation.total,
       reconciliationResidual: finalReconciliation.residual,
+      calculationWarnings,
       diffApplied: diff,
       rows,
       tfCode: normalizeTfCode(tfCode),
@@ -4222,6 +4243,7 @@ exports.calculateSession = async function ({
         targetInterniTotal: interniTotals.targetInterniTotal,
         reconciledInterniTotal: interniTotals.reconciledTotal,
         reconciliationResidual: interniTotals.reconciliationResidual,
+        calculationWarnings: interniTotals.calculationWarnings,
       });
     }
     

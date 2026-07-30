@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
-import { Loader2, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Trash2, X } from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
 import { parse, set, weeksToDays } from "date-fns";
@@ -71,6 +71,7 @@ export default function CondominioFatturePage() {
     const [autoCalculatingSessionId, setAutoCalculatingSessionId] = useState<string | null>(null);
     const [pendingAutoCalculateSessionId, setPendingAutoCalculateSessionId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [calculationNotice, setCalculationNotice] = useState<string | null>(null);
     const [valPrec, setValPrec] = useState<number | string>("");
     const [valAtt, setValAtt] = useState<number | string>("");
     const [savingGenerale, setSavingGenerale] = useState(false);
@@ -2176,15 +2177,18 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       setGenerale(null);
       setRigheCalcoli([]);
       setDettaglioByUtenza({});
+      setCalculationNotice(null);
       return;
-    }
-    setError(null);
-    setLoadingDetail(true);
+      }
+      setError(null);
+      setCalculationNotice(null);
+      setLoadingDetail(true);
     try {
       //   backend has /condomini/:condominioId/fatture/:id
       const res = await api.get(`/fatture/condomini/${condominioId}/fatture/${fatturaId}`);
 
       setDetail(res.data);
+      setCalculationNotice(res.data?.calculationWarnings?.[0]?.message || null);
       setCurrentSession(res.data?.session || null);
       setRigheCalcoli(res.data?.righe || res.data?.grid || []);
       const linkedDocumentId =
@@ -2241,6 +2245,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     
     try {
       setError(null);
+      setCalculationNotice(null);
 
       if (!condominioId) {
         setError("Condominio non valido.");
@@ -2367,6 +2372,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         setAutoCalculatingSessionId(targetSessionId);
       }
       setError(null);
+      setCalculationNotice(null);
 
       try {
         let calculationDocument: any =
@@ -2545,6 +2551,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           righe: res.data.righe || [],
           session: res.data.session || prev?.session || null,
         }));
+        setCalculationNotice(res.data?.calculationWarnings?.[0]?.message || null);
 
         const newDettaglio: Record<string, any[]> = {};
 
@@ -3272,9 +3279,11 @@ const totaleInterni = Number(totals?.totaleInterni ?? 0);
 const totaleDocumentoConOneri = Number(
   (totaleDocumento + totaleOneri).toFixed(2)
 );
-const deltaTotali = totaleDocumentoConOneri - totaleInterni;
+const deltaTotali = Number((totaleInterni - totaleDocumento).toFixed(2));
+const deltaRispettoOneri = Number((deltaTotali - totaleOneri).toFixed(2));
 
-const deltaOk = Math.abs(deltaTotali) < 0.005;
+const deltaOk =
+  totaleDocumento > 0 && Math.abs(deltaRispettoOneri) < 0.005;
 const isGreen = totaleDocumentoConOneri > 0 && deltaOk;
 
 const getRowOneriPerequazione = (row: any) =>
@@ -3493,7 +3502,25 @@ return (
                       aria-label="Chiudi errore"
                       title="Chiudi"
                     >
-                      x
+                      <X size={15} />
+                    </button>
+                  </div>
+                )}
+                {calculationNotice && (
+                  <div className="mb-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                    <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold">Suggerimento sul TF</div>
+                      <div className="mt-1 text-sm text-amber-800">{calculationNotice}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCalculationNotice(null)}
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-600 transition hover:bg-amber-100 hover:text-amber-800"
+                      aria-label="Chiudi suggerimento"
+                      title="Chiudi"
+                    >
+                      <X size={15} />
                     </button>
                   </div>
                 )}
@@ -4436,8 +4463,8 @@ return (
                       </div>
                       <div className="mt-2 text-xs text-slate-500">
                         {deltaOk
-                          ? "I totali risultano allineati."
-                          : "Scostamento presente tra documento e ripartizione interna."}
+                          ? `Il delta corrisponde agli oneri condominio (€ ${totaleOneri.toFixed(2)}).`
+                          : `Delta atteso: oneri condominio € ${totaleOneri.toFixed(2)}. Scostamento residuo € ${deltaRispettoOneri.toFixed(2)}.`}
                       </div>
                     </div>
                   </div>
