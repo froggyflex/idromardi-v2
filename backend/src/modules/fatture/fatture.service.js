@@ -3059,7 +3059,7 @@ async function calculateInterni(
   annoAtt,
   annoPrec = null,
   eurStorno = 0,
-  totaleParsedWithOneri,
+  abcDocumentTotal,
   parsedOneriPerequazione = null,
   parsedOneriPerequazioneAcconto = null,
   parsedAccontoImporto = null,
@@ -3809,8 +3809,13 @@ async function calculateInterni(
     // TF base (TF applied on TF1 base, not stacked)
     // -------------------------------------------------------------------
     const baseSum = round2(rows.reduce((s, r) => s + n2(r.base_totale), 0));
-
-    const diff = totaleParsedWithOneri!=0? round2(n2(totaleParsedWithOneri) - baseSum) : round2(n2(generale.totale + totaleOneri) - baseSum);
+    const totConfiguredOneri = round2(
+      rows.reduce((sum, row) => sum + n2(row.configured_oneri), 0)
+    );
+    const resolvedAbcTotal =
+      n2(abcDocumentTotal) > 0 ? n2(abcDocumentTotal) : n2(generale.totale);
+    const targetInterniTotal = round2(resolvedAbcTotal + totConfiguredOneri);
+    const diff = round2(targetInterniTotal - baseSum);
 
     console.log(diff )
     applyTfToRows({ tfCode, diff, rows });
@@ -3858,6 +3863,54 @@ async function calculateInterni(
 
       r.imp_arr = arr;
       r.totale = round2(beforeMinimum + arr);
+    }
+
+    const normalizedTfCode = normalizeTfCode(tfCode);
+    const allocatedParsedOneri = round2(
+      rows.reduce(
+        (sum, row) => sum + n2(row.imp_oneri_perequazione_display),
+        0
+      )
+    );
+    const parsedOneriShareRounding = hasParsedOneri
+      ? round2(allocatedParsedOneri - n2(parsedOneriNormale))
+      : 0;
+    const tf1UnexplainedDifference = round2(diff + parsedOneriShareRounding);
+    const canReconcileTf1Rounding =
+      normalizedTfCode === "TF1" &&
+      Math.abs(tf1UnexplainedDifference) <= 0.05;
+    const shouldReconcile =
+      ["TF2", "TF3"].includes(normalizedTfCode) ||
+      canReconcileTf1Rounding;
+
+    if (normalizedTfCode === "TF1" && !canReconcileTf1Rounding) {
+      const error = new Error(
+        `TF1 non riconciliata: il totale calcolato differisce di EUR ${Math.abs(
+          tf1UnexplainedDifference
+        ).toFixed(2)} dal totale ABC + oneri. Correggere tariffe/dati oppure usare TF2 o TF3.`
+      );
+      error.statusCode = 422;
+      throw error;
+    }
+
+    const finalReconciliation = shouldReconcile
+      ? reconcileRowsToTarget(rows, targetInterniTotal)
+      : {
+          total: round2(rows.reduce((sum, row) => sum + n2(row.totale), 0)),
+          residual: round2(
+            targetInterniTotal -
+              rows.reduce((sum, row) => sum + n2(row.totale), 0)
+          ),
+        };
+
+    if (Math.abs(finalReconciliation.residual) >= 0.01) {
+      const error = new Error(
+        `Impossibile riconciliare il totale interni: residuo EUR ${finalReconciliation.residual.toFixed(
+          2
+        )}. Verificare il minimo pagabile e i crediti da riportare.`
+      );
+      error.statusCode = 422;
+      throw error;
     }
 
     // ------------------------------------------------------------
@@ -4013,11 +4066,15 @@ async function calculateInterni(
       totDep,
       totQf,
       totOneri,
+      totConfiguredOneri,
       totIva,
       sumUtenti,
       totConguaglio,
       totArr,
       baseSum,
+      targetInterniTotal,
+      reconciledTotal: finalReconciliation.total,
+      reconciliationResidual: finalReconciliation.residual,
       diffApplied: diff,
       rows,
       tfCode: normalizeTfCode(tfCode),
@@ -4073,6 +4130,9 @@ exports.calculateSession = async function ({
     });
     const resolvedImportedDocumentId =
       importedDocumentId ?? calculationContext?.importedDocumentId ?? null;
+    let resolvedAbcDocumentTotal = n2(
+      calculationContext?.totaleDocumento ?? totaleParsedWithOneri
+    );
     let resolvedEurStorno = eurStorno;
     let resolvedMcStorno = calculationContext?.mcStorno ?? session.mcStorno;
     let resolvedStornoSource = "request";
@@ -4083,6 +4143,13 @@ exports.calculateSession = async function ({
         [resolvedImportedDocumentId]
       );
       const importedDoc = docRows[0] ? enrichImportedDocumentWithStoredTxtSummary(docRows[0]) : null;
+      if (
+        importedDoc?.importo_totale_da_pagare !== null &&
+        importedDoc?.importo_totale_da_pagare !== undefined &&
+        Number.isFinite(Number(importedDoc.importo_totale_da_pagare))
+      ) {
+        resolvedAbcDocumentTotal = n2(importedDoc.importo_totale_da_pagare);
+      }
       let importedPayload = null;
 
       try {
@@ -4111,11 +4178,12 @@ exports.calculateSession = async function ({
       importedDocumentId: resolvedImportedDocumentId,
     });
 
-    const calculationContextJson = calculationContext
+    let calculationContextJson = calculationContext
       ? JSON.stringify({
           ...calculationContext,
           tfCode: effectiveTfCode,
           importedDocumentId: resolvedImportedDocumentId,
+          totaleDocumento: resolvedAbcDocumentTotal,
           eurStorno: resolvedEurStorno,
           mcStorno: resolvedMcStorno,
           stornoSource: resolvedStornoSource,
@@ -4138,13 +4206,24 @@ exports.calculateSession = async function ({
       annoAtt,
       annoPrec,
       resolvedEurStorno,
-      totaleParsedWithOneri,
+      resolvedAbcDocumentTotal,
       parsedOneriPerequazione,
       parsedOneriPerequazioneAcconto,
       parsedAccontoImporto,
       parsedAccontoDepFog,
       parsedAccontoTotale
     );
+
+    if (calculationContextJson) {
+      calculationContextJson = JSON.stringify({
+        ...JSON.parse(calculationContextJson),
+        abcDocumentTotal: resolvedAbcDocumentTotal,
+        configuredOneriTotal: interniTotals.totConfiguredOneri,
+        targetInterniTotal: interniTotals.targetInterniTotal,
+        reconciledInterniTotal: interniTotals.reconciledTotal,
+        reconciliationResidual: interniTotals.reconciliationResidual,
+      });
+    }
     
     
     await conn.query(
@@ -4177,8 +4256,12 @@ exports.calculateSession = async function ({
         0,
         g.qfTot,
         g.iva,
-        interniTotals.totOneri,
-        round2(n2(g.totale) + n2(interniTotals.totOneri)),
+        interniTotals.totConfiguredOneri,
+        round2(
+          (resolvedAbcDocumentTotal > 0
+            ? resolvedAbcDocumentTotal
+            : n2(g.totale)) + n2(interniTotals.totConfiguredOneri)
+        ),
         sessionId,
       ]
     );
@@ -4464,6 +4547,62 @@ exports.deleteSession = async function ({ sessionId }) {
 function roundToNearestTenth(amount) {
   // Legacy behavior: round to nearest 0.10 (keep 2 decimals, second cent digit becomes 0)
   return Math.round(n2(amount) * 10) / 10;
+}
+
+function reconcileRowsToTarget(rows, targetTotal) {
+  const currentTotal = () =>
+    round2(rows.reduce((sum, row) => sum + n2(row.totale), 0));
+
+  let residual = round2(n2(targetTotal) - currentTotal());
+  if (Math.abs(residual) < 0.01) {
+    return { total: currentTotal(), residual: 0 };
+  }
+
+  const primaryRows = rows.filter((row) => row._isPrimary);
+  const eligibleRows = primaryRows.filter(
+    (row) => row.tfEligible && n2(row.consumo_totale) > 0
+  );
+  const candidates = eligibleRows.length ? eligibleRows : primaryRows;
+
+  if (!candidates.length) {
+    return { total: currentTotal(), residual };
+  }
+
+  if (residual > 0) {
+    const row = [...candidates].sort(
+      (a, b) => n2(b.totale) - n2(a.totale)
+    )[0];
+
+    row.imp_arr = round2(n2(row.imp_arr) + residual);
+    row.totale = round2(n2(row.totale) + residual);
+  } else {
+    let reductionLeft = round2(Math.abs(residual));
+    const reducibleRows = [...candidates]
+      .map((row) => ({
+        row,
+        capacity: Math.max(
+          0,
+          round2(n2(row.totale) - getMinimumPayableForRow(row))
+        ),
+      }))
+      .filter((entry) => entry.capacity > 0)
+      .sort((a, b) => b.capacity - a.capacity);
+
+    for (const entry of reducibleRows) {
+      if (reductionLeft < 0.01) break;
+
+      const reduction = Math.min(entry.capacity, reductionLeft);
+      entry.row.imp_arr = round2(n2(entry.row.imp_arr) - reduction);
+      entry.row.totale = round2(n2(entry.row.totale) - reduction);
+      reductionLeft = round2(reductionLeft - reduction);
+    }
+  }
+
+  residual = round2(n2(targetTotal) - currentTotal());
+  return {
+    total: currentTotal(),
+    residual: Math.abs(residual) < 0.01 ? 0 : residual,
+  };
 }
 
 exports.createImportedDocument = async function (payload) {

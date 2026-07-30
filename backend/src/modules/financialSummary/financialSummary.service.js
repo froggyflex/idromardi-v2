@@ -1546,60 +1546,131 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     throw new Error("anno non valido.");
   }
 
-  const normalizedType = String(documentType).trim().toUpperCase();
+  const requestedType = String(documentType).trim().toUpperCase();
+  const normalizedType =
+    requestedType === "PAGAMENTO" ? "PAYMENT" : requestedType;
+  const documentConfig = {
+    PROFORMA: { table: "proformas", prefix: "PF" },
+    FATTURA: { table: "fatture", prefix: "FT" },
+    PAYMENT: { table: "payments", prefix: "PG" },
+  }[normalizedType];
 
-  if (!["PROFORMA", "FATTURA", "PAGAMENTO"].includes(normalizedType)) {
-      throw new Error(`Tipo documento non supportato: ${normalizedType}`);
+  if (!documentConfig) {
+    throw new Error(`Tipo documento non supportato: ${requestedType}`);
   }
 
-  
+  const documentYear = Number(anno);
+
+  // Older code attempted to write PAGAMENTO into an enum that accepts PAYMENT.
+  // MySQL stored that invalid enum value as an empty string; recover that row
+  // before creating a new counter for the same year.
+  if (normalizedType === "PAYMENT") {
+    const [paymentCounterRows] = await conn.query(
+      `
+      SELECT id, document_type, current_value
+      FROM document_number_counters
+      WHERE anno = ?
+        AND (document_type = 'PAYMENT' OR document_type = '')
+      FOR UPDATE
+      `,
+      [documentYear]
+    );
+    const validCounter = paymentCounterRows.find(
+      (row) => row.document_type === "PAYMENT"
+    );
+    const legacyCounter = paymentCounterRows.find(
+      (row) => row.document_type === ""
+    );
+
+    if (!validCounter && legacyCounter) {
+      await conn.query(
+        `
+        UPDATE document_number_counters
+        SET document_type = 'PAYMENT', updated_at = NOW()
+        WHERE id = ?
+        `,
+        [legacyCounter.id]
+      );
+    } else if (validCounter && legacyCounter) {
+      await conn.query(
+        `
+        UPDATE document_number_counters
+        SET current_value = GREATEST(current_value, ?), updated_at = NOW()
+        WHERE id = ?
+        `,
+        [Number(legacyCounter.current_value || 0), validCounter.id]
+      );
+      await conn.query(
+        `DELETE FROM document_number_counters WHERE id = ?`,
+        [legacyCounter.id]
+      );
+    }
+  }
+
+  await conn.query(
+    `
+    INSERT IGNORE INTO document_number_counters (
+      id,
+      document_type,
+      anno,
+      current_value,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, 0, NOW(), NOW())
+    `,
+    [crypto.randomUUID(), normalizedType, documentYear]
+  );
 
   const [rows] = await conn.query(
     `
     SELECT id, current_value
     FROM document_number_counters
-    WHERE document_type = ?  
+    WHERE document_type = ?
+      AND anno = ?
+    LIMIT 1
     FOR UPDATE
+    `,
+    [normalizedType, documentYear]
+  );
+
+  if (!rows.length) {
+    throw new Error(
+      `Contatore numerazione non disponibile per ${normalizedType} ${documentYear}.`
+    );
+  }
+
+  const [[issuedRow]] = await conn.query(
+    `
+    SELECT COALESCE(MAX(numero_progressivo), 0) AS max_value
+    FROM ${documentConfig.table}
+    `
+  );
+  const [[counterMaxRow]] = await conn.query(
+    `
+    SELECT COALESCE(MAX(current_value), 0) AS max_value
+    FROM document_number_counters
+    WHERE document_type = ?
     `,
     [normalizedType]
   );
+  const nextValue =
+    Math.max(
+      Number(rows[0].current_value || 0),
+      Number(issuedRow?.max_value || 0),
+      Number(counterMaxRow?.max_value || 0)
+    ) + 1;
 
-    
-  let nextValue = 1;
-
-  if (!rows.length) {
-    const counterId = crypto.randomUUID();
-
-    await conn.query(
-      `
-      INSERT INTO document_number_counters (
-        id,
-        document_type,
-        anno,
-        current_value,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, 1, NOW(), NOW())
-      `,
-      [counterId, normalizedType, Number(anno)]
-    );
-
-    nextValue = 1;
-  } else {
-    nextValue = Number(rows[0].current_value || 0) + 1;
-
-    await conn.query(
-      `
-      UPDATE document_number_counters
-      SET
-        current_value = ?,
-        updated_at = NOW()
-      WHERE id = ?
-      `,
-      [nextValue, rows[0].id]
-    );
-  }
+  await conn.query(
+    `
+    UPDATE document_number_counters
+    SET
+      current_value = ?,
+      updated_at = NOW()
+    WHERE id = ?
+    `,
+    [nextValue, rows[0].id]
+  );
 
   const padded = String(nextValue).padStart(6, "0");
 
@@ -1613,18 +1684,12 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
         .replace(/^-+|-+$/g, "")
     : null;
 
-  const prefixMap = {
-    PROFORMA: "PF",
-    FATTURA: "FT",
-    PAGAMENTO: "PG",
-  };
-
-  const prefix = prefixMap[normalizedType];
-
   return {
     documentType: normalizedType,
     progressivo: nextValue,
-    numero: slug ? `${prefix}-${padded}-${slug}` : `${prefix}-${padded}`,
+    numero: slug
+      ? `${documentConfig.prefix}-${padded}-${slug}`
+      : `${documentConfig.prefix}-${padded}`,
   };
 }
 

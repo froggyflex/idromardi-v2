@@ -2482,11 +2482,9 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           parsedOneriPerequazioneAcconto: parsedHasOneri
             ? Number(parsedAccontoForCalc?.oneri ?? oneriPerequazioneAcconto ?? 0)
             : null,
-          totaleParsedWithOneri: parsedHasOneri
-            ? parsedDocumentTotalForCalc
-            : totaleDocumentoConOneri
-            ? Number(totaleDocumentoConOneri)
-            : 0,
+          // The backend adds condominium-configured oneri separately.
+          // This value must remain the untouched ABC document total.
+          totaleParsedWithOneri: parsedDocumentTotalForCalc,
           importedDocumentId: calculationDocument?.id || null,
           calculationContext: {
             importedDocumentId: calculationDocument?.id || null,
@@ -3190,6 +3188,12 @@ const totals = useMemo(() => {
       acc.qf += Number(row.imp_qf || 0);
       acc.cong += Number(row.conguaglio || 0);
       acc.oneri += Number(row.imp_oneri || 0);
+      acc.oneriConfigurati += Number(
+        row.imp_oneri_base_display ??
+          row.configured_oneri ??
+          row.imp_oneri ??
+          0
+      );
       acc.acconto += Number(row.acconto || 0);
       acc.accontoAcq += Number(row.imp_acconto || 0);
       acc.accontoDepFog += Number(row.depfog_acconto || 0);
@@ -3209,6 +3213,7 @@ const totals = useMemo(() => {
       qf: 0,
       cong: 0,
       oneri: 0,
+      oneriConfigurati: 0,
       acconto: 0,
       accontoAcq: 0,
       accontoDepFog: 0,
@@ -3249,7 +3254,7 @@ const totals = useMemo(() => {
 }, [righe, session]);
 
 const totaleDocumento = Number(activeImportedDocument?.importo_totale_da_pagare ?? 0);
-const totaleOneri = Number(totals?.oneri ?? 0);
+const totaleOneri = Number(totals?.oneriConfigurati ?? 0);
 const selectedDocHasParsedOneri = hasOneriPerequazioneRows(
   activeImportedDocument?.parsed_payload_json
 );
@@ -3264,13 +3269,13 @@ const displayedOneriPereqShare = useMemo(() => {
 }, [righe, selectedDocHasParsedOneri, totaleParsedOneriPereq]);
 
 const totaleInterni = Number(totals?.totaleInterni ?? 0);
-const totaleDocumentoConOneri = selectedDocHasParsedOneri
-  ? totaleDocumento
-  : totaleDocumento + totaleOneri;
+const totaleDocumentoConOneri = Number(
+  (totaleDocumento + totaleOneri).toFixed(2)
+);
 const deltaTotali = totaleDocumentoConOneri - totaleInterni;
 
-const deltaOk = Math.abs(deltaTotali) < 0.5;
-const isGreen:any = totaleDocumentoConOneri? (totaleDocumentoConOneri <= totaleInterni) : false;
+const deltaOk = Math.abs(deltaTotali) < 0.005;
+const isGreen = totaleDocumentoConOneri > 0 && deltaOk;
 
 const getRowOneriPerequazione = (row: any) =>
   Number(row?.riga?.imp_oneri_perequazione_display ?? NaN) >= 0
@@ -3399,6 +3404,9 @@ const totalAudit = useMemo(() => {
   const displayedRowsTotal = roundMoney(
     righe.reduce((sum: number, row: any) => sum + getDisplayedRowTotal(row), 0)
   );
+  const reconciledOk =
+    totaleDocumentoConOneri <= 0 ||
+    Math.abs(displayedRowsTotal - totaleDocumentoConOneri) < 0.005;
 
   return {
     rowErrors,
@@ -3406,11 +3414,19 @@ const totalAudit = useMemo(() => {
     storedRowsTotal,
     displayedRowsTotal,
     rowsOk: rowErrors.length === 0,
+    reconciledOk,
     totalsOk:
       Math.abs(expectedRowsTotal - storedRowsTotal) <= 0.01 &&
-      Math.abs(displayedRowsTotal - totaleInterniVisibile) <= 0.01,
+      Math.abs(displayedRowsTotal - totaleInterniVisibile) <= 0.01 &&
+      reconciledOk,
   };
-}, [righe, selectedDocHasParsedOneri, displayedOneriPereqShare, totaleInterniVisibile]);
+}, [
+  righe,
+  selectedDocHasParsedOneri,
+  displayedOneriPereqShare,
+  totaleInterniVisibile,
+  totaleDocumentoConOneri,
+]);
 
 const activeTariffCategory = activeTariffPreview?.category || null;
 const activeTariffScaglioni = Array.isArray(activeTariffCategory?.scaglioni)
@@ -4381,7 +4397,7 @@ return (
                         Dovuto incasso
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        {selectedDocHasParsedOneri ? "Totale documento con oneri parser" : "Totale ente + oneri"}
+                        ABC € {totaleDocumento.toFixed(2)} + oneri condominio € {totaleOneri.toFixed(2)}
                       </div>
                       <div className="mt-2 text-2xl font-bold text-slate-900">
                         € {totaleDocumentoConOneri.toFixed(2)}
