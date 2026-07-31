@@ -47,6 +47,14 @@ type ComponentName =
 
 type SignMode = "all" | "positive" | "negative";
 type PeriodMode = "all" | "acconto" | "non_acconto";
+type LegacyAccontoEntry = {
+  idUtenza: string;
+  importoEuro: number;
+  importoMc: number;
+  residuoEuro?: number;
+  usatoEuro?: number;
+  periodoOrigine?: string | null;
+};
 
 
 export default function CondominioFatturePage() {
@@ -122,6 +130,12 @@ export default function CondominioFatturePage() {
     const [totaleAcconto, setTotaleAcconto] = useState<number>(0);
     const [mcAcconto, setMcAcconto] = useState<number>(0);
     const [oneriPerequazioneAcconto, setOneriPerequazioneAcconto] = useState<number | string>(0);
+    const [legacyAcconti, setLegacyAcconti] = useState<LegacyAccontoEntry[]>([]);
+    const [legacyDraft, setLegacyDraft] = useState<Record<string, { euro: string; mc: string }>>({});
+    const [legacyPeriodoOrigine, setLegacyPeriodoOrigine] = useState("");
+    const [legacyEditorOpen, setLegacyEditorOpen] = useState(false);
+    const [loadingLegacy, setLoadingLegacy] = useState(false);
+    const [savingLegacy, setSavingLegacy] = useState(false);
    //-------------------------------------------------------
 
     const canCreate = useMemo(() => {
@@ -190,6 +204,18 @@ export default function CondominioFatturePage() {
     const gridRows = Array.isArray(detail?.grid) ? detail.grid : [];
     const calculatedRows = Array.isArray(detail?.righe) ? detail.righe : [];
     const righe = (gridRows.length > 0 ? gridRows : calculatedRows).map(normalizeFatturaRow);
+    const legacyEditorRows = righe.filter((row: any, index: number, all: any[]) => {
+      const id = String(row?.utenza?.id || row?.id_utenza || "");
+      return id && all.findIndex((candidate) => String(candidate?.utenza?.id || candidate?.id_utenza || "") === id) === index;
+    });
+    const legacyDraftTotal = Object.values(legacyDraft).reduce(
+      (sum, entry) => sum + (Number(entry.euro) || 0),
+      0
+    );
+    const legacyResidualTotal = legacyAcconti.reduce(
+      (sum, entry) => sum + Number(entry.residuoEuro ?? entry.importoEuro ?? 0),
+      0
+    );
     const periodoAttuale = detail?.periodoAttuale ?? null;
     const periodoPrecedente = detail?.periodoPrecedente ?? null;
     const consumoGenerale =
@@ -2169,6 +2195,78 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       setError(err?.response?.data?.error || "Errore eliminazione");
     }
   }
+
+  async function loadLegacyAcconti() {
+    if (!fatturaId) {
+      setLegacyAcconti([]);
+      setLegacyDraft({});
+      setLegacyPeriodoOrigine("");
+      return;
+    }
+
+    setLoadingLegacy(true);
+    try {
+      const { data } = await api.get(`/fatture/sessioni/${fatturaId}/acconti-legacy`);
+      const entries: LegacyAccontoEntry[] = Array.isArray(data?.entries) ? data.entries : [];
+      const draft: Record<string, { euro: string; mc: string }> = {};
+      entries.forEach((entry) => {
+        draft[String(entry.idUtenza)] = {
+          euro: Number(entry.importoEuro || 0).toFixed(2),
+          mc: Number(entry.importoMc || 0) > 0 ? String(Number(entry.importoMc)) : "",
+        };
+      });
+      setLegacyAcconti(entries);
+      setLegacyDraft(draft);
+      setLegacyPeriodoOrigine(data?.periodoOrigine || "");
+      if (entries.length) setLegacyEditorOpen(true);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Errore caricamento saldi della piattaforma precedente");
+    } finally {
+      setLoadingLegacy(false);
+    }
+  }
+
+  function updateLegacyDraft(idUtenza: string, field: "euro" | "mc", value: string) {
+    setLegacyDraft((current) => ({
+      ...current,
+      [idUtenza]: {
+        euro: current[idUtenza]?.euro || "",
+        mc: current[idUtenza]?.mc || "",
+        [field]: value,
+      },
+    }));
+  }
+
+  async function saveLegacyAccontiAndRecalculate() {
+    if (!fatturaId) return;
+    setSavingLegacy(true);
+    setError(null);
+
+    try {
+      const entries = Object.entries(legacyDraft)
+        .map(([idUtenza, values]) => ({
+          idUtenza,
+          importoEuro: Math.max(0, Number(values.euro) || 0),
+          importoMc: Math.max(0, Number(values.mc) || 0),
+        }))
+        .filter((entry) => entry.importoEuro > 0 || entry.importoMc > 0);
+
+      await api.put(`/fatture/sessioni/${fatturaId}/acconti-legacy`, {
+        periodoOrigine: legacyPeriodoOrigine,
+        entries,
+      });
+      await calcola();
+      await loadLegacyAcconti();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || "Errore salvataggio saldi iniziali");
+    } finally {
+      setSavingLegacy(false);
+    }
+  }
+
+  useEffect(() => {
+    loadLegacyAcconti();
+  }, [fatturaId]);
 
   async function loadDetail() {
     if (!condominioId || !fatturaId) {
@@ -4176,7 +4274,140 @@ return (
     </div>
   </div>
 </section>
- 
+
+          {fatturaId && (
+            <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                    Passaggio dalla piattaforma precedente
+                  </div>
+                  <h3 className="mt-1 text-base font-semibold text-slate-900">
+                    Acconti precedenti per utenza
+                  </h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Utilizzati come storno solo quando il TXT corrente contiene uno storno.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLegacyEditorOpen((open) => !open)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  {legacyEditorOpen ? "Chiudi" : legacyAcconti.length ? "Modifica saldi" : "Inserisci saldi"}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50/70 sm:grid-cols-4">
+                <div className="px-4 py-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Storno nel TXT</div>
+                  <div className="mt-1 font-semibold text-slate-900">EUR {Math.abs(Number(eurStorno || 0)).toFixed(2)}</div>
+                </div>
+                <div className="px-4 py-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Saldo legacy inserito</div>
+                  <div className="mt-1 font-semibold text-slate-900">EUR {legacyDraftTotal.toFixed(2)}</div>
+                </div>
+                <div className="px-4 py-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Residuo disponibile</div>
+                  <div className="mt-1 font-semibold text-slate-900">EUR {legacyResidualTotal.toFixed(2)}</div>
+                </div>
+                <div className="px-4 py-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Esito previsto</div>
+                  <div className={`mt-1 text-xs font-bold ${Math.abs(Number(eurStorno || 0)) > 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                    {Math.abs(Number(eurStorno || 0)) > 0
+                      ? legacyDraftTotal > 0
+                        ? "Storno TXT + saldo precedente, nel rispetto del minimo"
+                        : "Solo storno TXT; nessun saldo precedente inserito"
+                      : "Nessun saldo consumato senza storno TXT"}
+                  </div>
+                </div>
+              </div>
+
+              {legacyEditorOpen && (
+                <div className="px-5 py-5">
+                  <div className="mb-4 grid gap-4 md:grid-cols-[minmax(240px,420px)_1fr] md:items-end">
+                    <label className="block">
+                      <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                        Periodo della bolletta precedente
+                      </span>
+                      <input
+                        type="text"
+                        value={legacyPeriodoOrigine}
+                        onChange={(event) => setLegacyPeriodoOrigine(event.target.value)}
+                        placeholder="Esempio: 07/2025 - 10/2025"
+                        className="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-slate-500">
+                      Il minimo fatturabile resta sempre oneri + QF + IVA QF. La parte non applicabile non viene persa: rimane credito nominativo per un periodo successivo.
+                    </p>
+                  </div>
+
+                  <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
+                    <table className="w-full min-w-[720px] text-sm">
+                      <thead className="sticky top-0 z-10 bg-slate-100 text-[11px] uppercase tracking-wide text-slate-600">
+                        <tr>
+                          <th className="px-3 py-2 text-left">ID</th>
+                          <th className="px-3 py-2 text-left">Utenza</th>
+                          <th className="px-3 py-2 text-left">Interno</th>
+                          <th className="px-3 py-2 text-right">Acconto precedente EUR</th>
+                          <th className="px-3 py-2 text-right">MC opzionali</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {legacyEditorRows.map((row: any) => {
+                          const idUtenza = String(row?.utenza?.id || row?.id_utenza || "");
+                          const values = legacyDraft[idUtenza] || { euro: "", mc: "" };
+                          return (
+                            <tr key={idUtenza} className="border-t border-slate-100 even:bg-slate-50/60">
+                              <td className="px-3 py-2 text-slate-500">{row?.utenza?.id_user || "-"}</td>
+                              <td className="px-3 py-2 font-medium text-slate-900">
+                                {[row?.utenza?.Nome, row?.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                              </td>
+                              <td className="px-3 py-2 text-slate-600">{row?.utenza?.Interno || "-"}</td>
+                              <td className="px-3 py-2 text-right">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={values.euro}
+                                  onChange={(event) => updateLegacyDraft(idUtenza, "euro", event.target.value)}
+                                  className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right font-semibold outline-none focus:border-blue-400"
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.001"
+                                  value={values.mc}
+                                  onChange={(event) => updateLegacyDraft(idUtenza, "mc", event.target.value)}
+                                  className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right outline-none focus:border-blue-400"
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-end gap-3">
+                    {loadingLegacy && <span className="text-xs text-slate-500">Caricamento...</span>}
+                    <button
+                      type="button"
+                      onClick={saveLegacyAccontiAndRecalculate}
+                      disabled={savingLegacy || loadingCalc}
+                      className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {savingLegacy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      Salva e ricalcola
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           {/* CALCULATION BREAKDOWN */}
           <div className="rounded-[28px] border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-6 shadow-sm sm:p-7">
@@ -4987,6 +5218,14 @@ return (
                                             {getRowStornoMc(r).toFixed(2)}mc
                                             <br />
                                             {Number(r.riga?.storno_acconto ?? 0).toFixed(2)}
+                                            {(Math.abs(Number(r.riga?.storno_legacy || 0)) > 0.004 ||
+                                              Math.abs(Number(r.riga?.storno_txt_aggiuntivo || 0)) > 0.004) && (
+                                              <div className="mt-1 text-[9px] leading-tight text-slate-500">
+                                                TXT {Number(r.riga?.storno_txt_aggiuntivo || 0).toFixed(2)}
+                                                <br />
+                                                Prec. {Number(r.riga?.storno_legacy || 0).toFixed(2)}
+                                              </div>
+                                            )}
                                           </td>
                                           <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
                                           <td className="p-2 text-center font-semibold">
@@ -5053,6 +5292,21 @@ return (
                                                       <span>Totale Consumo</span>
                                                       <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
                                                     </div>
+                                                    {(Math.abs(Number(r.riga?.storno_acconto || 0)) > 0.004 || minimumCreditEuro > 0) && (
+                                                      <div className="mt-3 border-t border-slate-200 pt-3 text-xs text-slate-700">
+                                                        <div className="mb-2 font-bold uppercase tracking-wide text-slate-500">
+                                                          Composizione storno
+                                                        </div>
+                                                        <div className="grid gap-1 sm:grid-cols-3">
+                                                          <span>Da TXT: EUR {Number(r.riga?.storno_txt_aggiuntivo || 0).toFixed(2)}</span>
+                                                          <span>
+                                                            Acconto piattaforma precedente
+                                                            {r.riga?.storno_legacy_periodo ? ` (${r.riga.storno_legacy_periodo})` : ""}: EUR {Number(r.riga?.storno_legacy || 0).toFixed(2)}
+                                                          </span>
+                                                          <span>Totale applicato: EUR {Number(r.riga?.storno_acconto || 0).toFixed(2)}</span>
+                                                        </div>
+                                                      </div>
+                                                    )}
                                                     {minimumPayableApplied && (
                                                       <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-800">
                                                         <div className="font-bold uppercase tracking-wide">

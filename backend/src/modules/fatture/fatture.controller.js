@@ -416,6 +416,28 @@ exports.getImportedDocumentById = async (req, res) => {
   }
 };
 
+exports.getLegacyAcconti = async (req, res) => {
+  try {
+    const result = await service.getLegacyAcconti({ sessionId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    res.status(err.message === "Session not found" ? 404 : 400).json({ error: err.message });
+  }
+};
+
+exports.saveLegacyAcconti = async (req, res) => {
+  try {
+    const result = await service.saveLegacyAcconti({
+      sessionId: req.params.id,
+      periodoOrigine: req.body?.periodoOrigine,
+      entries: req.body?.entries,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err.message === "Session not found" ? 404 : 400).json({ error: err.message });
+  }
+};
+
 exports.listGeneratedDocuments = async (req, res, next) => {
   try {
     const rows = await service.listGeneratedDocuments({

@@ -24,6 +24,7 @@ const DEFAULT_AI_PARSER_BASE_URL =
 let ripartizionePdfColumns = null;
 let fattureSessionColumns = null;
 let fattureRigheColumns = null;
+let fattureAccontiColumns = null;
 
 async function getRipartizionePdfColumns() {
   if (ripartizionePdfColumns) return ripartizionePdfColumns;
@@ -112,11 +113,68 @@ async function ensureFattureRigheRecuperoColumns() {
     alters.push("ADD COLUMN recupero_note VARCHAR(255) NULL AFTER recupero_lettura");
   }
 
+  if (!columns.has("storno_legacy")) {
+    alters.push("ADD COLUMN storno_legacy DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_acconto");
+  }
+
+  if (!columns.has("storno_txt_aggiuntivo")) {
+    alters.push("ADD COLUMN storno_txt_aggiuntivo DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_legacy");
+  }
+
+  if (!columns.has("credito_storno_residuo")) {
+    alters.push(
+      "ADD COLUMN credito_storno_residuo DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_txt_aggiuntivo"
+    );
+  }
+
+  if (!columns.has("storno_legacy_periodo")) {
+    alters.push(
+      "ADD COLUMN storno_legacy_periodo VARCHAR(100) NULL AFTER credito_storno_residuo"
+    );
+  }
+
   if (!alters.length) return columns;
 
   await db.query(`ALTER TABLE fatture_righe ${alters.join(", ")}`);
   fattureRigheColumns = null;
   return getFattureRigheColumns();
+}
+
+async function getFattureAccontiColumns() {
+  if (fattureAccontiColumns) return fattureAccontiColumns;
+
+  const [columns] = await db.query(
+    `
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'fatture_acconti_movimenti'
+    `
+  );
+
+  fattureAccontiColumns = new Set(columns.map((row) => row.COLUMN_NAME));
+  return fattureAccontiColumns;
+}
+
+async function ensureFattureAccontiTransitionColumns() {
+  const columns = await getFattureAccontiColumns();
+  const alters = [];
+
+  if (!columns.has("origine_credito")) {
+    alters.push(
+      "ADD COLUMN origine_credito VARCHAR(20) NULL AFTER source_movimento_id"
+    );
+  }
+
+  if (!columns.has("periodo_origine")) {
+    alters.push("ADD COLUMN periodo_origine VARCHAR(100) NULL AFTER origine_credito");
+  }
+
+  if (!alters.length) return columns;
+
+  await db.query(`ALTER TABLE fatture_acconti_movimenti ${alters.join(", ")}`);
+  fattureAccontiColumns = null;
+  return getFattureAccontiColumns();
 }
 
 async function getImportedDocumentLinkedToSession(conn, session) {
@@ -1970,7 +2028,9 @@ function annotateMinimumPayableRow(row) {
   const minimum = getMinimumPayableForRow(row);
   const total = round2(n2(row.totale));
   const storno = round2(n2(row.storno_acconto ?? row.storno_totale));
-  const explicitCredit = round2(n2(row._storno_credit_euro));
+  const explicitCredit = round2(
+    n2(row._storno_credit_euro) + n2(row.credito_storno_residuo)
+  );
   const isCapped =
     explicitCredit > 0 ||
     (storno < 0 && total > 0 && Math.abs(total - minimum) <= 0.05);
@@ -1990,6 +2050,8 @@ function yearDaysCount(year) {
   return leap ? 366 : 365;
 }
 async function loadOpenAccontoCredits(conn, idUtenza) {
+  await ensureFattureAccontiTransitionColumns();
+
   const [rows] = await conn.query(
     `
     SELECT
@@ -1998,6 +2060,8 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
       m.id_fattura,
       m.id_riga_fattura,
       m.created_at,
+      m.origine_credito,
+      m.periodo_origine,
       m.importo_euro AS euro_orig,
       m.importo_mc AS mc_orig,
       COALESCE(SUM(s.importo_euro), 0) AS euro_usato,
@@ -2010,7 +2074,8 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
       AND m.tipo_movimento IN ('ACCONTO_CARICATO', 'RETTIFICA_POS')
     GROUP BY
       m.id, m.id_utenza, m.id_fattura, m.id_riga_fattura,
-      m.created_at, m.importo_euro, m.importo_mc
+      m.created_at, m.origine_credito, m.periodo_origine,
+      m.importo_euro, m.importo_mc
     HAVING
       ROUND(m.importo_euro - COALESCE(SUM(s.importo_euro), 0), 2) > 0
       OR ROUND(m.importo_mc - COALESCE(SUM(s.importo_mc), 0), 3) > 0
@@ -2025,67 +2090,13 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
     id_fattura: r.id_fattura,
     id_riga_fattura: r.id_riga_fattura,
     created_at: r.created_at,
+    origine_credito: r.origine_credito || "PIATTAFORMA",
+    periodo_origine: r.periodo_origine || null,
     open_euro: round2(n2(r.euro_orig) - n2(r.euro_usato)),
     open_mc: round3(n2(r.mc_orig) - n2(r.mc_usato)),
   }));
 }
 
-async function applyOpenAccontoToRow(conn, row) {
-  const credits = await loadOpenAccontoCredits(conn, row.id_utenza);
-
-  let remainingEuroCap = round2(getAvailableStornoReductionEuro(row));
-  let remainingMcCap = round3(Math.max(0, n2(row.consumo_normale)));
-
-  let usedEuro = 0;
-  let usedMc = 0;
-  const movements = [];
-
-  for (const c of credits) {
-    if (remainingEuroCap <= 0 && remainingMcCap <= 0) break;
-
-    const euroFactor =
-      c.open_euro > 0 ? remainingEuroCap / c.open_euro : Number.POSITIVE_INFINITY;
-
-    const mcFactor =
-      c.open_mc > 0 ? remainingMcCap / c.open_mc : Number.POSITIVE_INFINITY;
-
-    const factor = Math.max(0, Math.min(1, euroFactor, mcFactor));
-
-    if (factor <= 0) continue;
-
-    let takeEuro = c.open_euro > 0 ? round2(c.open_euro * factor) : 0;
-    let takeMc = c.open_mc > 0 ? round3(c.open_mc * factor) : 0;
-
-    // rounding guard
-    if (takeEuro > remainingEuroCap) takeEuro = round2(remainingEuroCap);
-    if (takeMc > remainingMcCap) takeMc = round3(remainingMcCap);
-
-    if (takeEuro <= 0 && takeMc <= 0) continue;
-
-    usedEuro = round2(usedEuro + takeEuro);
-    usedMc = round3(usedMc + takeMc);
-
-    remainingEuroCap = round2(remainingEuroCap - takeEuro);
-    remainingMcCap = round3(remainingMcCap - takeMc);
-
-    movements.push({
-      source_movimento_id: c.id,
-      importo_euro: takeEuro,
-      importo_mc: takeMc,
-    });
-
-   
-  }
-
-  row.storno_pregresso = round2(-usedEuro);
-  row._storno_mc = round3(usedMc);
-  row._storno_movements = movements;
-
-  row.base_totale = round2(n2(row.base_totale) + n2(row.storno_pregresso));
-
-  return row;
-}
- 
 function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearDays, key}) {
   let remaining = Math.max(0, n2(consumo));
   let total = 0;
@@ -2438,7 +2449,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
         `
         SELECT 
           fr.*,
-          COALESCE((
+          COALESCE(fr.credito_storno_residuo, 0) + COALESCE((
             SELECT SUM(m.importo_euro)
             FROM fatture_acconti_movimenti m
             WHERE m.id_riga_fattura = fr.id
@@ -2541,6 +2552,196 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
       grid,
       calculationWarnings,
     };
+  } finally {
+    conn.release();
+  }
+};
+
+exports.getLegacyAcconti = async function ({ sessionId }) {
+  assertUUID(sessionId, "sessionId");
+  await ensureFattureAccontiTransitionColumns();
+
+  const [sessions] = await db.query(
+    `SELECT id, id_condominio FROM fatture_sessioni WHERE id = ? LIMIT 1`,
+    [sessionId]
+  );
+  if (!sessions.length) throw new Error("Session not found");
+
+  const [rows] = await db.query(
+    `
+    SELECT
+      m.id,
+      m.id_utenza,
+      m.importo_euro,
+      m.importo_mc,
+      m.periodo_origine,
+      m.note,
+      COALESCE(SUM(s.importo_euro), 0) AS importo_euro_usato,
+      COALESCE(SUM(s.importo_mc), 0) AS importo_mc_usato,
+      u.id_user,
+      CONCAT(u.nome, ' ', u.cognome) AS utente,
+      u.interno
+    FROM fatture_acconti_movimenti m
+    JOIN utenze_v2 u ON u.id = m.id_utenza
+    LEFT JOIN fatture_acconti_movimenti s
+      ON s.source_movimento_id = m.id
+     AND s.tipo_movimento = 'STORNO_APPLICATO'
+    WHERE m.id_fattura = ?
+      AND m.tipo_movimento = 'RETTIFICA_POS'
+      AND m.origine_credito = 'LEGACY'
+    GROUP BY
+      m.id, m.id_utenza, m.importo_euro, m.importo_mc,
+      m.periodo_origine, m.note, u.id_user, u.nome, u.cognome, u.interno
+    ORDER BY u.id_user ASC
+    `,
+    [sessionId]
+  );
+
+  const entries = rows.map((row) => ({
+    id: row.id,
+    idUtenza: row.id_utenza,
+    idUser: row.id_user,
+    utente: row.utente,
+    interno: row.interno,
+    importoEuro: round2(row.importo_euro),
+    importoMc: round3(row.importo_mc),
+    usatoEuro: round2(row.importo_euro_usato),
+    usatoMc: round3(row.importo_mc_usato),
+    residuoEuro: round2(n2(row.importo_euro) - n2(row.importo_euro_usato)),
+    residuoMc: round3(n2(row.importo_mc) - n2(row.importo_mc_usato)),
+    periodoOrigine: row.periodo_origine || null,
+    note: row.note || null,
+  }));
+
+  return {
+    sessionId,
+    periodoOrigine: entries.find((entry) => entry.periodoOrigine)?.periodoOrigine || null,
+    totaleEuro: round2(entries.reduce((sum, entry) => sum + entry.importoEuro, 0)),
+    residuoEuro: round2(entries.reduce((sum, entry) => sum + entry.residuoEuro, 0)),
+    entries,
+  };
+};
+
+exports.saveLegacyAcconti = async function ({ sessionId, periodoOrigine, entries }) {
+  assertUUID(sessionId, "sessionId");
+  if (!Array.isArray(entries)) throw new Error("entries must be an array");
+  if (entries.length > 10000) throw new Error("Too many legacy entries");
+
+  await ensureFattureAccontiTransitionColumns();
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const [sessions] = await conn.query(
+      `SELECT id, id_condominio FROM fatture_sessioni WHERE id = ? FOR UPDATE`,
+      [sessionId]
+    );
+    if (!sessions.length) throw new Error("Session not found");
+    const session = sessions[0];
+
+    const normalized = new Map();
+    for (const raw of entries) {
+      const idUtenza = String(raw?.idUtenza || raw?.id_utenza || "").trim();
+      assertUUID(idUtenza, "idUtenza");
+      const importoEuro = round2(Math.max(0, n2(raw?.importoEuro ?? raw?.importo_euro)));
+      const importoMc = round3(Math.max(0, n2(raw?.importoMc ?? raw?.importo_mc)));
+      if (importoEuro <= 0 && importoMc <= 0) continue;
+
+      normalized.set(idUtenza, {
+        idUtenza,
+        importoEuro,
+        importoMc,
+        note: String(raw?.note || "").trim().slice(0, 255) || null,
+      });
+    }
+
+    const ids = [...normalized.keys()];
+    if (ids.length) {
+      const placeholders = ids.map(() => "?").join(",");
+      const [validUsers] = await conn.query(
+        `SELECT id FROM utenze_v2 WHERE condominio_id = ? AND id IN (${placeholders})`,
+        [session.id_condominio, ...ids]
+      );
+      const validIds = new Set(validUsers.map((row) => row.id));
+      const invalidId = ids.find((id) => !validIds.has(id));
+      if (invalidId) throw new Error(`Utenza non valida per il condominio: ${invalidId}`);
+    }
+
+    const [legacyRows] = await conn.query(
+      `
+      SELECT id
+      FROM fatture_acconti_movimenti
+      WHERE id_fattura = ?
+        AND tipo_movimento = 'RETTIFICA_POS'
+        AND origine_credito = 'LEGACY'
+      `,
+      [sessionId]
+    );
+    const legacyIds = legacyRows.map((row) => row.id);
+
+    if (legacyIds.length) {
+      const placeholders = legacyIds.map(() => "?").join(",");
+      const [futureUses] = await conn.query(
+        `
+        SELECT COUNT(*) AS total
+        FROM fatture_acconti_movimenti
+        WHERE tipo_movimento = 'STORNO_APPLICATO'
+          AND source_movimento_id IN (${placeholders})
+          AND id_fattura <> ?
+        `,
+        [...legacyIds, sessionId]
+      );
+      if (Number(futureUses[0]?.total || 0) > 0) {
+        throw new Error(
+          "Il saldo iniziale e gia stato utilizzato in un periodo successivo e non puo essere modificato."
+        );
+      }
+
+      await conn.query(
+        `DELETE FROM fatture_acconti_movimenti
+         WHERE tipo_movimento = 'STORNO_APPLICATO'
+           AND source_movimento_id IN (${placeholders})
+           AND id_fattura = ?`,
+        [...legacyIds, sessionId]
+      );
+    }
+
+    await conn.query(
+      `DELETE FROM fatture_acconti_movimenti
+       WHERE id_fattura = ?
+         AND tipo_movimento = 'RETTIFICA_POS'
+         AND origine_credito = 'LEGACY'`,
+      [sessionId]
+    );
+
+    const sourcePeriod = String(periodoOrigine || "").trim().slice(0, 100) || null;
+    for (const entry of normalized.values()) {
+      await conn.query(
+        `
+        INSERT INTO fatture_acconti_movimenti
+          (id, id_utenza, id_fattura, id_riga_fattura,
+           tipo_movimento, importo_euro, importo_mc, source_movimento_id,
+           origine_credito, periodo_origine, note)
+        VALUES (?, ?, ?, NULL, 'RETTIFICA_POS', ?, ?, NULL, 'LEGACY', ?, ?)
+        `,
+        [
+          uuid(),
+          entry.idUtenza,
+          sessionId,
+          entry.importoEuro,
+          entry.importoMc,
+          sourcePeriod,
+          entry.note || "Saldo acconto iniziale da piattaforma precedente",
+        ]
+      );
+    }
+
+    await conn.commit();
+    return exports.getLegacyAcconti({ sessionId });
+  } catch (error) {
+    await conn.rollback();
+    throw error;
   } finally {
     conn.release();
   }
@@ -2659,8 +2860,8 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     `
     SELECT 
       fr.*,
-      COALESCE((
-        SELECT SUM(m.importo_euro)
+          COALESCE(fr.credito_storno_residuo, 0) + COALESCE((
+            SELECT SUM(m.importo_euro)
         FROM fatture_acconti_movimenti m
         WHERE m.id_riga_fattura = fr.id
           AND m.tipo_movimento = 'RETTIFICA_POS'
@@ -3077,6 +3278,7 @@ async function calculateInterni(
   parsedAccontoTotale = null
 ) {
   await ensureFattureRigheRecuperoColumns();
+  await ensureFattureAccontiTransitionColumns();
 
   console.log(generale);
   // ---------- helpers ----------
@@ -3311,7 +3513,12 @@ async function calculateInterni(
     const qfPerNuae = totNuae > 0 ? n2(generale.qfTot) / totNuae : 0;
 
     // ---------- Clear snapshot ----------
-    await conn.query(`DELETE FROM fatture_acconti_movimenti WHERE id_fattura = ?`, [session.id]);
+    await conn.query(
+      `DELETE FROM fatture_acconti_movimenti
+       WHERE id_fattura = ?
+         AND COALESCE(origine_credito, '') <> 'LEGACY'`,
+      [session.id]
+    );
     await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
 
     // ---------- Group by UNIT (billing_group_id for doppio) ----------
@@ -3568,6 +3775,10 @@ async function calculateInterni(
 
         storno_calcolato: 0,   // current invoice storno from mcStorno
         storno_pregresso: 0,   // old ledger credit consumed
+        storno_legacy: 0,
+        storno_txt_aggiuntivo: 0,
+        credito_storno_residuo: 0,
+        storno_legacy_periodo: null,
         storno_totale: 0,      // persisted printable storno
         recupero_lettura: recuperoLettura ? 1 : 0,
         recupero_note: recuperoLettura
@@ -3583,6 +3794,7 @@ async function calculateInterni(
 
         tfEligible: !isSpecial(first) && consumoTot !== null && n2(consumoTot) > 0,
         _unitKey: key,
+        _unitMemberIds: group.map((member) => member.id),
         _isPrimary: true,
       });
 
@@ -3624,6 +3836,10 @@ async function calculateInterni(
 
             storno_calcolato: 0,
             storno_pregresso: 0,
+            storno_legacy: 0,
+            storno_txt_aggiuntivo: 0,
+            credito_storno_residuo: 0,
+            storno_legacy_periodo: null,
             storno_totale: 0,
             recupero_lettura: recuperoByUtenza.get(gk.id) ? 1 : 0,
             recupero_note: recuperoNoteByUtenza.get(gk.id) || null,
@@ -3736,60 +3952,145 @@ async function calculateInterni(
 
     if (totStornoCalcolato < 0) {
       const requestedReduction = round2(Math.abs(totStornoCalcolato));
-      const totalCapacity = round2(
-        primaries.reduce((sum, r) => sum + getAvailableStornoReductionEuro(r), 0)
-      );
-      const appliedReductionTotal = Math.min(requestedReduction, totalCapacity);
       const totalStornoMc = Math.abs(n2(session.mcStorno ?? 0));
-      const appliedMcTotal =
-        requestedReduction > 0
-          ? round3((totalStornoMc * appliedReductionTotal) / requestedReduction)
-          : 0;
-      const appliedReductionShares = allocateByWeightWithCapacity(
-        appliedReductionTotal,
+      const creditsByPrimary = new Map();
+
+      for (const row of primaries) {
+        const memberIds = Array.isArray(row._unitMemberIds)
+          ? row._unitMemberIds
+          : [row.id_utenza];
+        const credits = [];
+        for (const idUtenza of memberIds) {
+          const memberCredits = await loadOpenAccontoCredits(conn, idUtenza);
+          credits.push(...memberCredits);
+        }
+        creditsByPrimary.set(row, credits);
+      }
+
+      const openEuroFor = (row) =>
+        round2(
+          (creditsByPrimary.get(row) || []).reduce(
+            (sum, credit) => sum + Math.max(0, n2(credit.open_euro)),
+            0
+          )
+        );
+
+      // The TXT storno and previous-user balances are separate deductions.
+      // Each row keeps its TXT share; anything blocked by the minimum becomes
+      // credit for a later period instead of being moved to another user.
+      const desiredTxtShares = allocateByWeight(
+        requestedReduction,
         primaries,
         moneyWeightFn,
-        getAvailableStornoReductionEuro,
         2
       );
+      const appliedTxtShares = primaries.map((row, index) =>
+        round2(
+          Math.min(
+            Math.max(0, n2(desiredTxtShares[index])),
+            getAvailableStornoReductionEuro(row)
+          )
+        )
+      );
+      const blockedTxtShares = primaries.map((row, index) =>
+        round2(Math.max(0, n2(desiredTxtShares[index]) - n2(appliedTxtShares[index])))
+      );
+
+      const appliedCreditShares = primaries.map((row, index) => {
+        const capacityAfterTxt = Math.max(
+          0,
+          round2(getAvailableStornoReductionEuro(row) - n2(appliedTxtShares[index]))
+        );
+        return round2(Math.min(openEuroFor(row), capacityAfterTxt));
+      });
+
+      for (let index = 0; index < primaries.length; index++) {
+        const row = primaries[index];
+        let remaining = appliedCreditShares[index];
+        let legacyUsed = 0;
+        let platformUsed = 0;
+        let usedMc = 0;
+        const movements = [];
+        const legacyPeriods = new Set();
+
+        for (const credit of creditsByPrimary.get(row) || []) {
+          if (remaining <= 0) break;
+          const takeEuro = round2(Math.min(remaining, Math.max(0, n2(credit.open_euro))));
+          if (takeEuro <= 0) continue;
+
+          const takeMc =
+            n2(credit.open_euro) > 0
+              ? round3(Math.min(n2(credit.open_mc), (n2(credit.open_mc) * takeEuro) / n2(credit.open_euro)))
+              : 0;
+          const isLegacy = credit.origine_credito === "LEGACY";
+
+          if (isLegacy) {
+            legacyUsed = round2(legacyUsed + takeEuro);
+            if (credit.periodo_origine) legacyPeriods.add(String(credit.periodo_origine));
+          } else {
+            platformUsed = round2(platformUsed + takeEuro);
+          }
+          usedMc = round3(usedMc + takeMc);
+          remaining = round2(remaining - takeEuro);
+          movements.push({
+            source_movimento_id: credit.id,
+            id_utenza: credit.id_utenza,
+            importo_euro: takeEuro,
+            importo_mc: takeMc,
+            origine_credito: credit.origine_credito,
+          });
+        }
+
+        row.storno_legacy = round2(-legacyUsed);
+        row.storno_legacy_periodo = [...legacyPeriods].join(", ") || null;
+        row.storno_pregresso = round2(-platformUsed);
+        row._storno_mc = usedMc;
+        row._storno_movements = movements;
+        row.credito_storno_residuo = round2(
+          Math.max(0, openEuroFor(row) - n2(appliedCreditShares[index]))
+        );
+      }
+
+      const totalAppliedShares = primaries.map((row, index) =>
+        round2(n2(appliedCreditShares[index]) + n2(appliedTxtShares[index]))
+      );
+      const txtAppliedTotal = round2(appliedTxtShares.reduce((sum, value) => sum + n2(value), 0));
+      const appliedMcTotal =
+        requestedReduction > 0
+          ? round3((totalStornoMc * txtAppliedTotal) / requestedReduction)
+          : 0;
       const appliedMcShares = allocateByWeight(
         appliedMcTotal,
-        appliedReductionShares.map((share) => ({ share })),
-        (item) => n2(item.share),
+        appliedTxtShares.map((share) => ({ share })),
+        (item) => item.share,
         3
       );
-      const unappliedReductionTotal = round2(requestedReduction - appliedReductionTotal);
-      const unappliedReductionShares =
-        unappliedReductionTotal > 0
-          ? allocateByWeight(unappliedReductionTotal, primaries, moneyWeightFn, 2)
-          : primaries.map(() => 0);
-      const unappliedMcShares =
-        unappliedReductionTotal > 0
-          ? allocateByWeight(
-              round3(
-                totalStornoMc - appliedMcShares.reduce((sum, value) => sum + n2(value), 0)
-              ),
-              primaries,
-              moneyWeightFn,
-              3
-            )
-          : primaries.map(() => 0);
+      const blockedTxtMcTotal = round3(Math.max(0, totalStornoMc - appliedMcTotal));
+      const blockedTxtMcShares = allocateByWeight(
+        blockedTxtMcTotal,
+        blockedTxtShares.map((share) => ({ share })),
+        (item) => item.share,
+        3
+      );
 
-      for (let i = 0; i < primaries.length; i++) {
-        const r = primaries[i];
-        const appliedReduction = round2(appliedReductionShares[i] || 0);
+      for (let index = 0; index < primaries.length; index++) {
+        const row = primaries[index];
+        const txtApplied = round2(appliedTxtShares[index] || 0);
+        const totalAppliedForRow = round2(totalAppliedShares[index] || 0);
 
-        r.storno_calcolato = round2(-appliedReduction);
-        r._storno_calcolato_mc = round3(appliedMcShares[i] || 0);
-        r._storno_credit_euro = round2(unappliedReductionShares[i] || 0);
-        r._storno_credit_mc = round3(unappliedMcShares[i] || 0);
-        r.base_totale = round2(n2(r._base_prima_storno) + n2(r.storno_calcolato));
+        row.storno_txt_aggiuntivo = round2(-txtApplied);
+        row.storno_calcolato = round2(-txtApplied);
+        row._storno_calcolato_mc = round3(appliedMcShares[index] || 0);
+        row._storno_credit_euro = round2(blockedTxtShares[index] || 0);
+        row._storno_credit_mc = round3(blockedTxtMcShares[index] || 0);
+        row.base_totale = round2(n2(row._base_prima_storno) - totalAppliedForRow);
       }
     } else {
       const positiveStornoShares = allocateByWeight(totStornoCalcolato, primaries, moneyWeightFn, 2);
       for (let i = 0; i < primaries.length; i++) {
         const r = primaries[i];
         r.storno_calcolato = round2(positiveStornoShares[i] || 0);
+        r.storno_txt_aggiuntivo = r.storno_calcolato;
         r.base_totale = round2(n2(r._base_prima_storno) + n2(r.storno_calcolato));
       }
     }
@@ -3798,21 +4099,11 @@ async function calculateInterni(
     parsedOneriRemainder = 0;
     generale.totaleOneri = totaleOneri;
 
-    // -------------------------------------------------------------------
-    // PASS 2B: apply old open acconto credits from ledger (FIFO)
-    // IMPORTANT:
-    // applyOpenAccontoToRow(conn, row) MUST:
-    //   - set row.storno_pregresso as NEGATIVE invoice-facing value
-    //   - set row._storno_movements = [...]
-    //   - add row.storno_pregresso to row.base_totale
-    // -------------------------------------------------------------------
-    for (const r of primaries) {
-      await applyOpenAccontoToRow(conn, r);
-    }
-
     // finalize printable storno field
     for (const r of rows) {
-      r.storno_totale = round2(n2(r.storno_calcolato) + n2(r.storno_pregresso));
+      r.storno_totale = round2(
+        n2(r.storno_legacy) + n2(r.storno_pregresso) + n2(r.storno_txt_aggiuntivo)
+      );
     }
 
     // -------------------------------------------------------------------
@@ -3822,12 +4113,25 @@ async function calculateInterni(
     const totConfiguredOneri = round2(
       rows.reduce((sum, row) => sum + n2(row.configured_oneri), 0)
     );
+    const previousCreditsApplied = round2(
+      rows.reduce(
+        (sum, row) =>
+          sum + Math.abs(n2(row.storno_legacy)) + Math.abs(n2(row.storno_pregresso)),
+        0
+      )
+    );
+    const txtStornoCreditCreated = round2(
+      rows.reduce((sum, row) => sum + n2(row._storno_credit_euro), 0)
+    );
     const resolvedAbcTotal =
       n2(abcDocumentTotal) > 0 ? n2(abcDocumentTotal) : n2(generale.totale);
-    const targetInterniTotal = round2(resolvedAbcTotal + totConfiguredOneri);
+    const targetInterniTotal = round2(
+      resolvedAbcTotal +
+        totConfiguredOneri -
+        previousCreditsApplied +
+        txtStornoCreditCreated
+    );
     const diff = round2(targetInterniTotal - baseSum);
-
-    console.log(diff )
     applyTfToRows({ tfCode, diff, rows });
 
     if (
@@ -3928,7 +4232,7 @@ async function calculateInterni(
                 tf1UnexplainedDifference
               ).toFixed(
                 2
-              )} dal totale ABC + oneri. Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
+              )} dal totale di controllo (ABC + oneri - crediti precedenti applicati + storni rinviati). Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
             },
           ]
         : [];
@@ -3952,8 +4256,10 @@ async function calculateInterni(
          conguaglio, imp_arr,
          totale,
          imp_acconto, depfog_acconto, acconto, storno_acconto,
+         storno_legacy, storno_txt_aggiuntivo, credito_storno_residuo,
+         storno_legacy_periodo,
          recupero_lettura, recupero_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           rowId,
@@ -3986,6 +4292,10 @@ async function calculateInterni(
           r.depfog_acconto,
           r.acconto,
           r.storno_totale,
+          r.storno_legacy,
+          r.storno_txt_aggiuntivo,
+          r.credito_storno_residuo,
+          r.storno_legacy_periodo,
           r.recupero_lettura ? 1 : 0,
           r.recupero_note || null,
         ]
@@ -4051,7 +4361,7 @@ async function calculateInterni(
             `,
             [
               uuid(),
-              r.id_utenza,
+              sm.id_utenza || r.id_utenza,
               session.id,
               r.id_riga_fattura,
               round2(n2(sm.importo_euro)),
@@ -4093,6 +4403,8 @@ async function calculateInterni(
       totArr,
       baseSum,
       targetInterniTotal,
+      previousCreditsApplied,
+      txtStornoCreditCreated,
       reconciledTotal: finalReconciliation.total,
       reconciliationResidual: finalReconciliation.residual,
       calculationWarnings,

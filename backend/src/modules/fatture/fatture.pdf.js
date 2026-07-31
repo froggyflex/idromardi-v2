@@ -100,6 +100,19 @@ function qtyMoneyRow(label, qty, amount, extraClass = "") {
   `;
 }
 
+function creditInfoRow(amount) {
+  if (Math.abs(Number(amount || 0)) < 0.005) return "";
+  return `
+    <tr>
+      <td>
+        <div class="line-main">Credito residuo rinviato</div>
+        <div class="line-sub">Non incluso nel totale; disponibile per un periodo successivo</div>
+      </td>
+      <td class="amount">€ ${euro(amount)}</td>
+    </tr>
+  `;
+}
+
 function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
 
   const nome = [r?.utenza?.Nome, r?.utenza?.Cognome].filter(Boolean).join(" ") || "-";
@@ -115,6 +128,17 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
   const stato = r?.riga?.stato_attuale ?? r?.attuale?.stato_lettura ?? "-";
   const consumoTot = intVal(r?.riga?.consumo_totale);
   const consumoAcconto = euro(r?.riga?.consumo_acconto);
+  const stornoTotale = Number(r?.riga?.storno_acconto || 0);
+  const stornoTxt = Number(r?.riga?.storno_txt_aggiuntivo || 0);
+  const stornoLegacy = Number(r?.riga?.storno_legacy || 0);
+  const stornoLegacyLabel = r?.riga?.storno_legacy_periodo
+    ? `Storno acconto precedente (${r.riga.storno_legacy_periodo})`
+    : "Storno acconto piattaforma precedente";
+  const stornoPiattaforma = Number((stornoTotale - stornoTxt - stornoLegacy).toFixed(2));
+  const hasStornoBreakdown =
+    Math.abs(stornoTxt) > 0.004 ||
+    Math.abs(stornoLegacy) > 0.004 ||
+    Math.abs(stornoPiattaforma) > 0.004;
 
   const totale = euro(r?.riga?.totale);
   const dettaglioRipartizione =
@@ -208,7 +232,14 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
                   ${moneyRow("IVA", r?.riga?.imp_iva)}
                   ${qtyMoneyRow("Acconto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto)}
                   ${moneyRow("Acconto dep./fog.", r?.riga?.depfog_acconto)}
-                  ${moneyRow("Storno acconto", r?.riga?.storno_acconto)}
+                  ${
+                    hasStornoBreakdown
+                      ? `${Math.abs(stornoTxt) > 0.004 ? moneyRow("Storno da documento TXT", stornoTxt) : ""}
+                         ${Math.abs(stornoLegacy) > 0.004 ? moneyRow(stornoLegacyLabel, stornoLegacy) : ""}
+                         ${Math.abs(stornoPiattaforma) > 0.004 ? moneyRow("Storno credito periodi precedenti", stornoPiattaforma) : ""}`
+                      : moneyRow("Storno acconto", r?.riga?.storno_acconto)
+                  }
+                  ${creditInfoRow(r?.riga?.minimum_payable_credit_euro ?? r?.riga?.credito_storno_residuo)}
                   ${moneyRow("Arrotondamento", r?.riga?.imp_arr)}
                 </tbody>
               </table>

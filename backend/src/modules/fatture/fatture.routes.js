@@ -24,6 +24,8 @@ const upload = multer({ storage: storage });
 
 router.post("/sessioni", controller.createOrLoadSession);
 router.get( "/condomini/:condominioId/fatture/:id", controller.getSessionDetail);
+router.get("/sessioni/:id/acconti-legacy", controller.getLegacyAcconti);
+router.put("/sessioni/:id/acconti-legacy", controller.saveLegacyAcconti);
 router.put("/sessioni/:id/parametri", controller.updateSessionParams);
 router.post("/sessioni/:id/calcola", controller.calculateSession);
 router.get("/condominio/:id", controller.getByCondominio);

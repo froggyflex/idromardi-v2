@@ -24,6 +24,10 @@ export default function InvoicePrintCard({
   const lettPrec = r?.riga?.lettura_precedente ?? r?.precedente?.valore_lettura ?? "";
   const stato = r?.riga?.stato_attuale ?? r?.attuale?.stato_lettura ?? "";
   const consumo = num(r?.riga?.consumo_totale);
+  const stornoTotale = Number(r?.riga?.storno_acconto || 0);
+  const stornoTxt = Number(r?.riga?.storno_txt_aggiuntivo || 0);
+  const stornoLegacy = Number(r?.riga?.storno_legacy || 0);
+  const stornoPrecedente = Number((stornoTotale - stornoTxt - stornoLegacy).toFixed(2));
 
   return (
     <div className="invoice-card">
@@ -97,7 +101,8 @@ export default function InvoicePrintCard({
         <div className="cell"><div className="label">IVA</div><div className="value">€ {euro(r?.riga?.imp_iva)}</div></div>
         <div className="cell"><div className="label">Acconto mc</div><div className="value">{euro(r?.riga?.consumo_acconto)} mc</div></div>
         <div className="cell"><div className="label">Acconto €</div><div className="value">€ {euro(r?.riga?.imp_acconto)}</div></div>
-        <div className="cell"><div className="label">Storno €</div><div className="value">€ {euro(r?.riga?.storno_acconto)}</div></div>
+        <div className="cell"><div className="label">Storno TXT</div><div className="value">€ {euro(stornoTxt)}</div></div>
+        <div className="cell"><div className="label">Storno precedente</div><div className="value">€ {euro(stornoLegacy + stornoPrecedente)}</div></div>
         <div className="cell"><div className="label">Arr.</div><div className="value">€ {euro(r?.riga?.imp_arr)}</div></div>
       </div>
 
