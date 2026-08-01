@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
-import { AlertTriangle, Loader2, Trash2, X } from "lucide-react";
+import { AlertTriangle, FileText, Loader2, Trash2, Upload, X } from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
 import { parse, set, weeksToDays } from "date-fns";
@@ -3943,23 +3943,19 @@ return (
         <>
       
           {/* CONTATORE GENERALE */}
-          <div className="bg-white border rounded-2xl p-6 w-full space-y-6">
-
-            <div className="flex justify-between items-center">
-              <h3 className="font-semibold text-lg">Imposta Giorni</h3>
-            </div>
+          <div className="w-full rounded-2xl border border-slate-200 bg-white p-3 sm:p-4">
           {/* ============================= */}
           {/* CONTROLLO CALCOLO + GENERALE */}
           {/* ============================= */}
-        <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
   {/* HEADER */}
-  <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-6 py-5 sm:flex-row sm:items-start sm:justify-between">
+  <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
     <div>
-      <h3 className="text-xl font-bold tracking-tight text-slate-900">
+      <h3 className="text-base font-bold text-slate-900">
         Preparazione calcolo
       </h3>
-      <p className="mt-1 max-w-2xl text-sm text-slate-500">
-        Carica il documento provider, controlla i documenti importati e aggiorna i parametri della sessione.
+      <p className="mt-0.5 max-w-2xl text-xs text-slate-500">
+        Documento provider e parametri della sessione.
       </p>
     </div>
 
@@ -3969,19 +3965,20 @@ return (
   </div>
 
   {/* IMPORT AREA - FULL WIDTH */}
-  <div className="border-b border-slate-200 px-6 py-5">
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px_180px] lg:items-end">
+  <div className="border-b border-slate-200 px-4 py-3">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_132px] lg:items-end">
       <label className="block">
-        <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">
           File bolletta
         </span>
 
-        <div className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 transition hover:border-slate-400 hover:bg-slate-100">
+        <div className="flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 transition hover:border-slate-400 hover:bg-slate-100">
+          <FileText className="h-4 w-4 shrink-0 text-slate-400" />
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-800">
+            <div className="truncate text-xs font-semibold text-slate-800">
               {importFile ? importFile.name : "Seleziona un file"}
             </div>
-            <div className="text-xs text-slate-500">
+            <div className="truncate text-[10px] text-slate-500">
               {importFile ? "Pronto per il caricamento" : "Nessun file selezionato"}
             </div>
           </div>
@@ -3996,12 +3993,12 @@ return (
       </label>
 
       <label className="block">
-        <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">
           Provider
         </span>
 
         <select
-          className="h-[58px] w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400"
+          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
           value={importProviderId}
           onChange={(e) => setImportProviderId(e.target.value)}
         >
@@ -4017,23 +4014,24 @@ return (
       <button
         onClick={uploadImportedInvoice}
         disabled={!importFile || uploadingImport}
-        className="inline-flex h-[58px] items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
+        <Upload className="h-4 w-4" />
         {uploadingImport ? "Caricamento..." : "Carica"}
       </button>
     </div>
   </div>
 
   {/* MAIN SPLIT */}
-  <div className="grid grid-cols-1 gap-6 p-6 xl:grid-cols-2">
+  <div className="grid grid-cols-1 items-start gap-4 p-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(380px,0.92fr)]">
     {/* LEFT - DOCUMENTI CARICATI */}
-    <div className="rounded-[24px] border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/70 px-5 py-4">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/70 px-4 py-3">
         <div>
-          <h4 className="text-base font-bold text-slate-900">
+          <h4 className="text-sm font-bold text-slate-900">
             Documenti caricati
           </h4>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-0.5 text-[11px] text-slate-500">
             Analisi e associazione dei documenti provider.
           </p>
         </div>
@@ -4043,7 +4041,7 @@ return (
         </span>
       </div>
 
-      <div className="border-b border-slate-200 p-4">
+      <div className="border-b border-slate-200 p-3">
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
             value={importedSearch}
@@ -4075,17 +4073,17 @@ return (
         </div>
       ) : (
         <>
-          <div className="max-h-[420px] overflow-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <div className="max-h-[320px] overflow-auto">
+            <table className="min-w-full divide-y divide-slate-200 text-xs">
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
                     Nome documento
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
                     Stato analisi
                   </th>
-                  <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
                     Azioni
                   </th>
                 </tr>
@@ -4127,25 +4125,25 @@ return (
                             : "hover:bg-slate-50"
                         }`}
                       >
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-2.5">
                           <button
                             type="button"
                             onClick={() => loadImportedDocumentForSession(doc.id)}
-                            className="max-w-[260px] truncate text-left font-bold text-slate-900 hover:text-blue-700"
+                            className="block max-w-[300px] truncate text-left font-bold text-slate-900 hover:text-blue-700"
                           >
                             {documentName}
                           </button>
 
-                          <div className="mt-1 max-w-[260px] truncate text-xs text-slate-500">
+                          <div className="mt-0.5 max-w-[300px] truncate text-[10px] text-slate-500">
                             File: {doc.original_filename || "-"}
                           </div>
 
-                          <div className="mt-1 text-xs font-semibold text-slate-700">
+                          <div className="mt-0.5 text-[11px] font-semibold text-slate-700">
                             € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
                           </div>
                         </td>
 
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-2.5">
                           <span
                             className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${statusClass}`}
                           >
@@ -4153,7 +4151,7 @@ return (
                           </span>
                         </td>
 
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-2.5">
                           <div className="flex justify-end gap-2">
                             {status !== "parsed" && status !== "imported" && (
                               <button
@@ -4193,7 +4191,7 @@ return (
             </table>
           </div>
 
-          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-4 py-3">
+          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-3 py-2">
             <div className="text-xs text-slate-500">
               Pagina {importedPage} di {importedTotalPages}
             </div>
@@ -4223,20 +4221,20 @@ return (
     </div>
 
     {/* RIGHT - IMPOSTAZIONI OPERATIVE */}
-    <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="border-b border-slate-200 pb-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="border-b border-slate-200 pb-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
           Parametri di calcolo
         </div>
-        <h4 className="mt-1 text-base font-semibold text-slate-900">
+        <h4 className="mt-0.5 text-sm font-semibold text-slate-900">
           Impostazioni operative
         </h4>
-        <p className="mt-1 text-sm text-slate-500">
+        <p className="mt-0.5 text-xs text-slate-500">
           Definisci anno tariffa e giorni usati nel calcolo.
         </p>
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 sm:col-span-2">
           <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Documento associato al periodo
@@ -4251,7 +4249,7 @@ return (
             Anno tariffa
           </label>
           <select
-            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
             value={annoTariffa}
             onChange={(e) => setAnnoTariffa(e.target.value)}
           >
@@ -4270,7 +4268,7 @@ return (
           </label>
           <input
             type="number"
-            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
             value={giorniQf}
             onChange={(e) => setGiorniQf(e.target.value)}
           />
@@ -4282,7 +4280,7 @@ return (
           </label>
           <input
             type="number"
-            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
             value={giorniConsumi}
             onChange={(e) => setGiorniConsumi(e.target.value)}
           />
@@ -4294,7 +4292,7 @@ return (
           </label>
           <input
             type="number"
-            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
             value={giorniCasaInterni}
             onChange={(e) => setGiorniCasaInterni(e.target.value)}
           />
@@ -4306,7 +4304,7 @@ return (
           </label>
           <input
             type="number"
-            className="h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
             value={giorniAcconto}
             onChange={(e) => setGiorniAcconto(e.target.value)}
           />
