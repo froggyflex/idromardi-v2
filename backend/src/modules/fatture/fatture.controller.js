@@ -152,7 +152,12 @@ exports.calculateSession = async (req, res) => {
         
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(err.statusCode || 400).json({
+      error: err.message,
+      ...(err.accountingChecks
+        ? { accountingChecks: err.accountingChecks }
+        : {}),
+    });
   }
 };
 exports.getByCondominio = async (req, res) => {

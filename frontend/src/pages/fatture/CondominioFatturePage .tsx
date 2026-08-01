@@ -2680,7 +2680,34 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
                
 
       } catch (err: any) {
-        setError(err?.response?.data?.error || "Errore calcolo: " + (err?.message || "Errore sconosciuto"));
+        const responseData = err?.response?.data;
+        const checks = responseData?.accountingChecks;
+        const checkDetails = checks
+          ? [
+              Math.abs(Number(checks.txtStornoConservationResidual || 0)) > 0.01
+                ? `storno TXT non riconciliato EUR ${Number(
+                    checks.txtStornoConservationResidual || 0
+                  ).toFixed(2)}`
+                : null,
+              Math.abs(Number(checks.creditOveruseResidual || 0)) > 0.01
+                ? `credito applicato oltre il residuo disponibile EUR ${Number(
+                    checks.creditOveruseResidual || 0
+                  ).toFixed(2)}`
+                : null,
+              Array.isArray(checks.rowFormulaErrors) && checks.rowFormulaErrors.length
+                ? `${checks.rowFormulaErrors.length} righe con totale incoerente`
+                : null,
+              Array.isArray(checks.minimumErrors) && checks.minimumErrors.length
+                ? `${checks.minimumErrors.length} righe sotto il minimo`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("; ")
+          : "";
+        const baseMessage =
+          responseData?.error ||
+          "Errore calcolo: " + (err?.message || "Errore sconosciuto");
+        setError(checkDetails ? `${baseMessage} Dettagli: ${checkDetails}.` : baseMessage);
       } finally {
         setLoadingCalc(false);
         if (options.auto) {
@@ -3381,7 +3408,7 @@ const deltaTotali = Number((totaleInterni - totaleDocumento).toFixed(2));
 const deltaRispettoOneri = Number((deltaTotali - totaleOneri).toFixed(2));
 
 const deltaOk =
-  totaleDocumento > 0 && Math.abs(deltaRispettoOneri) < 0.005;
+  totaleDocumento > 0 && Math.abs(deltaRispettoOneri) <= 0.01;
 const isGreen = totaleDocumentoConOneri > 0 && deltaOk;
 
 const getRowOneriPerequazione = (row: any) =>
@@ -3399,6 +3426,16 @@ const getRowOneri = (row: any) =>
     : Number(row?.riga?.imp_oneri ?? 0);
 
 const getDisplayedRowTotal = (row: any) => {
+  const storedTotal = row?.riga?.totale;
+  if (
+    storedTotal !== null &&
+    storedTotal !== undefined &&
+    storedTotal !== "" &&
+    Number.isFinite(Number(storedTotal))
+  ) {
+    return roundMoney(Number(storedTotal));
+  }
+
   return getExpectedRowTotal(row);
 };
 
@@ -3476,8 +3513,12 @@ const getRowTotalDelta = (row: any) =>
 const isRowTotalOk = (row: any) => Math.abs(getRowTotalDelta(row)) <= 0.01;
 
 const getRowStornoMc = (row: any) => {
-  const rowStornoEuro = Number(row?.riga?.storno_acconto || 0);
-  const totalStornoEuro = Number(totals?.storno || 0);
+  const rowStornoEuro = Number(row?.riga?.storno_txt_aggiuntivo || 0);
+  const totalStornoEuro = righe.reduce(
+    (sum: number, item: any) =>
+      sum + Number(item?.riga?.storno_txt_aggiuntivo || 0),
+    0
+  );
   const totalStornoMc = Number(mcStorno || 0);
 
   if (!rowStornoEuro || !totalStornoEuro || !totalStornoMc) {
@@ -3513,7 +3554,7 @@ const totalAudit = useMemo(() => {
   );
   const reconciledOk =
     totaleDocumentoConOneri <= 0 ||
-    Math.abs(displayedRowsTotal - totaleDocumentoConOneri) < 0.005;
+    Math.abs(displayedRowsTotal - totaleDocumentoConOneri) <= 0.01;
 
   return {
     rowErrors,

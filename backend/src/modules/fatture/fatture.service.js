@@ -2480,6 +2480,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     const calculationWarnings = Array.isArray(context.calculationWarnings)
       ? context.calculationWarnings
       : [];
+    const accountingChecks = context.accountingChecks || null;
     const parsedOneriNormale = round2(context.parsedOneriPerequazione);
     const eligiblePereqRows = righeRows.filter(
       (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
@@ -2551,6 +2552,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
       contatoreGenerale: { attuale: contGenAtt, precedente: contGenPrec },
       grid,
       calculationWarnings,
+      accountingChecks,
     };
   } finally {
     conn.release();
@@ -2892,6 +2894,8 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     : Array.isArray(context.calculationWarnings)
     ? context.calculationWarnings
     : [];
+  const accountingChecks =
+    interniTotals?.accountingChecks || context.accountingChecks || null;
   const parsedOneriNormale = round2(context.parsedOneriPerequazione);
   const eligiblePereqRows = righeRows.filter(
     (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
@@ -2920,6 +2924,7 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     righe: righeRows, 
     generale: generaleResult?.generale || null,
     calculationWarnings,
+    accountingChecks,
      
   };
 }
@@ -3950,6 +3955,9 @@ async function calculateInterni(
       r.base_totale = basePrimaStorno;
     }
 
+    let legacyCreditsAvailable = 0;
+    let platformCreditsAvailable = 0;
+
     if (totStornoCalcolato < 0) {
       const requestedReduction = round2(Math.abs(totStornoCalcolato));
       const totalStornoMc = Math.abs(n2(session.mcStorno ?? 0));
@@ -3962,6 +3970,17 @@ async function calculateInterni(
         const credits = [];
         for (const idUtenza of memberIds) {
           const memberCredits = await loadOpenAccontoCredits(conn, idUtenza);
+          for (const credit of memberCredits) {
+            if (credit.origine_credito === "LEGACY") {
+              legacyCreditsAvailable = round2(
+                legacyCreditsAvailable + Math.max(0, n2(credit.open_euro))
+              );
+            } else {
+              platformCreditsAvailable = round2(
+                platformCreditsAvailable + Math.max(0, n2(credit.open_euro))
+              );
+            }
+          }
           credits.push(...memberCredits);
         }
         creditsByPrimary.set(row, credits);
@@ -3975,38 +3994,44 @@ async function calculateInterni(
           )
         );
 
-      // The TXT storno and previous-user balances are separate deductions.
-      // Each row keeps its TXT share; anything blocked by the minimum becomes
-      // credit for a later period instead of being moved to another user.
-      const desiredTxtShares = allocateByWeight(
-        requestedReduction,
-        primaries,
-        moneyWeightFn,
-        2
-      );
-      const appliedTxtShares = primaries.map((row, index) =>
-        round2(
-          Math.min(
-            Math.max(0, n2(desiredTxtShares[index])),
-            getAvailableStornoReductionEuro(row)
-          )
+      // Keep the established TXT allocation unchanged: first distribute the
+      // amount across every row that can absorb it, then store only the part
+      // that the condominium cannot absorb without breaking the minimum.
+      const totalTxtCapacity = round2(
+        primaries.reduce(
+          (sum, row) => sum + getAvailableStornoReductionEuro(row),
+          0
         )
       );
-      const blockedTxtShares = primaries.map((row, index) =>
-        round2(Math.max(0, n2(desiredTxtShares[index]) - n2(appliedTxtShares[index])))
+      const appliedTxtTotal = round2(
+        Math.min(requestedReduction, totalTxtCapacity)
       );
+      const appliedTxtShares = allocateByWeightWithCapacity(
+        appliedTxtTotal,
+        primaries,
+        moneyWeightFn,
+        getAvailableStornoReductionEuro,
+        2
+      );
+      const blockedTxtTotal = round2(
+        Math.max(0, requestedReduction - appliedTxtTotal)
+      );
+      const blockedTxtShares =
+        blockedTxtTotal > 0
+          ? allocateByWeight(blockedTxtTotal, primaries, moneyWeightFn, 2)
+          : primaries.map(() => 0);
 
-      const appliedCreditShares = primaries.map((row, index) => {
-        const capacityAfterTxt = Math.max(
-          0,
-          round2(getAvailableStornoReductionEuro(row) - n2(appliedTxtShares[index]))
-        );
-        return round2(Math.min(openEuroFor(row), capacityAfterTxt));
-      });
+      const appliedCreditShares = primaries.map(() => 0);
 
       for (let index = 0; index < primaries.length; index++) {
         const row = primaries[index];
-        let remaining = appliedCreditShares[index];
+        let remainingEuroCap = Math.max(
+          0,
+          round2(
+            getAvailableStornoReductionEuro(row) - n2(appliedTxtShares[index])
+          )
+        );
+        let remainingMcCap = round3(Math.max(0, n2(row.consumo_normale)));
         let legacyUsed = 0;
         let platformUsed = 0;
         let usedMc = 0;
@@ -4014,15 +4039,53 @@ async function calculateInterni(
         const legacyPeriods = new Set();
 
         for (const credit of creditsByPrimary.get(row) || []) {
-          if (remaining <= 0) break;
-          const takeEuro = round2(Math.min(remaining, Math.max(0, n2(credit.open_euro))));
-          if (takeEuro <= 0) continue;
-
-          const takeMc =
-            n2(credit.open_euro) > 0
-              ? round3(Math.min(n2(credit.open_mc), (n2(credit.open_mc) * takeEuro) / n2(credit.open_euro)))
-              : 0;
           const isLegacy = credit.origine_credito === "LEGACY";
+          if (remainingEuroCap <= 0) break;
+
+          let takeEuro = 0;
+          let takeMc = 0;
+          if (isLegacy) {
+            // Legacy amounts represent an operator-certified previous balance.
+            // Their euro absorption is limited by the minimum payable; MC is
+            // optional supporting information and must not reduce that amount.
+            takeEuro = round2(
+              Math.min(remainingEuroCap, Math.max(0, n2(credit.open_euro)))
+            );
+            takeMc =
+              n2(credit.open_euro) > 0
+                ? round3(
+                    Math.min(
+                      remainingMcCap,
+                      n2(credit.open_mc),
+                      (n2(credit.open_mc) * takeEuro) / n2(credit.open_euro)
+                    )
+                  )
+                : 0;
+          } else {
+            // Preserve the established platform-credit behavior exactly when
+            // no legacy balance exists: both euro and MC capacity constrain it.
+            const euroFactor =
+              n2(credit.open_euro) > 0
+                ? remainingEuroCap / n2(credit.open_euro)
+                : Number.POSITIVE_INFINITY;
+            const mcFactor =
+              n2(credit.open_mc) > 0
+                ? remainingMcCap / n2(credit.open_mc)
+                : Number.POSITIVE_INFINITY;
+            const factor = Math.max(0, Math.min(1, euroFactor, mcFactor));
+            takeEuro =
+              n2(credit.open_euro) > 0
+                ? round2(n2(credit.open_euro) * factor)
+                : 0;
+            takeMc =
+              n2(credit.open_mc) > 0
+                ? round3(n2(credit.open_mc) * factor)
+                : 0;
+          }
+
+          if (takeEuro > remainingEuroCap) takeEuro = round2(remainingEuroCap);
+          if (takeMc > remainingMcCap) takeMc = round3(remainingMcCap);
+          if (takeEuro <= 0 && takeMc <= 0) continue;
 
           if (isLegacy) {
             legacyUsed = round2(legacyUsed + takeEuro);
@@ -4031,7 +4094,8 @@ async function calculateInterni(
             platformUsed = round2(platformUsed + takeEuro);
           }
           usedMc = round3(usedMc + takeMc);
-          remaining = round2(remaining - takeEuro);
+          remainingEuroCap = round2(remainingEuroCap - takeEuro);
+          remainingMcCap = round3(remainingMcCap - takeMc);
           movements.push({
             source_movimento_id: credit.id,
             id_utenza: credit.id_utenza,
@@ -4044,6 +4108,7 @@ async function calculateInterni(
         row.storno_legacy = round2(-legacyUsed);
         row.storno_legacy_periodo = [...legacyPeriods].join(", ") || null;
         row.storno_pregresso = round2(-platformUsed);
+        appliedCreditShares[index] = round2(legacyUsed + platformUsed);
         row._storno_mc = usedMc;
         row._storno_movements = movements;
         row.credito_storno_residuo = round2(
@@ -4054,10 +4119,9 @@ async function calculateInterni(
       const totalAppliedShares = primaries.map((row, index) =>
         round2(n2(appliedCreditShares[index]) + n2(appliedTxtShares[index]))
       );
-      const txtAppliedTotal = round2(appliedTxtShares.reduce((sum, value) => sum + n2(value), 0));
       const appliedMcTotal =
         requestedReduction > 0
-          ? round3((totalStornoMc * txtAppliedTotal) / requestedReduction)
+          ? round3((totalStornoMc * appliedTxtTotal) / requestedReduction)
           : 0;
       const appliedMcShares = allocateByWeight(
         appliedMcTotal,
@@ -4125,12 +4189,10 @@ async function calculateInterni(
     );
     const resolvedAbcTotal =
       n2(abcDocumentTotal) > 0 ? n2(abcDocumentTotal) : n2(generale.totale);
-    const targetInterniTotal = round2(
-      resolvedAbcTotal +
-        totConfiguredOneri -
-        previousCreditsApplied +
-        txtStornoCreditCreated
-    );
+    // The condominium control total is immutable. Previous-user credits alter
+    // the row allocation, not the amount that must be reconciled for the
+    // condominium. TF2/TF3 absorb that redistribution through conguaglio.
+    const targetInterniTotal = round2(resolvedAbcTotal + totConfiguredOneri);
     const diff = round2(targetInterniTotal - baseSum);
     applyTfToRows({ tfCode, diff, rows });
 
@@ -4207,6 +4269,79 @@ async function calculateInterni(
           ),
         };
 
+    const txtStornoRequested =
+      totStornoCalcolato < 0 ? round2(Math.abs(totStornoCalcolato)) : 0;
+    const txtStornoApplied = round2(
+      rows.reduce(
+        (sum, row) => sum + Math.abs(Math.min(0, n2(row.storno_txt_aggiuntivo))),
+        0
+      )
+    );
+    const txtStornoDeferred = round2(
+      rows.reduce((sum, row) => sum + n2(row._storno_credit_euro), 0)
+    );
+    const txtStornoConservationResidual = round2(
+      txtStornoRequested - txtStornoApplied - txtStornoDeferred
+    );
+    const rowFormulaErrors = rows
+      .filter(
+        (row) =>
+          Math.abs(
+            round2(
+              n2(row.totale) -
+                (n2(row.base_totale) + n2(row.conguaglio) + n2(row.imp_arr))
+            )
+          ) > 0.01
+      )
+      .map((row) => row.id_utenza);
+    const minimumErrors = rows
+      .filter(
+        (row) => n2(row.totale) + 0.01 < getMinimumPayableForRow(row)
+      )
+      .map((row) => row.id_utenza);
+    const legacyCreditsApplied = round2(
+      rows.reduce((sum, row) => sum + Math.abs(n2(row.storno_legacy)), 0)
+    );
+    const platformCreditsApplied = round2(
+      rows.reduce((sum, row) => sum + Math.abs(n2(row.storno_pregresso)), 0)
+    );
+    const creditOveruseResidual = round2(
+      Math.max(0, legacyCreditsApplied - legacyCreditsAvailable) +
+        Math.max(0, platformCreditsApplied - platformCreditsAvailable)
+    );
+    const accountingChecks = {
+      controlTarget: targetInterniTotal,
+      expectedControlTarget: round2(resolvedAbcTotal + totConfiguredOneri),
+      reconciledTotal: finalReconciliation.total,
+      reconciliationResidual: finalReconciliation.residual,
+      txtStornoRequested,
+      txtStornoApplied,
+      txtStornoDeferred,
+      txtStornoConservationResidual,
+      previousCreditsApplied,
+      legacyCreditsAvailable,
+      legacyCreditsApplied,
+      platformCreditsAvailable,
+      platformCreditsApplied,
+      creditOveruseResidual,
+      rowFormulaErrors,
+      minimumErrors,
+      passed:
+        Math.abs(txtStornoConservationResidual) <= 0.01 &&
+        creditOveruseResidual <= 0.01 &&
+        rowFormulaErrors.length === 0 &&
+        minimumErrors.length === 0,
+    };
+
+    if (!accountingChecks.passed) {
+      const error = new Error(
+        "Controllo contabile interno non superato. Il calcolo non e stato salvato."
+      );
+      error.statusCode = 422;
+      error.accountingChecks = accountingChecks;
+      throw error;
+    }
+
     if (
       normalizedTfCode !== "TF1" &&
       Math.abs(finalReconciliation.residual) >= 0.01
@@ -4232,7 +4367,7 @@ async function calculateInterni(
                 tf1UnexplainedDifference
               ).toFixed(
                 2
-              )} dal totale di controllo (ABC + oneri - crediti precedenti applicati + storni rinviati). Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
+              )} dal totale di controllo (ABC + oneri condominio). Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
             },
           ]
         : [];
@@ -4407,6 +4542,7 @@ async function calculateInterni(
       txtStornoCreditCreated,
       reconciledTotal: finalReconciliation.total,
       reconciliationResidual: finalReconciliation.residual,
+      accountingChecks,
       calculationWarnings,
       diffApplied: diff,
       rows,
@@ -4555,6 +4691,7 @@ exports.calculateSession = async function ({
         targetInterniTotal: interniTotals.targetInterniTotal,
         reconciledInterniTotal: interniTotals.reconciledTotal,
         reconciliationResidual: interniTotals.reconciliationResidual,
+        accountingChecks: interniTotals.accountingChecks,
         calculationWarnings: interniTotals.calculationWarnings,
       });
     }
