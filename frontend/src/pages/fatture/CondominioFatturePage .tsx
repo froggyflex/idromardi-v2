@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
-import { AlertTriangle, FileText, Loader2, Trash2, Upload, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  FileDown,
+  FileSpreadsheet,
+  FileText,
+  Loader2,
+  Search,
+  ReceiptText,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { Calendar } from "lucide-react";
 import { Save } from "lucide-react";
 import { parse, set, weeksToDays } from "date-fns";
@@ -280,6 +293,7 @@ export default function CondominioFatturePage() {
     const [activeTariffPreview, setActiveTariffPreview] = useState<any | null>(null);
     const [loadingTariffPreview, setLoadingTariffPreview] = useState(false);
     const [periodSearch, setPeriodSearch] = useState("");
+    const [sessionPanelOpen, setSessionPanelOpen] = useState(!fatturaId);
 
     const [importedSearch, setImportedSearch] = useState("");
     
@@ -339,6 +353,10 @@ export default function CondominioFatturePage() {
     useEffect(() => {
       setImportedPage(1);
     }, [importedSearch, importedStatusFilter]);
+
+    useEffect(() => {
+      setSessionPanelOpen(!fatturaId);
+    }, [fatturaId]);
 
     async function loadRipartizionePdfs() {
       if (!condominioId || !fatturaId) {
@@ -3587,6 +3605,15 @@ const activeTariffQf = Array.isArray(activeTariffCategory?.quote_fisse)
       (item: any) => String(item?.codice || "").toUpperCase() === "QF"
     ) || activeTariffCategory.quote_fisse[0]
   : null;
+const activeSessionSummary = sessions.find(
+  (item: any) => String(item?.id || "") === String(fatturaId || "")
+);
+const activeSessionDocument = activeSessionSummary
+  ? getSessionLinkedImportedDocument(activeSessionSummary)
+  : null;
+const activeSessionPeriod = activeSessionDocument
+  ? getImportedDocumentPeriodLabel(activeSessionDocument)
+  : "";
 const formatTariffNumber = (value: any, decimals = 4) => {
   const num = Number(value);
   return Number.isFinite(num) ? num.toFixed(decimals) : "-";
@@ -3625,61 +3652,58 @@ return (
         </div>
       )}
       <div className="screen-only" inert={isSessionPreparing}>
+      {(error || calculationNotice) && (
+        <div className="space-y-2 px-4 pt-3">
+          {error && (
+            <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+              <div className="min-w-0 flex-1">{error}</div>
+              <button type="button" onClick={() => setError(null)} className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-red-500 transition hover:bg-red-100" aria-label="Chiudi errore" title="Chiudi">
+                <X size={15} />
+              </button>
+            </div>
+          )}
+          {calculationNotice && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900">
+              <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-600" />
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold uppercase tracking-wide">Suggerimento sul TF</div>
+                <div className="mt-0.5 text-sm text-amber-800">{calculationNotice}</div>
+              </div>
+              <button type="button" onClick={() => setCalculationNotice(null)} className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-600 transition hover:bg-amber-100" aria-label="Chiudi suggerimento" title="Chiudi">
+                <X size={15} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {/* SUMMARY */}
       <div className="sticky top-0 z-50 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-        <div className="max-w-full space-y-2 px-4 py-2">
+        <div className="max-w-full space-y-1.5 px-4 py-2">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-                {/* ERROR */}
-                {error && (
-                  <div className="mb-3 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-                    <div className="min-w-0 flex-1">{error}</div>
-                    <button
-                      type="button"
-                      onClick={() => setError(null)}
-                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-red-500 transition hover:bg-red-100 hover:text-red-700"
-                      aria-label="Chiudi errore"
-                      title="Chiudi"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <h1 className="text-base font-bold text-slate-900">Fatturazione</h1>
+                {activeSessionPeriod && (
+                  <span className="truncate text-xs font-medium text-slate-500">
+                    Periodo ABC {activeSessionPeriod}
+                  </span>
                 )}
-                {calculationNotice && (
-                  <div className="mb-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-                    <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold">Suggerimento sul TF</div>
-                      <div className="mt-1 text-sm text-amber-800">{calculationNotice}</div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setCalculationNotice(null)}
-                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-600 transition hover:bg-amber-100 hover:text-amber-800"
-                      aria-label="Chiudi suggerimento"
-                      title="Chiudi"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                )}
-              <div className="text-lg font-semibold text-slate-900">Fatturazione | Totale € {Number(selectedDoc || 0).toFixed(2)}</div>
-
-              <div className="text-sm text-slate-500">
-            
+                <span className="text-sm font-bold text-slate-900">
+                  Totale € {Number(selectedDoc || 0).toFixed(2)}
+                </span>
               </div>
-
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">TF</span>
+                <label htmlFor="tf-code" className="text-xs font-semibold text-slate-500">TF</label>
                 <select
+                  id="tf-code"
                   value={tfCode}
                   onChange={(e) => {
                     persistTfCode(e.target.value).catch(() => undefined);
                   }}
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+                  className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   disabled={loadingCalc}
                 >
                   <option value="TF1">TF1</option>
@@ -3691,15 +3715,15 @@ return (
               <button
                 onClick={() => calcola()}
                 disabled={loadingCalc}
-                className="bg-blue-600 text-white px-5 py-2 rounded-xl hover:bg-blue-700 transition shadow-md disabled:opacity-60"
+                className="inline-flex h-9 items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loadingCalc ? "Calcolo..." : "Calcola Contabilità"}
               </button>
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-w-max items-center gap-2">
               <span className="font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Tariffa applicata
               </span>
@@ -3717,7 +3741,7 @@ return (
               </span>
             </div>
 
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <div className="flex min-w-max items-center gap-1.5">
               {loadingTariffPreview ? (
                 <span className="text-slate-400">Caricamento tariffa...</span>
               ) : activeTariffScaglioni.length > 0 ? (
@@ -3739,30 +3763,46 @@ return (
         </div>
       </div>
 
-      <div className="max-w-full px-6 pt-4">
+      <div className="max-w-full px-4 pt-3">
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-            <div className="flex items-center justify-between gap-4 mb-3">
+            <div className={`flex items-center justify-between gap-4 ${sessionPanelOpen ? "mb-3" : ""}`}>
               <div>
                 <div className="text-sm font-semibold text-slate-900">
                   Periodi di fatturazione
                 </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Ogni periodo mantiene il proprio TXT associato e i dati calcolati.
-                </div>
+                {sessionPanelOpen && (
+                  <div className="mt-1 text-xs text-slate-500">
+                    Ogni periodo mantiene il proprio TXT associato e i dati calcolati.
+                  </div>
+                )}
             
               </div>
 
-              <div className="shrink-0 rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600">
-                {filteredSessions.length} / {sessions.length}
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600">
+                  {filteredSessions.length} / {sessions.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSessionPanelOpen((open) => !open)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                  aria-expanded={sessionPanelOpen}
+                >
+                  {sessionPanelOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  {sessionPanelOpen ? "Nascondi" : "Mostra periodi"}
+                </button>
               </div>
             </div>
 
-            <div className="mb-3">
+            {sessionPanelOpen && (
+            <div>
+            <div className="relative mb-3">
+              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 value={periodSearch}
                 onChange={(e) => setPeriodSearch(e.target.value)}
                 placeholder="Cerca periodo, TXT, TF o totale..."
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </div>
 
@@ -3775,7 +3815,7 @@ return (
                 Nessun periodo trovato con questa ricerca.
               </div>
             ) : (
-              <div className="flex flex-wrap gap-3">
+              <div className="grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
                 {filteredSessions.map((s: any) => {
                   const linkedDoc = getSessionLinkedImportedDocument(s);
                   const linkedDocName = linkedDoc ? getImportedDocumentName(linkedDoc) : "Nessun documento collegato";
@@ -3785,7 +3825,7 @@ return (
                   return (
                   <div
                     key={s.id}
-                    className={`group relative w-full max-w-[520px] rounded-xl border p-3 transition ${
+                    className={`group relative w-full rounded-lg border p-3 transition ${
                       fatturaId === s.id
                         ? "border-blue-500 bg-blue-50"
                         : "border-slate-200 bg-white hover:bg-slate-50"
@@ -3860,24 +3900,26 @@ return (
                 })}
               </div>
             )}
+            </div>
+            )}
 
           </div>
         </div>
-            <br></br>
+            <div className="h-3" />
 
       {!fatturaId ? (
-        <div className="bg-white p-6 rounded-xl shadow">
-          <div className="font-semibold">Seleziona un periodo o crea una nuova combinazione</div>
+        <div className="mx-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="font-semibold">Apri un nuovo periodo di fatturazione</div>
           {/* <div className="text-sm text-slate-500">
             Crea una nuova fattura oppure aprine una esistente.
           </div>  */}
-          <div className="mt-6 border-t pt-5">
+          <div className="mt-3 border-t pt-3">
           
           <div className="mt-1 text-sm text-slate-500">
             Scegli casa idrica, periodo attuale e periodo precedente per aprire o creare lo snapshot di fatturazione.
           </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <select
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-slate-400"
@@ -3943,7 +3985,7 @@ return (
         <>
       
           {/* CONTATORE GENERALE */}
-          <div className="w-full rounded-2xl border border-slate-200 bg-white p-3 sm:p-4">
+          <div className="w-full space-y-4 px-4 pb-6">
           {/* ============================= */}
           {/* CONTROLLO CALCOLO + GENERALE */}
           {/* ============================= */}
@@ -4073,17 +4115,17 @@ return (
         </div>
       ) : (
         <>
-          <div className="max-h-[320px] overflow-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-xs">
+          <div className="max-h-[320px] overflow-y-auto">
+            <table className="w-full table-fixed divide-y divide-slate-200 text-xs">
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr>
-                  <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  <th className="w-[54%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
                     Nome documento
                   </th>
-                  <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  <th className="w-[20%] px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
                     Stato analisi
                   </th>
-                  <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  <th className="w-[26%] px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wide text-slate-500">
                     Azioni
                   </th>
                 </tr>
@@ -4129,12 +4171,12 @@ return (
                           <button
                             type="button"
                             onClick={() => loadImportedDocumentForSession(doc.id)}
-                            className="block max-w-[300px] truncate text-left font-bold text-slate-900 hover:text-blue-700"
+                            className="block w-full truncate text-left font-bold text-slate-900 hover:text-blue-700"
                           >
                             {documentName}
                           </button>
 
-                          <div className="mt-0.5 max-w-[300px] truncate text-[10px] text-slate-500">
+                          <div className="mt-0.5 w-full truncate text-[10px] text-slate-500">
                             File: {doc.original_filename || "-"}
                           </div>
 
@@ -4143,7 +4185,7 @@ return (
                           </div>
                         </td>
 
-                        <td className="px-3 py-2.5">
+                        <td className="px-2 py-2.5">
                           <span
                             className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${statusClass}`}
                           >
@@ -4152,12 +4194,12 @@ return (
                         </td>
 
                         <td className="px-3 py-2.5">
-                          <div className="flex justify-end gap-2">
+                          <div className="flex justify-end gap-1">
                             {status !== "parsed" && status !== "imported" && (
                               <button
                                 type="button"
                                 onClick={() => parseImportedInvoice(doc.id)}
-                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                                className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
                               >
                                 Analizza
                               </button>
@@ -4166,7 +4208,7 @@ return (
                             <button
                               type="button"
                               onClick={() => loadImportedDocumentForSession(doc.id)}
-                              className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                              className="rounded-lg bg-slate-900 px-2.5 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
                             >
                               Usa
                             </button>
@@ -4177,7 +4219,7 @@ return (
                               disabled={deletingImportId === doc.id}
                               title="Elimina documento"
                               aria-label="Elimina documento"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200 bg-white text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
@@ -4314,140 +4356,6 @@ return (
   </div>
 </section>
 
-          {fatturaId && (
-            <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-sm">
-              <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-                    Passaggio dalla piattaforma precedente
-                  </div>
-                  <h3 className="mt-1 text-base font-semibold text-slate-900">
-                    Acconti precedenti per utenza
-                  </h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Utilizzati come storno solo quando il TXT corrente contiene uno storno.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setLegacyEditorOpen((open) => !open)}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  {legacyEditorOpen ? "Chiudi" : legacyAcconti.length ? "Modifica saldi" : "Inserisci saldi"}
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50/70 sm:grid-cols-4">
-                <div className="px-4 py-3">
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Storno nel TXT</div>
-                  <div className="mt-1 font-semibold text-slate-900">EUR {Math.abs(Number(eurStorno || 0)).toFixed(2)}</div>
-                </div>
-                <div className="px-4 py-3">
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Saldo legacy inserito</div>
-                  <div className="mt-1 font-semibold text-slate-900">EUR {legacyDraftTotal.toFixed(2)}</div>
-                </div>
-                <div className="px-4 py-3">
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Residuo disponibile</div>
-                  <div className="mt-1 font-semibold text-slate-900">EUR {legacyResidualTotal.toFixed(2)}</div>
-                </div>
-                <div className="px-4 py-3">
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Esito previsto</div>
-                  <div className={`mt-1 text-xs font-bold ${Math.abs(Number(eurStorno || 0)) > 0 ? "text-emerald-700" : "text-amber-700"}`}>
-                    {Math.abs(Number(eurStorno || 0)) > 0
-                      ? legacyDraftTotal > 0
-                        ? "Storno TXT + saldo precedente, nel rispetto del minimo"
-                        : "Solo storno TXT; nessun saldo precedente inserito"
-                      : "Nessun saldo consumato senza storno TXT"}
-                  </div>
-                </div>
-              </div>
-
-              {legacyEditorOpen && (
-                <div className="px-5 py-5">
-                  <div className="mb-4 grid gap-4 md:grid-cols-[minmax(240px,420px)_1fr] md:items-end">
-                    <label className="block">
-                      <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">
-                        Periodo della bolletta precedente
-                      </span>
-                      <input
-                        type="text"
-                        value={legacyPeriodoOrigine}
-                        onChange={(event) => setLegacyPeriodoOrigine(event.target.value)}
-                        placeholder="Esempio: 07/2025 - 10/2025"
-                        className="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                      />
-                    </label>
-                    <p className="text-xs leading-5 text-slate-500">
-                      Il minimo fatturabile resta sempre oneri + QF + IVA QF. La parte non applicabile non viene persa: rimane credito nominativo per un periodo successivo.
-                    </p>
-                  </div>
-
-                  <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
-                    <table className="w-full min-w-[720px] text-sm">
-                      <thead className="sticky top-0 z-10 bg-slate-100 text-[11px] uppercase tracking-wide text-slate-600">
-                        <tr>
-                          <th className="px-3 py-2 text-left">ID</th>
-                          <th className="px-3 py-2 text-left">Utenza</th>
-                          <th className="px-3 py-2 text-left">Interno</th>
-                          <th className="px-3 py-2 text-right">Acconto precedente EUR</th>
-                          <th className="px-3 py-2 text-right">MC opzionali</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {legacyEditorRows.map((row: any) => {
-                          const idUtenza = String(row?.utenza?.id || row?.id_utenza || "");
-                          const values = legacyDraft[idUtenza] || { euro: "", mc: "" };
-                          return (
-                            <tr key={idUtenza} className="border-t border-slate-100 even:bg-slate-50/60">
-                              <td className="px-3 py-2 text-slate-500">{row?.utenza?.id_user || "-"}</td>
-                              <td className="px-3 py-2 font-medium text-slate-900">
-                                {[row?.utenza?.Nome, row?.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
-                              </td>
-                              <td className="px-3 py-2 text-slate-600">{row?.utenza?.Interno || "-"}</td>
-                              <td className="px-3 py-2 text-right">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={values.euro}
-                                  onChange={(event) => updateLegacyDraft(idUtenza, "euro", event.target.value)}
-                                  className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right font-semibold outline-none focus:border-blue-400"
-                                />
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.001"
-                                  value={values.mc}
-                                  onChange={(event) => updateLegacyDraft(idUtenza, "mc", event.target.value)}
-                                  className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right outline-none focus:border-blue-400"
-                                />
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-4 flex items-center justify-end gap-3">
-                    {loadingLegacy && <span className="text-xs text-slate-500">Caricamento...</span>}
-                    <button
-                      type="button"
-                      onClick={saveLegacyAccontiAndRecalculate}
-                      disabled={savingLegacy || loadingCalc}
-                      className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-50"
-                    >
-                      {savingLegacy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                      Salva e ricalcola
-                    </button>
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
-
           {/* CALCULATION BREAKDOWN */}
           <div className="rounded-[28px] border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-6 shadow-sm sm:p-7">
             <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-start sm:justify-between">
@@ -4469,7 +4377,7 @@ return (
               {/* LEFT */}
               <div className="xl:col-span-8 space-y-6">
                 {/* VALORI PRINCIPALI */}
-                <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                   <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white px-5 py-4 sm:px-6">
                     <h4 className="text-sm font-semibold text-slate-900">Valori principali</h4>
                     <p className="mt-1 text-xs text-slate-500">
@@ -4566,7 +4474,7 @@ return (
 
                 {/* ACCONTO */}
                 {mcAcconto > 0 && (
-                  <section className="overflow-hidden rounded-[28px] border border-amber-200 bg-white shadow-sm">
+                  <section className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
                     <div className="border-b border-amber-100 bg-gradient-to-r from-amber-50 to-white px-5 py-4 sm:px-6">
                       <h4 className="text-sm font-semibold text-slate-900">Acconto rilevato</h4>
                       <p className="mt-1 text-xs text-slate-500">
@@ -4636,7 +4544,7 @@ return (
 
                 {/* STORNO */}
                 {Number(mcStorno ?? 0) !== 0 && (
-                  <section className="overflow-hidden rounded-[28px] border border-rose-200 bg-white shadow-sm">
+                  <section className="overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-sm">
                     <div className="border-b border-rose-100 bg-gradient-to-r from-rose-50 to-white px-5 py-4 sm:px-6">
                       <h4 className="text-sm font-semibold text-slate-900">Storno rilevato</h4>
                       <p className="mt-1 text-xs text-slate-500">
@@ -4671,7 +4579,7 @@ return (
 
               {/* RIGHT */}
               <aside className="xl:col-span-4">
-                <div className="sticky top-6 overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+                <div className="sticky top-24 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                   <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white px-5 py-4">
                     <h4 className="text-sm font-semibold text-slate-900">Confronto totali</h4>
                     <p className="mt-1 text-xs text-slate-500">
@@ -4747,118 +4655,47 @@ return (
             <>
               <div className="space-y-6">
                 {/* ACTION BAR */}
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Export / Print */}
-                  <button
-                    onClick={handleExportPdf}
-                    disabled={exportingRipartizioni}
-                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm transition
-                      ${
-                        exportingRipartizioni
-                          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                          : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
-                      }`}
-                  >
-                    {exportingRipartizioni ? (
-                      <>
-                        <svg
-                          className="h-4 w-4 animate-spin"
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          />
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8v8H4z"
-                          />
-                        </svg>
-                        Generazione...
-                      </>
-                    ) : (
-                      <>
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-4 w-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M6 9V2h12v7M6 18h12v4H6z"
-                          />
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M6 14h12"
-                          />
-                        </svg>
-                        Genera bollette
-                      </>
-                    )}
-                  </button>
+                <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                      Documenti di ripartizione
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={handleExportPdf}
+                        disabled={exportingRipartizioni}
+                        className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        {exportingRipartizioni ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
+                        {exportingRipartizioni ? "Generazione..." : "Genera bollette"}
+                      </button>
 
-                  <button
-                    onClick={() => fatturaId && onStampaProspetto(String(fatturaId))}
-                    disabled={!fatturaId}
-                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm transition ${
-                      !fatturaId
-                        ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                        : "border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50"
-                    }`}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-4 w-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
-                      />
-                    </svg>
-                    Genera prospetto
-                  </button>
+                      <button
+                        onClick={() => fatturaId && onStampaProspetto(String(fatturaId))}
+                        disabled={!fatturaId}
+                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-blue-200 bg-white px-4 text-sm font-bold text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        <FileSpreadsheet className="h-4 w-4" />
+                        Genera prospetto
+                      </button>
+                    </div>
+                  </div>
 
-                  {/* Create Fattura */}
-                  <button
-                    onClick={() => {
-                      setFatturaDate(new Date().toISOString().slice(0, 10));
-                      setIsCreateFatturaModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-4 w-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth="2"
+                  <div className="border-t border-slate-200 pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+                    <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                      Chiusura sessione
+                    </div>
+                    <button
+                      onClick={() => {
+                        setFatturaDate(new Date().toISOString().slice(0, 10));
+                        setIsCreateFatturaModalOpen(true);
+                      }}
+                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 sm:w-auto"
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 4v16m8-8H4"
-                      />
-                    </svg>
-                    Registra fattura
-                  </button>
+                      <ReceiptText className="h-4 w-4" />
+                      Registra fattura
+                    </button>
+                  </div>
                 </div>
 
                   {exportingRipartizioni && exportJob && (
@@ -5069,6 +4906,141 @@ return (
     </div>
   </div>
 </div>
+
+                    {fatturaId && (
+                      <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                              Passaggio dalla piattaforma precedente
+                            </div>
+                            <h3 className="mt-0.5 text-sm font-bold text-slate-900">
+                              Acconti precedenti per utenza
+                            </h3>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              Applicati alle singole utenze insieme allo storno presente nel TXT.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setLegacyEditorOpen((open) => !open)}
+                            className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                          >
+                            {legacyEditorOpen ? "Chiudi" : legacyAcconti.length ? "Modifica saldi" : "Inserisci saldi"}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50/70 sm:grid-cols-4">
+                          <div className="px-4 py-2.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Storno nel TXT</div>
+                            <div className="mt-0.5 font-semibold text-slate-900">EUR {Math.abs(Number(eurStorno || 0)).toFixed(2)}</div>
+                          </div>
+                          <div className="px-4 py-2.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Saldo legacy inserito</div>
+                            <div className="mt-0.5 font-semibold text-slate-900">EUR {legacyDraftTotal.toFixed(2)}</div>
+                          </div>
+                          <div className="px-4 py-2.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Residuo disponibile</div>
+                            <div className="mt-0.5 font-semibold text-slate-900">EUR {legacyResidualTotal.toFixed(2)}</div>
+                          </div>
+                          <div className="px-4 py-2.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Esito previsto</div>
+                            <div className={`mt-0.5 text-xs font-bold ${Math.abs(Number(eurStorno || 0)) > 0 ? "text-emerald-700" : "text-amber-700"}`}>
+                              {Math.abs(Number(eurStorno || 0)) > 0
+                                ? legacyDraftTotal > 0
+                                  ? "Storno TXT + saldo precedente, nel rispetto del minimo"
+                                  : "Solo storno TXT; nessun saldo precedente inserito"
+                                : "Nessun saldo consumato senza storno TXT"}
+                            </div>
+                          </div>
+                        </div>
+
+                        {legacyEditorOpen && (
+                          <div className="px-4 py-4">
+                            <div className="mb-4 grid gap-4 md:grid-cols-[minmax(240px,420px)_1fr] md:items-end">
+                              <label className="block">
+                                <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                                  Periodo della bolletta precedente
+                                </span>
+                                <input
+                                  type="text"
+                                  value={legacyPeriodoOrigine}
+                                  onChange={(event) => setLegacyPeriodoOrigine(event.target.value)}
+                                  placeholder="Esempio: 07/2025 - 10/2025"
+                                  className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                                />
+                              </label>
+                              <p className="text-xs leading-5 text-slate-500">
+                                Il minimo fatturabile resta sempre oneri + QF + IVA QF. La parte non applicabile non viene persa: rimane credito nominativo per un periodo successivo.
+                              </p>
+                            </div>
+
+                            <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200">
+                              <table className="w-full min-w-[720px] text-sm">
+                                <thead className="sticky top-0 z-10 bg-slate-100 text-[11px] uppercase tracking-wide text-slate-600">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left">ID</th>
+                                    <th className="px-3 py-2 text-left">Utenza</th>
+                                    <th className="px-3 py-2 text-left">Interno</th>
+                                    <th className="px-3 py-2 text-right">Acconto precedente EUR</th>
+                                    <th className="px-3 py-2 text-right">MC opzionali</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {legacyEditorRows.map((row: any) => {
+                                    const idUtenza = String(row?.utenza?.id || row?.id_utenza || "");
+                                    const values = legacyDraft[idUtenza] || { euro: "", mc: "" };
+                                    return (
+                                      <tr key={idUtenza} className="border-t border-slate-100 even:bg-slate-50/60">
+                                        <td className="px-3 py-2 text-slate-500">{row?.utenza?.id_user || "-"}</td>
+                                        <td className="px-3 py-2 font-medium text-slate-900">
+                                          {[row?.utenza?.Nome, row?.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-600">{row?.utenza?.Interno || "-"}</td>
+                                        <td className="px-3 py-2 text-right">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={values.euro}
+                                            onChange={(event) => updateLegacyDraft(idUtenza, "euro", event.target.value)}
+                                            className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right font-semibold outline-none focus:border-blue-400"
+                                          />
+                                        </td>
+                                        <td className="px-3 py-2 text-right">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="0.001"
+                                            value={values.mc}
+                                            onChange={(event) => updateLegacyDraft(idUtenza, "mc", event.target.value)}
+                                            className="h-9 w-28 rounded-lg border border-slate-200 px-2 text-right outline-none focus:border-blue-400"
+                                          />
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+
+                            <div className="mt-4 flex items-center justify-end gap-3">
+                              {loadingLegacy && <span className="text-xs text-slate-500">Caricamento...</span>}
+                              <button
+                                type="button"
+                                onClick={saveLegacyAccontiAndRecalculate}
+                                disabled={savingLegacy || loadingCalc}
+                                className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-50"
+                              >
+                                {savingLegacy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                                Salva e ricalcola
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </section>
+                    )}
+
                     <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <h3 className="font-semibold">Situazione Contatori Interni</h3>
 
@@ -5087,12 +5059,12 @@ return (
                         {totalAudit.totalsOk ? "OK" : "Da verificare"}
                       </div>
                     </div>
-                      <div className="max-h-[72vh] overflow-auto rounded-lg border border-slate-200">
-                          <table className="min-w-[1800px] w-full text-xs">
-                                <thead className="sticky top-0 z-30 bg-slate-100 uppercase shadow-sm">
+                      <div className="max-h-[68vh] overflow-auto rounded-lg border border-slate-200 bg-white">
+                          <table className="w-full min-w-[1900px] text-xs">
+                                <thead className="sticky top-0 z-30 bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600 shadow-sm">
                                   <tr>
-                                    <th className="p-2">ID</th>
-                                    <th className="p-2">Utente</th>
+                                    <th className="sticky left-0 z-40 w-14 min-w-14 bg-slate-100 p-2">ID</th>
+                                    <th className="sticky left-14 z-40 min-w-[220px] bg-slate-100 p-2 shadow-[2px_0_0_0_rgb(226_232_240)]">Utente</th>
                                     <th className="p-2">Isolato</th>
                                     <th className="p-2">Scala</th>
                                     <th className="p-2">Interno</th>
@@ -5172,8 +5144,8 @@ return (
                                                 ? "bg-white hover:bg-slate-100"
                                                 : "bg-slate-50 hover:bg-slate-100"}`}
                                         >
-                                          <td className="p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
-                                          <td className="p-2 text-center">
+                                          <td className="sticky left-0 z-20 w-14 min-w-14 bg-inherit p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
+                                          <td className="sticky left-14 z-20 min-w-[220px] bg-inherit p-2 text-center shadow-[2px_0_0_0_rgb(226_232_240)]">
                                             {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
                                             {staleReadings && (
                                               <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">
@@ -5446,7 +5418,7 @@ return (
                           </table>
                       </div>
                      <br></br>                
-                    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <h3 className="text-base font-bold text-slate-900">
