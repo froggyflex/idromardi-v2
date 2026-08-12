@@ -133,6 +133,18 @@ async function ensureFattureRigheRecuperoColumns() {
     );
   }
 
+  if (!columns.has("configured_oneri")) {
+    alters.push(
+      "ADD COLUMN configured_oneri DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER imp_oneri"
+    );
+  }
+
+  if (!columns.has("imp_oneri_perequazione")) {
+    alters.push(
+      "ADD COLUMN imp_oneri_perequazione DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER configured_oneri"
+    );
+  }
+
   if (!alters.length) return columns;
 
   await db.query(`ALTER TABLE fatture_righe ${alters.join(", ")}`);
@@ -2465,7 +2477,8 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
           ), 0) AS minimum_payable_credit_mc,
           u.id_user,
           CONCAT(u.nome,' ',u.cognome) AS utente,
-          u.doppio_contatore
+          u.doppio_contatore,
+          u.billing_group_id
         FROM fatture_righe fr
         JOIN utenze_v2 u ON u.id = fr.id_utenza
         WHERE fr.id_fattura = ?
@@ -2482,26 +2495,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
       : [];
     const accountingChecks = context.accountingChecks || null;
     const parsedOneriNormale = round2(context.parsedOneriPerequazione);
-    const eligiblePereqRows = righeRows.filter(
-      (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
-    );
-    const pereqShares = parsedOneriNormale
-      ? allocateRoundedForDisplay(parsedOneriNormale, eligiblePereqRows)
-      : eligiblePereqRows.map(() => 0);
-    const pereqByRowId = new Map();
-
-    eligiblePereqRows.forEach((row, index) => {
-      pereqByRowId.set(row.id, round2(pereqShares[index] || 0));
-    });
-
-    righeRows.forEach((row) => {
-      const perequazione = round2(pereqByRowId.get(row.id) || 0);
-      const configuredOneri = Math.max(0, round2(n2(row.imp_oneri) - perequazione));
-
-      row.configured_oneri = configuredOneri;
-      row.imp_oneri_base_display = configuredOneri;
-      row.imp_oneri_perequazione_display = perequazione;
-    });
+    applySeparatedOneriToLoadedRows(righeRows, session, parsedOneriNormale);
     righeRows.forEach(annotateMinimumPayableRow);
     const mapRighe = new Map(righeRows.map((r) => [r.id_utenza, r]));
 
@@ -2878,7 +2872,8 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
       ), 0) AS minimum_payable_credit_mc,
       u.id_user,
       CONCAT(u.nome,' ',u.cognome) AS utente,
-      u.doppio_contatore
+      u.doppio_contatore,
+      u.billing_group_id
     FROM fatture_righe fr
     JOIN utenze_v2 u ON u.id = fr.id_utenza
     WHERE fr.id_fattura = ?
@@ -2897,26 +2892,7 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
   const accountingChecks =
     interniTotals?.accountingChecks || context.accountingChecks || null;
   const parsedOneriNormale = round2(context.parsedOneriPerequazione);
-  const eligiblePereqRows = righeRows.filter(
-    (r) => n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
-  );
-  const pereqShares = parsedOneriNormale
-    ? allocateRoundedForDisplay(parsedOneriNormale, eligiblePereqRows)
-    : eligiblePereqRows.map(() => 0);
-  const pereqByRowId = new Map();
-
-  eligiblePereqRows.forEach((row, index) => {
-    pereqByRowId.set(row.id, round2(pereqShares[index] || 0));
-  });
-
-  righeRows.forEach((row) => {
-    const perequazione = round2(pereqByRowId.get(row.id) || 0);
-    const configuredOneri = Math.max(0, round2(n2(row.imp_oneri) - perequazione));
-
-    row.configured_oneri = configuredOneri;
-    row.imp_oneri_base_display = configuredOneri;
-    row.imp_oneri_perequazione_display = perequazione;
-  });
+  applySeparatedOneriToLoadedRows(righeRows, session, parsedOneriNormale);
   righeRows.forEach(annotateMinimumPayableRow);
   righeRows.dettaglio_consumi = interniTotals?.dettaglio_consumi;
   return {
@@ -2927,6 +2903,60 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     accountingChecks,
      
   };
+}
+
+function getBillingGroupSizes(rows) {
+  const sizes = new Map();
+
+  for (const row of rows) {
+    const groupId = row?.billing_group_id;
+    if (
+      !groupId ||
+      String(row?.doppio_contatore ?? "NO").toUpperCase() !== "SI"
+    ) continue;
+    sizes.set(groupId, (sizes.get(groupId) || 0) + 1);
+  }
+
+  return sizes;
+}
+
+function applySeparatedOneriToLoadedRows(rows, session, parsedOneriNormale) {
+  const billingGroupSizes = getBillingGroupSizes(rows);
+  const eligibleRows = rows.filter(
+    (row) => n2(row.consumo_totale) > 0 && n2(row.imp_oneri) !== 0
+  );
+  const fallbackPereqShares = parsedOneriNormale
+    ? allocateRoundedForDisplay(parsedOneriNormale, eligibleRows)
+    : eligibleRows.map(() => 0);
+  const fallbackPereqByRowId = new Map();
+
+  eligibleRows.forEach((row, index) => {
+    fallbackPereqByRowId.set(row.id, round2(fallbackPereqShares[index] || 0));
+  });
+
+  for (const row of rows) {
+    const combinedOneri = round2(row.imp_oneri);
+    const persistedConfigured = round2(row.configured_oneri);
+    const hasPersistedSeparation = persistedConfigured !== 0 || combinedOneri === 0;
+    const fallbackPerequazione = round2(fallbackPereqByRowId.get(row.id) || 0);
+    const perequazione = hasPersistedSeparation
+      ? round2(row.imp_oneri_perequazione)
+      : fallbackPerequazione;
+
+    let configuredOneri = persistedConfigured;
+    if (!hasPersistedSeparation) {
+      const groupSize =
+        String(row.doppio_contatore ?? "NO").toUpperCase() === "SI" &&
+        row.billing_group_id
+          ? Math.max(1, billingGroupSizes.get(row.billing_group_id) || 1)
+          : 1;
+      configuredOneri = round2(n2(session?.oneri_snapshot) * groupSize);
+    }
+
+    row.configured_oneri = configuredOneri;
+    row.imp_oneri_base_display = configuredOneri;
+    row.imp_oneri_perequazione_display = perequazione;
+  }
 }
 
 
@@ -4387,14 +4417,14 @@ async function calculateInterni(
          lettura_attuale, stato_attuale,
          consumo_normale, consumo_acconto, consumo_totale,
          imp_acquedotto, imp_fognatura, imp_depurazione,
-         imp_qf, imp_oneri, imp_iva,
+         imp_qf, imp_oneri, configured_oneri, imp_oneri_perequazione, imp_iva,
          conguaglio, imp_arr,
          totale,
          imp_acconto, depfog_acconto, acconto, storno_acconto,
          storno_legacy, storno_txt_aggiuntivo, credito_storno_residuo,
          storno_legacy_periodo,
          recupero_lettura, recupero_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           rowId,
@@ -4416,6 +4446,8 @@ async function calculateInterni(
 
           r.imp_qf,
           r.imp_oneri,
+          r.configured_oneri,
+          r.imp_oneri_perequazione_display,
           r.imp_iva,
 
           r.conguaglio,
