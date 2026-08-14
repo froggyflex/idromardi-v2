@@ -1458,9 +1458,14 @@ async function enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId) {
   }
 
   const chargeableRows = clonedRows.filter(
-    (row) => n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0
+    (row) => n2(row?.riga?.consumo_totale ?? row?.consumo_totale) > 0
   );
-  const normaleShares = allocateRoundedForDisplay(parsedOneriNormale, chargeableRows);
+  const normaleShares = allocateRoundedForDisplay(
+    parsedOneriNormale,
+    chargeableRows,
+    2,
+    (row) => n2(row?.riga?.consumo_totale ?? row?.consumo_totale)
+  );
   const shareByIndex = new Map();
 
   chargeableRows.forEach((row, index) => {
@@ -2921,10 +2926,15 @@ function getBillingGroupSizes(rows) {
 function applySeparatedOneriToLoadedRows(rows, session, parsedOneriNormale) {
   const billingGroupSizes = getBillingGroupSizes(rows);
   const eligibleRows = rows.filter(
-    (row) => n2(row.imp_oneri) !== 0
+    (row) => n2(row.consumo_totale) > 0
   );
   const fallbackPereqShares = parsedOneriNormale
-    ? allocateRoundedForDisplay(parsedOneriNormale, eligibleRows)
+    ? allocateRoundedForDisplay(
+        parsedOneriNormale,
+        eligibleRows,
+        2,
+        (row) => n2(row.consumo_totale)
+      )
     : eligibleRows.map(() => 0);
   const fallbackPereqByRowId = new Map();
 
@@ -3365,10 +3375,6 @@ async function calculateInterni(
     }
 
     return floored.map((u) => sign * (u / factor));
-  };
-
-  const allocateEqualRounded = (total, items, decimals = 2) => {
-    return allocateByWeight(total, items, () => 1, decimals);
   };
 
   const allocateByWeightWithCapacity = (total, items, getWeight, getCapacity, decimals = 2) => {
@@ -3923,14 +3929,16 @@ async function calculateInterni(
 
     const moneyWeightFn = (r) => Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
     const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
+    const consumptionWeightFn = (r) => Math.max(0, n2(r.consumo_totale));
 
     if (hasParsedOneri) {
       const perequazioneRows = primaries.filter(
-        (r) => n2(r.imp_oneri) !== 0
+        (r) => r.tfEligible && n2(r.consumo_totale) > 0
       );
-      const oneriNormaleShares = allocateEqualRounded(
+      const oneriNormaleShares = allocateByWeight(
         parsedOneriNormale,
         perequazioneRows,
+        consumptionWeightFn,
         2
       );
 

@@ -196,9 +196,14 @@ function enrichRowsWithSeparatedOneri(rows, session) {
   }
 
   const chargeableRows = rows.filter(
-    (row) => n(row.imp_oneri) !== 0
+    (row) => n(row.consumo_totale) > 0
   );
-  const normaleShares = allocateRounded(parsedOneriNormale, chargeableRows);
+  const normaleShares = allocateRounded(
+    parsedOneriNormale,
+    chargeableRows,
+    2,
+    (row) => n(row.consumo_totale)
+  );
   const shareByRowId = new Map();
 
   chargeableRows.forEach((row, index) => {

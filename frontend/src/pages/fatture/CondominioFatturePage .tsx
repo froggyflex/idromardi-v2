@@ -3425,13 +3425,42 @@ const selectedDocHasParsedOneri = hasOneriPerequazioneRows(
   activeImportedDocument?.parsed_payload_json
 );
 const totaleParsedOneriPereq = Number(oneriPerequazione || 0);
-const displayedOneriPereqShare = useMemo(() => {
-  if (!selectedDocHasParsedOneri) return 0;
+const displayedOneriPereqShares = useMemo(() => {
+  const shares = new Map<any, number>();
+  if (!selectedDocHasParsedOneri) return shares;
 
-  const chargeableRows = righe.filter((r: any) => Number(r?.riga?.imp_oneri || 0) !== 0);
-  if (!chargeableRows.length) return 0;
+  const chargeableRows = righe.filter(
+    (row: any) => Number(row?.riga?.consumo_totale || 0) > 0
+  );
+  if (!chargeableRows.length) return shares;
 
-  return Math.round((totaleParsedOneriPereq / chargeableRows.length) * 100) / 100;
+  const totalCents = Math.round(Math.abs(totaleParsedOneriPereq) * 100);
+  const sign = totaleParsedOneriPereq < 0 ? -1 : 1;
+  const weights = chargeableRows.map((row: any) =>
+    Math.max(0, Number(row?.riga?.consumo_totale || 0))
+  );
+  const totalWeight = weights.reduce((sum: number, value: number) => sum + value, 0);
+  if (totalWeight <= 0) return shares;
+
+  const rawShares = weights.map((weight: number) => (totalCents * weight) / totalWeight);
+  const cents = rawShares.map((value: number) => Math.floor(value));
+  const assigned = cents.reduce((sum: number, value: number) => sum + value, 0);
+  const order = rawShares
+    .map((value: number, index: number) => ({
+      index,
+      remainder: value - Math.floor(value),
+    }))
+    .sort((a: any, b: any) => b.remainder - a.remainder);
+
+  for (let i = 0; i < totalCents - assigned; i += 1) {
+    cents[order[i % order.length].index] += 1;
+  }
+
+  chargeableRows.forEach((row: any, index: number) => {
+    shares.set(row, sign * (cents[index] / 100));
+  });
+
+  return shares;
 }, [righe, selectedDocHasParsedOneri, totaleParsedOneriPereq]);
 
 const totaleInterni = Number(totals?.totaleInterni ?? 0);
@@ -3448,8 +3477,8 @@ const isGreen = totaleDocumentoConOneri > 0 && deltaOk;
 const getRowOneriPerequazione = (row: any) =>
   Number(row?.riga?.imp_oneri_perequazione_display ?? NaN) >= 0
     ? Number(row?.riga?.imp_oneri_perequazione_display || 0)
-    : selectedDocHasParsedOneri && Number(row?.riga?.imp_oneri || 0) !== 0
-    ? displayedOneriPereqShare
+    : selectedDocHasParsedOneri && Number(row?.riga?.consumo_totale || 0) > 0
+    ? Number(displayedOneriPereqShares.get(row) || 0)
     : 0;
 
 const getRowOneri = (row: any) =>
@@ -3605,7 +3634,7 @@ const totalAudit = useMemo(() => {
 }, [
   righe,
   selectedDocHasParsedOneri,
-  displayedOneriPereqShare,
+  displayedOneriPereqShares,
   totaleInterniVisibile,
   totaleDocumentoConOneri,
 ]);
