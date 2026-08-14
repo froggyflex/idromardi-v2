@@ -28,7 +28,13 @@ import { summarizePeriodiAndTariffe } from "../../utils/fattureUtils";
 
 
 type Provider = { id: string; nome: string; codice?: string };
-type Periodo = { id: string; period_year: number; period_month: number };
+type Periodo = {
+  id: string;
+  period_year: number;
+  period_month: number;
+  data_lettura_operatore?: string | null;
+  data_lettura_casa_idrica?: string | null;
+};
 type ImportedInvoiceDocument = {
     id: string;
     original_filename: string;
@@ -616,6 +622,16 @@ export default function CondominioFatturePage() {
     }
 
     return cleanImportedFilename(doc.original_filename);
+  }
+
+  function formatAvailablePeriodLabel(period: Periodo) {
+    const fullDate =
+      period.data_lettura_operatore || period.data_lettura_casa_idrica;
+    const formattedDate = formatImportedDocDate(fullDate);
+
+    if (formattedDate) return formattedDate;
+
+    return `${String(period.period_month).padStart(2, "0")}/${period.period_year}`;
   }
 
   function getImportedDocumentPeriodLabel(doc?: ImportedInvoiceDocument | null) {
@@ -3942,7 +3958,7 @@ return (
                 <option value="">Periodo Attuale</option>
                 {periodi.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.period_month}/{p.period_year}
+                    {formatAvailablePeriodLabel(p)}
                   </option>
                 ))}
               </select>
@@ -3957,7 +3973,7 @@ return (
                   .filter((p) => p.id !== current)
                   .map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.period_month}/{p.period_year}
+                      {formatAvailablePeriodLabel(p)}
                     </option>
                   ))}
               </select>

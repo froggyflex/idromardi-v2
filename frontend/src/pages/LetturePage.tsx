@@ -361,6 +361,14 @@ export default function LetturePage() {
   function formatPeriodLabel(history: GridRow["history"][number] | null) {
     if (!history) return "-";
 
+    const fullDate =
+      history.data_lettura_operatore || history.data_lettura_casa_idrica;
+    const parsedDate = parseDbDate(fullDate);
+
+    if (parsedDate) {
+      return formatManualDate(parsedDate);
+    }
+
     const month = monthNames[Number(history.period_month) - 1] ?? history.period_month;
     return `${month} ${history.period_year}`;
   }

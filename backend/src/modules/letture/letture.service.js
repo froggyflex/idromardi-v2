@@ -240,6 +240,8 @@ exports.getSessionGrid = async function ({ sessionId }) {
                 l.stato_lettura,
                 s.period_year,
                 s.period_month,
+                s.data_lettura_operatore,
+                s.data_lettura_casa_idrica,
                 (
                   SELECT fr.consumo_totale
                   FROM fatture_sessioni fs

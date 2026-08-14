@@ -17,6 +17,8 @@ export interface Utenza {
 export interface HistoryRow {
   period_year: number;
   period_month: number;
+  data_lettura_operatore?: string | null;
+  data_lettura_casa_idrica?: string | null;
   valore_lettura: number | null;
   stato_lettura: string;
   consumo_fatturato?: number | string | null;

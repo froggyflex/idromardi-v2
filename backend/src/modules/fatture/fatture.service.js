@@ -1458,9 +1458,7 @@ async function enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId) {
   }
 
   const chargeableRows = clonedRows.filter(
-    (row) =>
-      n2(row?.riga?.consumo_totale ?? row?.consumo_totale) > 0 &&
-      n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0
+    (row) => n2(row?.riga?.imp_oneri ?? row?.imp_oneri) !== 0
   );
   const normaleShares = allocateRoundedForDisplay(parsedOneriNormale, chargeableRows);
   const shareByIndex = new Map();
@@ -2923,7 +2921,7 @@ function getBillingGroupSizes(rows) {
 function applySeparatedOneriToLoadedRows(rows, session, parsedOneriNormale) {
   const billingGroupSizes = getBillingGroupSizes(rows);
   const eligibleRows = rows.filter(
-    (row) => n2(row.consumo_totale) > 0 && n2(row.imp_oneri) !== 0
+    (row) => n2(row.imp_oneri) !== 0
   );
   const fallbackPereqShares = parsedOneriNormale
     ? allocateRoundedForDisplay(parsedOneriNormale, eligibleRows)
@@ -3370,14 +3368,7 @@ async function calculateInterni(
   };
 
   const allocateEqualRounded = (total, items, decimals = 2) => {
-    if (!items.length) {
-      return [];
-    }
-
-    const factor = Math.pow(10, decimals);
-    const share = Math.round((n2(total) / items.length) * factor) / factor;
-
-    return items.map(() => share);
+    return allocateByWeight(total, items, () => 1, decimals);
   };
 
   const allocateByWeightWithCapacity = (total, items, getWeight, getCapacity, decimals = 2) => {
@@ -3935,7 +3926,7 @@ async function calculateInterni(
 
     if (hasParsedOneri) {
       const perequazioneRows = primaries.filter(
-        (r) => r.tfEligible && n2(r.consumo_totale) > 0 && n2(r.imp_oneri) !== 0
+        (r) => n2(r.imp_oneri) !== 0
       );
       const oneriNormaleShares = allocateEqualRounded(
         parsedOneriNormale,
@@ -4853,7 +4844,12 @@ exports.getAvailablePeriods = async function ({ condominioId }) {
   try {
     const [rows] = await conn.query(
       `
-      SELECT id, period_year, period_month
+      SELECT
+        id,
+        period_year,
+        period_month,
+        data_lettura_operatore,
+        data_lettura_casa_idrica
       FROM letture_sessioni
       WHERE id_condominio = ?
       ORDER BY period_year DESC, period_month DESC
