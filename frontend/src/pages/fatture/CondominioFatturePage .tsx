@@ -136,6 +136,11 @@ export default function CondominioFatturePage() {
     //storno values
     const [mcStorno, setMcStorno] = useState<number>(0);
     const [eurStorno, setEurStorno] = useState<number>(0);
+    const [acquedottoStorno, setAcquedottoStorno] = useState<number>(0);
+    const [depfogStorno, setDepfogStorno] = useState<number>(0);
+    const [ivaStorno, setIvaStorno] = useState<number>(0);
+    const [oneriPerequazioneStorno, setOneriPerequazioneStorno] = useState<number>(0);
+    const [totaleStorno, setTotaleStorno] = useState<number>(0);
     //-------------------------------------------------------
 
 
@@ -817,43 +822,89 @@ export default function CondominioFatturePage() {
     );
   }
 
-  function getStornoValuesFromTariffRows(payload: any) {
-    const rows = Array.isArray(payload?.componente_tariffa_acquedotto)
-      ? payload.componente_tariffa_acquedotto
-      : [];
-    const explicitRows = rows.filter((row: any) => row?.is_storno_acconto && isMainAcquedottoTariffRow(row));
-    const fallbackRows = rows.filter(
-      (row: any) => Number(row?.importo || 0) < 0 && isMainAcquedottoTariffRow(row)
-    );
-    const targetRows = explicitRows.length ? explicitRows : fallbackRows;
-
-    return targetRows.reduce(
-      (acc: { mc: number; euro: number }, row: any) => ({
-        mc: acc.mc + Number(row?.quantita || 0),
-        euro: acc.euro + Number(row?.importo || 0),
-      }),
-      { mc: 0, euro: 0 }
-    );
-  }
-
   function getStornoValuesFromPayload(payload: any) {
-    const summary = payload?.summaryTariffeAcquedotto || {};
-    const rowsTotal = getStornoValuesFromTariffRows(payload);
-    if (rowsTotal.mc !== 0 || rowsTotal.euro !== 0) {
-      return {
-        mc: Number(rowsTotal.mc.toFixed(3)),
-        euro: Number(rowsTotal.euro.toFixed(2)),
-      };
-    }
+    const money = (value: number) =>
+      Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+    const sumNegativeRows = (key: string, predicate?: (row: any) => boolean) => {
+      const rows = Array.isArray(payload?.[key]) ? payload[key] : [];
+      const negativeRows = rows.filter(
+        (row: any) => Number(row?.importo || 0) < 0 && (!predicate || predicate(row))
+      );
+      const explicitRows = negativeRows.filter((row: any) => row?.is_storno_acconto);
+      const targetRows = negativeRows;
 
-    const stornoEuro =
+      return {
+        rows: targetRows,
+        importo: targetRows.reduce(
+          (sum: number, row: any) => sum + Number(row?.importo || 0),
+          0
+        ),
+        quantita: targetRows.reduce(
+          (sum: number, row: any) => sum - Math.abs(Number(row?.quantita || 0)),
+          0
+        ),
+        explicit: explicitRows.length > 0,
+      };
+    };
+
+    const summary = payload?.summaryTariffeAcquedotto || {};
+    const acquedottoRows = sumNegativeRows(
+      "componente_tariffa_acquedotto",
+      isMainAcquedottoTariffRow
+    );
+    const depurazioneRows = sumNegativeRows("componente_tariffa_depurazione");
+    const fognaturaRows = sumNegativeRows("componente_tariffa_fognatura");
+    const oneriRows = sumNegativeRows("oneri_perequazione");
+    const hasComponentRows =
+      acquedottoRows.rows.length > 0 ||
+      depurazioneRows.rows.length > 0 ||
+      fognaturaRows.rows.length > 0 ||
+      oneriRows.rows.length > 0;
+
+    const summaryAcquedotto =
       Number(summary.importoStorno || 0) || Number(summary.importoNeg || 0);
-    const stornoMc =
+    const summaryMc =
       Number(summary.quantitaStorno || 0) || Number(summary.quantitaNeg || 0);
+    const acquedotto = money(
+      acquedottoRows.rows.length
+        ? acquedottoRows.importo
+        : summaryAcquedotto > 0
+        ? -summaryAcquedotto
+        : summaryAcquedotto
+    );
+    const mc = Number(
+      (
+        acquedottoRows.rows.length
+          ? acquedottoRows.quantita
+          : summaryMc > 0
+          ? -summaryMc
+          : summaryMc
+      ).toFixed(3)
+    );
+    const depurazione = money(depurazioneRows.importo);
+    const fognatura = money(fognaturaRows.importo);
+    const depFog = money(depurazione + fognatura);
+    const oneri = money(oneriRows.importo);
+    const iva = money((acquedotto + depFog + oneri) * 0.1);
+    const totale = money(acquedotto + depFog + oneri + iva);
 
     return {
-      mc: stornoMc,
-      euro: stornoEuro,
+      mc,
+      acquedotto,
+      depurazione,
+      fognatura,
+      depFog,
+      oneri,
+      iva,
+      totale,
+      euro: totale,
+      source: hasComponentRows
+        ? acquedottoRows.explicit || depurazioneRows.explicit || fognaturaRows.explicit || oneriRows.explicit
+          ? "component_rows_explicit"
+          : "component_rows_negative"
+        : acquedotto || mc
+        ? "summary"
+        : "none",
     };
   }
 
@@ -1316,6 +1367,7 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       parsedConsumoFromParsedPayload(parsedSummary);
     }
     parseAccontoFromParsedPayload(payloadJson, parsedSummary);
+    parseStornoFromParsedPayload(payloadJson);
 
 
     console.log("Parsed summary from payload:", parsedSummary);
@@ -1332,7 +1384,6 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       setGiorniConsumi(diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura) ?? 0);
       
       
-      parseStornoFromParsedPayload(payloadJson);
       parseQFFromParsedPayload(payloadJson);
       if (!parsedBuckets.aGiro.hasPeriod) {
         setOneriPerequazione(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "non_media"));
@@ -1360,7 +1411,6 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
           estimatedReadings.newest.data_lettura
         ) ?? 0
       );
-      parseStornoFromParsedPayload(payloadJson);
       parseQFFromParsedPayload(payloadJson);
       setParsingAlert?.(null);
       return;
@@ -1504,6 +1554,11 @@ function resetParsedDocumentState() {
   setOneriPerequazione(0);
   setMcStorno(0);
   setEurStorno(0);
+  setAcquedottoStorno(0);
+  setDepfogStorno(0);
+  setIvaStorno(0);
+  setOneriPerequazioneStorno(0);
+  setTotaleStorno(0);
   resetAccontoFromParsedPayload();
 }
 
@@ -1961,14 +2016,26 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     try {
       const payload = JSON.parse(payloadJson);
       const parsedStorno = getStornoValuesFromPayload(payload);
-      if (parsedStorno.mc !== 0 || parsedStorno.euro !== 0) {
+      if (parsedStorno.mc !== 0 || parsedStorno.totale !== 0) {
           setMcStorno(parsedStorno.mc);
-          setEurStorno(parsedStorno.euro);
-         
+          setAcquedottoStorno(parsedStorno.acquedotto);
+          setDepfogStorno(parsedStorno.depFog);
+          setIvaStorno(parsedStorno.iva);
+          setOneriPerequazioneStorno(parsedStorno.oneri);
+          setTotaleStorno(parsedStorno.totale);
+          setEurStorno(parsedStorno.totale);
+      } else {
+          setMcStorno(0);
+          setAcquedottoStorno(0);
+          setDepfogStorno(0);
+          setIvaStorno(0);
+          setOneriPerequazioneStorno(0);
+          setTotaleStorno(0);
+          setEurStorno(0);
       }
       
     }catch (err) {
-      console.error("Errore durante il parsing del payload per l'acconto:", err);
+      console.error("Errore durante il parsing del payload per lo storno:", err);
     }
   }    
 
@@ -2636,6 +2703,23 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             mcAcconto: parsedParamsForCalc.mcAcconto ?? null,
             mcStorno: parsedStornoForCalc.mc || Number(mcStorno || 0),
             eurStorno: parsedStornoForCalc.euro || Number(eurStorno || 0),
+            parsedStornoAcquedotto: parsedStornoForCalc.acquedotto ?? Number(acquedottoStorno || 0),
+            parsedStornoDepFog: parsedStornoForCalc.depFog ?? Number(depfogStorno || 0),
+            parsedStornoIva: parsedStornoForCalc.iva ?? Number(ivaStorno || 0),
+            parsedOneriPerequazioneStorno:
+              parsedStornoForCalc.oneri ?? Number(oneriPerequazioneStorno || 0),
+            parsedStornoTotale: parsedStornoForCalc.totale ?? Number(totaleStorno || eurStorno || 0),
+            stornoBreakdown: {
+              mc: parsedStornoForCalc.mc || Number(mcStorno || 0),
+              acquedotto: parsedStornoForCalc.acquedotto ?? Number(acquedottoStorno || 0),
+              depurazione: parsedStornoForCalc.depurazione ?? 0,
+              fognatura: parsedStornoForCalc.fognatura ?? 0,
+              depFog: parsedStornoForCalc.depFog ?? Number(depfogStorno || 0),
+              iva: parsedStornoForCalc.iva ?? Number(ivaStorno || 0),
+              oneri: parsedStornoForCalc.oneri ?? Number(oneriPerequazioneStorno || 0),
+              totale: parsedStornoForCalc.totale ?? Number(totaleStorno || eurStorno || 0),
+              source: parsedStornoForCalc.source || "request",
+            },
             parsedConsumoNormale: parsedMainBucketForCalc?.consumoMc ?? null,
             parsedAcquedottoNormale: parsedMainBucketForCalc?.acquedotto ?? null,
             parsedDepFogNormale: parsedMainBucketForCalc?.depFog ?? null,
@@ -4588,7 +4672,7 @@ return (
                 )}
 
                 {/* STORNO */}
-                {Number(mcStorno ?? 0) !== 0 && (
+                {(Number(mcStorno ?? 0) !== 0 || Number(totaleStorno || eurStorno || 0) !== 0) && (
                   <section className="overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-sm">
                     <div className="border-b border-rose-100 bg-gradient-to-r from-rose-50 to-white px-5 py-4 sm:px-6">
                       <h4 className="text-sm font-semibold text-slate-900">Storno rilevato</h4>
@@ -4598,7 +4682,7 @@ return (
                     </div>
 
                     <div className="p-5 sm:p-6">
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         <article className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700">
                             Consumo storno
@@ -4608,12 +4692,48 @@ return (
                           </div>
                         </article>
 
-                        <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Importo storno
+                            Acquedotto storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(eurStorno ?? 0).toFixed(2)}
+                            € {Number(acquedottoStorno ?? 0).toFixed(2)}
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Dep./Fog. storno
+                          </div>
+                          <div className="mt-2 text-xl font-bold text-slate-900">
+                            € {Number(depfogStorno ?? 0).toFixed(2)}
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            IVA storno
+                          </div>
+                          <div className="mt-2 text-xl font-bold text-slate-900">
+                            € {Number(ivaStorno ?? 0).toFixed(2)}
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Oneri perequazione storno
+                          </div>
+                          <div className="mt-2 text-xl font-bold text-slate-900">
+                            € {Number(oneriPerequazioneStorno ?? 0).toFixed(2)}
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 to-white p-4">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700">
+                            Totale storno
+                          </div>
+                          <div className="mt-2 text-xl font-bold text-slate-900">
+                            € {Number(totaleStorno || eurStorno || 0).toFixed(2)}
                           </div>
                         </article>
                       </div>

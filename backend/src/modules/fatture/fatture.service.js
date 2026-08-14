@@ -452,36 +452,96 @@ function summarizeTariffeAcquedotto(rows) {
 
 function getStornoValuesFromParsedPayload(payload) {
   if (!payload || typeof payload !== "object") {
-    return { euro: 0, mc: 0, source: "none" };
-  }
-
-  const rows = Array.isArray(payload?.componente_tariffa_acquedotto)
-    ? payload.componente_tariffa_acquedotto
-    : [];
-  const explicitRows = rows.filter(
-    (row) => row?.is_storno_acconto && isMainAcquedottoTariffRow(row)
-  );
-  const fallbackRows = rows.filter(
-    (row) => n2(row?.importo) < 0 && isMainAcquedottoTariffRow(row)
-  );
-  const targetRows = explicitRows.length ? explicitRows : fallbackRows;
-
-  if (targetRows.length) {
     return {
-      euro: round2(targetRows.reduce((sum, row) => sum + n2(row?.importo), 0)),
-      mc: round3(targetRows.reduce((sum, row) => sum + n2(row?.quantita), 0)),
-      source: explicitRows.length ? "tariff_rows_explicit" : "tariff_rows_negative",
+      euro: 0,
+      mc: 0,
+      acquedotto: 0,
+      depurazione: 0,
+      fognatura: 0,
+      depFog: 0,
+      oneri: 0,
+      iva: 0,
+      totale: 0,
+      source: "none",
     };
   }
 
+  const sumNegativeRows = (key, predicate = null) => {
+    const rows = Array.isArray(payload?.[key]) ? payload[key] : [];
+    const negativeRows = rows.filter(
+      (row) => n2(row?.importo) < 0 && (!predicate || predicate(row))
+    );
+    const explicitRows = negativeRows.filter((row) => row?.is_storno_acconto);
+    const targetRows = negativeRows;
+
+    return {
+      rows: targetRows,
+      importo: targetRows.reduce((sum, row) => sum + n2(row?.importo), 0),
+      quantita: targetRows.reduce((sum, row) => sum - Math.abs(n2(row?.quantita)), 0),
+      explicit: explicitRows.length > 0,
+    };
+  };
+
+  const acquedottoRows = sumNegativeRows(
+    "componente_tariffa_acquedotto",
+    isMainAcquedottoTariffRow
+  );
+  const depurazioneRows = sumNegativeRows("componente_tariffa_depurazione");
+  const fognaturaRows = sumNegativeRows("componente_tariffa_fognatura");
+  const oneriRows = sumNegativeRows("oneri_perequazione");
+
   const summary = payload?.summaryTariffeAcquedotto || {};
-  const euro = n2(summary.importoStorno) || n2(summary.importoNeg);
-  const mc = n2(summary.quantitaStorno) || n2(summary.quantitaNeg);
+  const summaryAcquedotto = n2(summary.importoStorno) || n2(summary.importoNeg);
+  const summaryMc = n2(summary.quantitaStorno) || n2(summary.quantitaNeg);
+  const acquedotto = round2(
+    acquedottoRows.rows.length
+      ? acquedottoRows.importo
+      : summaryAcquedotto > 0
+      ? -summaryAcquedotto
+      : summaryAcquedotto
+  );
+  const mc = round3(
+    acquedottoRows.rows.length
+      ? acquedottoRows.quantita
+      : summaryMc > 0
+      ? -summaryMc
+      : summaryMc
+  );
+  const depurazione = round2(depurazioneRows.importo);
+  const fognatura = round2(fognaturaRows.importo);
+  const depFog = round2(depurazione + fognatura);
+  const oneri = round2(oneriRows.importo);
+  const iva = round2((acquedotto + depFog + oneri) * 0.1);
+  const totale = round2(acquedotto + depFog + oneri + iva);
+  const hasComponentRows =
+    acquedottoRows.rows.length > 0 ||
+    depurazioneRows.rows.length > 0 ||
+    fognaturaRows.rows.length > 0 ||
+    oneriRows.rows.length > 0;
+  const hasExplicitRows =
+    acquedottoRows.explicit ||
+    depurazioneRows.explicit ||
+    fognaturaRows.explicit ||
+    oneriRows.explicit;
 
   return {
-    euro: round2(euro),
-    mc: round3(mc),
-    source: euro || mc ? "summary" : "none",
+    // euro remains the compatibility field consumed by the allocation engine.
+    euro: totale,
+    mc,
+    acquedotto,
+    depurazione,
+    fognatura,
+    depFog,
+    oneri,
+    iva,
+    totale,
+    source: hasComponentRows
+      ? hasExplicitRows
+        ? "component_rows_explicit"
+        : "component_rows_negative"
+      : acquedotto || mc
+      ? "summary"
+      : "none",
   };
 }
  
@@ -3253,7 +3313,8 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     const totAcc = round2(impConsAcc + depFogAcc + ivaAcc);
 
     // -----------------------------
-    // STORNO = ACQUEDOTTO ONLY ON mcStorno
+    // Prefer the full parsed storno total. The tariff calculation remains a
+    // compatibility fallback for sessions that only provide manual storno mc.
     // -----------------------------
     const mcStorno =  n2(session.mcStorno) !== 0 ? n2(session.mcStorno) : 0;
 
@@ -4636,6 +4697,33 @@ exports.calculateSession = async function ({
     let resolvedEurStorno = eurStorno;
     let resolvedMcStorno = calculationContext?.mcStorno ?? session.mcStorno;
     let resolvedStornoSource = "request";
+    let resolvedStornoBreakdown = {
+      mc: n2(calculationContext?.stornoBreakdown?.mc ?? resolvedMcStorno),
+      acquedotto: n2(
+        calculationContext?.stornoBreakdown?.acquedotto ??
+          calculationContext?.parsedStornoAcquedotto
+      ),
+      depFog: n2(
+        calculationContext?.stornoBreakdown?.depFog ??
+          calculationContext?.parsedStornoDepFog
+      ),
+      depurazione: n2(calculationContext?.stornoBreakdown?.depurazione),
+      fognatura: n2(calculationContext?.stornoBreakdown?.fognatura),
+      iva: n2(
+        calculationContext?.stornoBreakdown?.iva ??
+          calculationContext?.parsedStornoIva
+      ),
+      oneri: n2(
+        calculationContext?.stornoBreakdown?.oneri ??
+          calculationContext?.parsedOneriPerequazioneStorno
+      ),
+      totale: n2(
+        calculationContext?.stornoBreakdown?.totale ??
+          calculationContext?.parsedStornoTotale ??
+          eurStorno
+      ),
+      source: calculationContext?.stornoBreakdown?.source || "request",
+    };
 
     if (resolvedImportedDocumentId) {
       const [docRows] = await conn.query(
@@ -4666,6 +4754,17 @@ exports.calculateSession = async function ({
         resolvedEurStorno = stornoFromDoc.euro;
         resolvedMcStorno = stornoFromDoc.mc;
         resolvedStornoSource = stornoFromDoc.source;
+        resolvedStornoBreakdown = {
+          mc: stornoFromDoc.mc,
+          acquedotto: stornoFromDoc.acquedotto,
+          depurazione: stornoFromDoc.depurazione,
+          fognatura: stornoFromDoc.fognatura,
+          depFog: stornoFromDoc.depFog,
+          iva: stornoFromDoc.iva,
+          oneri: stornoFromDoc.oneri,
+          totale: stornoFromDoc.totale,
+          source: stornoFromDoc.source,
+        };
       }
     }
 
@@ -4687,6 +4786,12 @@ exports.calculateSession = async function ({
           eurStorno: resolvedEurStorno,
           mcStorno: resolvedMcStorno,
           stornoSource: resolvedStornoSource,
+          parsedStornoAcquedotto: resolvedStornoBreakdown.acquedotto,
+          parsedStornoDepFog: resolvedStornoBreakdown.depFog,
+          parsedStornoIva: resolvedStornoBreakdown.iva,
+          parsedOneriPerequazioneStorno: resolvedStornoBreakdown.oneri,
+          parsedStornoTotale: resolvedStornoBreakdown.totale,
+          stornoBreakdown: resolvedStornoBreakdown,
           savedAt: new Date().toISOString(),
         })
       : null;
