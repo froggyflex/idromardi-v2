@@ -10,6 +10,7 @@ const fs1 = require("fs");
 const { launchBrowser } = require("../../utils/puppeteer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
+const { resolveLegacyTxtTransition } = require("./storno-transition");
 const {
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
@@ -133,6 +134,66 @@ async function ensureFattureRigheRecuperoColumns() {
     );
   }
 
+  if (!columns.has("storno_pregresso")) {
+    alters.push(
+      "ADD COLUMN storno_pregresso DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_legacy"
+    );
+  }
+
+  if (!columns.has("storno_txt_richiesto")) {
+    alters.push(
+      "ADD COLUMN storno_txt_richiesto DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_txt_aggiuntivo"
+    );
+  }
+
+  if (!columns.has("storno_txt_compensato_legacy")) {
+    alters.push(
+      "ADD COLUMN storno_txt_compensato_legacy DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_txt_richiesto"
+    );
+  }
+
+  if (!columns.has("storno_carenza_assorbita")) {
+    alters.push(
+      "ADD COLUMN storno_carenza_assorbita DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER storno_txt_compensato_legacy"
+    );
+  }
+
+  if (!columns.has("credito_storno_ingresso")) {
+    alters.push(
+      "ADD COLUMN credito_storno_ingresso DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER credito_storno_residuo"
+    );
+  }
+
+  if (!columns.has("credito_storno_residuo_mc")) {
+    alters.push(
+      "ADD COLUMN credito_storno_residuo_mc DECIMAL(12,3) NOT NULL DEFAULT 0 AFTER credito_storno_residuo"
+    );
+  }
+
+  if (!columns.has("credito_storno_assorbito")) {
+    alters.push(
+      "ADD COLUMN credito_storno_assorbito DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER credito_storno_ingresso"
+    );
+  }
+
+  if (!columns.has("credito_storno_differito")) {
+    alters.push(
+      "ADD COLUMN credito_storno_differito DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER credito_storno_assorbito"
+    );
+  }
+
+  if (!columns.has("storno_transition_status")) {
+    alters.push(
+      "ADD COLUMN storno_transition_status VARCHAR(50) NULL AFTER storno_legacy_periodo"
+    );
+  }
+
+  if (!columns.has("storno_mc_applicato")) {
+    alters.push(
+      "ADD COLUMN storno_mc_applicato DECIMAL(12,3) NOT NULL DEFAULT 0 AFTER storno_acconto"
+    );
+  }
+
   if (!columns.has("configured_oneri")) {
     alters.push(
       "ADD COLUMN configured_oneri DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER imp_oneri"
@@ -168,7 +229,32 @@ async function getFattureAccontiColumns() {
   return fattureAccontiColumns;
 }
 
+async function ensureFattureAccontiLedgerTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS fatture_acconti_movimenti (
+      id CHAR(36) NOT NULL PRIMARY KEY,
+      id_utenza CHAR(36) NOT NULL,
+      id_fattura CHAR(36) NOT NULL,
+      id_riga_fattura CHAR(36) DEFAULT NULL,
+      tipo_movimento ENUM('ACCONTO_CARICATO', 'STORNO_APPLICATO', 'RETTIFICA_POS') NOT NULL,
+      importo_euro DECIMAL(10,2) NOT NULL DEFAULT 0,
+      importo_mc DECIMAL(12,3) NOT NULL DEFAULT 0,
+      source_movimento_id CHAR(36) DEFAULT NULL,
+      origine_credito VARCHAR(20) DEFAULT NULL,
+      periodo_origine VARCHAR(100) DEFAULT NULL,
+      note VARCHAR(255) DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_acconti_utenza_created (id_utenza, created_at),
+      KEY idx_acconti_fattura (id_fattura),
+      KEY idx_acconti_source (source_movimento_id),
+      KEY idx_acconti_riga (id_riga_fattura)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  `);
+  fattureAccontiColumns = null;
+}
+
 async function ensureFattureAccontiTransitionColumns() {
+  await ensureFattureAccontiLedgerTable();
   const columns = await getFattureAccontiColumns();
   const alters = [];
 
@@ -2172,6 +2258,109 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
   }));
 }
 
+async function assertNoLaterCalculatedBillingPeriods(conn, session) {
+  const [laterPeriods] = await conn.query(
+    `
+    SELECT
+      later.id,
+      later.stato,
+      p.period_year,
+      p.period_month
+    FROM fatture_sessioni later
+    JOIN letture_sessioni p ON p.id = later.id_periodo_attuale
+    JOIN letture_sessioni current_period ON current_period.id = ?
+    WHERE later.id_condominio = ?
+      AND later.id <> ?
+      AND later.stato IN ('CALCOLATA', 'CONFERMATA')
+      AND (
+        p.period_year > current_period.period_year
+        OR (
+          p.period_year = current_period.period_year
+          AND p.period_month > current_period.period_month
+        )
+      )
+    ORDER BY p.period_year, p.period_month
+    LIMIT 20
+    `,
+    [session.id_periodo_attuale, session.id_condominio, session.id]
+  );
+
+  if (!laterPeriods.length) return;
+
+  const error = new Error(
+    "Questo periodo non può essere ricalcolato isolatamente perché esistono periodi successivi già calcolati. I saldi storno devono essere ricalcolati in ordine cronologico."
+  );
+  error.statusCode = 409;
+  error.code = "LATER_BILLING_PERIOD_DEPENDENCY";
+  error.dependencies = laterPeriods.map((period) => ({
+    id: period.id,
+    stato: period.stato,
+    mese: Number(period.period_month),
+    anno: Number(period.period_year),
+    periodo: `${Number(period.period_month)}/${Number(period.period_year)}`,
+  }));
+  throw error;
+}
+
+function planCreditConsumption(credits, euroLimit, mcLimit, legacyEuroOnly = false) {
+  let remainingEuro = round2(Math.max(0, n2(euroLimit)));
+  let remainingMc = round3(Math.max(0, n2(mcLimit)));
+  let euroUsed = 0;
+  let mcUsed = 0;
+  const movements = [];
+  const periods = new Set();
+
+  for (const credit of credits || []) {
+    if (remainingEuro <= 0) break;
+
+    const openEuro = Math.max(0, n2(credit.open_euro));
+    const openMc = Math.max(0, n2(credit.open_mc));
+    if (openEuro <= 0 && openMc <= 0) continue;
+
+    let takeEuro = 0;
+    let takeMc = 0;
+    if (legacyEuroOnly) {
+      takeEuro = round2(Math.min(remainingEuro, openEuro));
+      takeMc =
+        openEuro > 0
+          ? round3(Math.min(remainingMc, openMc, (openMc * takeEuro) / openEuro))
+          : 0;
+    } else {
+      const euroFactor = openEuro > 0 ? remainingEuro / openEuro : Number.POSITIVE_INFINITY;
+      const mcFactor = openMc > 0 ? remainingMc / openMc : Number.POSITIVE_INFINITY;
+      const factor = Math.max(0, Math.min(1, euroFactor, mcFactor));
+      takeEuro = openEuro > 0 ? round2(openEuro * factor) : 0;
+      takeMc = openMc > 0 ? round3(openMc * factor) : 0;
+    }
+
+    takeEuro = round2(Math.min(remainingEuro, takeEuro));
+    takeMc = round3(Math.min(remainingMc, takeMc));
+    if (takeEuro <= 0 && takeMc <= 0) continue;
+
+    euroUsed = round2(euroUsed + takeEuro);
+    mcUsed = round3(mcUsed + takeMc);
+    remainingEuro = round2(Math.max(0, remainingEuro - takeEuro));
+    remainingMc = round3(Math.max(0, remainingMc - takeMc));
+    if (credit.periodo_origine) periods.add(String(credit.periodo_origine));
+    movements.push({
+      source_movimento_id: credit.id,
+      id_utenza: credit.id_utenza,
+      importo_euro: takeEuro,
+      importo_mc: takeMc,
+      origine_credito: credit.origine_credito,
+    });
+  }
+
+  return {
+    euroUsed,
+    mcUsed,
+    movements,
+    periods,
+    remainingEuro,
+    remainingMc,
+  };
+}
+
 function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearDays, key}) {
   let remaining = Math.max(0, n2(consumo));
   let total = 0;
@@ -2524,20 +2713,28 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
         `
         SELECT 
           fr.*,
-          COALESCE(fr.credito_storno_residuo, 0) + COALESCE((
-            SELECT SUM(m.importo_euro)
-            FROM fatture_acconti_movimenti m
-            WHERE m.id_riga_fattura = fr.id
-              AND m.tipo_movimento = 'RETTIFICA_POS'
-              AND m.note = 'Credito storno non applicato per minimo fatturabile'
-          ), 0) AS minimum_payable_credit_euro,
-          COALESCE((
-            SELECT SUM(m.importo_mc)
-            FROM fatture_acconti_movimenti m
-            WHERE m.id_riga_fattura = fr.id
-              AND m.tipo_movimento = 'RETTIFICA_POS'
-              AND m.note = 'Credito storno non applicato per minimo fatturabile'
-          ), 0) AS minimum_payable_credit_mc,
+          CASE
+            WHEN fr.storno_transition_status IS NOT NULL
+              THEN COALESCE(fr.credito_storno_residuo, 0)
+            ELSE COALESCE(fr.credito_storno_residuo, 0) + COALESCE((
+              SELECT SUM(m.importo_euro)
+              FROM fatture_acconti_movimenti m
+              WHERE m.id_riga_fattura = fr.id
+                AND m.tipo_movimento = 'RETTIFICA_POS'
+                AND m.note = 'Credito storno non applicato per minimo fatturabile'
+            ), 0)
+          END AS minimum_payable_credit_euro,
+          CASE
+            WHEN fr.storno_transition_status IS NOT NULL
+              THEN COALESCE(fr.credito_storno_residuo_mc, 0)
+            ELSE COALESCE((
+              SELECT SUM(m.importo_mc)
+              FROM fatture_acconti_movimenti m
+              WHERE m.id_riga_fattura = fr.id
+                AND m.tipo_movimento = 'RETTIFICA_POS'
+                AND m.note = 'Credito storno non applicato per minimo fatturabile'
+            ), 0)
+          END AS minimum_payable_credit_mc,
           u.id_user,
           CONCAT(u.nome,' ',u.cognome) AS utente,
           u.doppio_contatore,
@@ -2919,20 +3116,28 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     `
     SELECT 
       fr.*,
-          COALESCE(fr.credito_storno_residuo, 0) + COALESCE((
-            SELECT SUM(m.importo_euro)
-        FROM fatture_acconti_movimenti m
-        WHERE m.id_riga_fattura = fr.id
-          AND m.tipo_movimento = 'RETTIFICA_POS'
-          AND m.note = 'Credito storno non applicato per minimo fatturabile'
-      ), 0) AS minimum_payable_credit_euro,
-      COALESCE((
-        SELECT SUM(m.importo_mc)
-        FROM fatture_acconti_movimenti m
-        WHERE m.id_riga_fattura = fr.id
-          AND m.tipo_movimento = 'RETTIFICA_POS'
-          AND m.note = 'Credito storno non applicato per minimo fatturabile'
-      ), 0) AS minimum_payable_credit_mc,
+      CASE
+        WHEN fr.storno_transition_status IS NOT NULL
+          THEN COALESCE(fr.credito_storno_residuo, 0)
+        ELSE COALESCE(fr.credito_storno_residuo, 0) + COALESCE((
+          SELECT SUM(m.importo_euro)
+          FROM fatture_acconti_movimenti m
+          WHERE m.id_riga_fattura = fr.id
+            AND m.tipo_movimento = 'RETTIFICA_POS'
+            AND m.note = 'Credito storno non applicato per minimo fatturabile'
+        ), 0)
+      END AS minimum_payable_credit_euro,
+      CASE
+        WHEN fr.storno_transition_status IS NOT NULL
+          THEN COALESCE(fr.credito_storno_residuo_mc, 0)
+        ELSE COALESCE((
+          SELECT SUM(m.importo_mc)
+          FROM fatture_acconti_movimenti m
+          WHERE m.id_riga_fattura = fr.id
+            AND m.tipo_movimento = 'RETTIFICA_POS'
+            AND m.note = 'Credito storno non applicato per minimo fatturabile'
+        ), 0)
+      END AS minimum_payable_credit_mc,
       u.id_user,
       CONCAT(u.nome,' ',u.cognome) AS utente,
       u.doppio_contatore,
@@ -3867,11 +4072,20 @@ async function calculateInterni(
         acconto: 0,
 
         storno_calcolato: 0,   // current invoice storno from mcStorno
+        storno_mc_applicato: 0,
         storno_pregresso: 0,   // old ledger credit consumed
         storno_legacy: 0,
         storno_txt_aggiuntivo: 0,
+        storno_txt_richiesto: 0,
+        storno_txt_compensato_legacy: 0,
+        storno_carenza_assorbita: 0,
         credito_storno_residuo: 0,
+        credito_storno_residuo_mc: 0,
+        credito_storno_ingresso: 0,
+        credito_storno_assorbito: 0,
+        credito_storno_differito: 0,
         storno_legacy_periodo: null,
+        storno_transition_status: null,
         storno_totale: 0,      // persisted printable storno
         recupero_lettura: recuperoLettura ? 1 : 0,
         recupero_note: recuperoLettura
@@ -3928,11 +4142,20 @@ async function calculateInterni(
             acconto: 0,
 
             storno_calcolato: 0,
+            storno_mc_applicato: 0,
             storno_pregresso: 0,
             storno_legacy: 0,
             storno_txt_aggiuntivo: 0,
+            storno_txt_richiesto: 0,
+            storno_txt_compensato_legacy: 0,
+            storno_carenza_assorbita: 0,
             credito_storno_residuo: 0,
+            credito_storno_residuo_mc: 0,
+            credito_storno_ingresso: 0,
+            credito_storno_assorbito: 0,
+            credito_storno_differito: 0,
             storno_legacy_periodo: null,
+            storno_transition_status: null,
             storno_totale: 0,
             recupero_lettura: recuperoByUtenza.get(gk.id) ? 1 : 0,
             recupero_note: recuperoNoteByUtenza.get(gk.id) || null,
@@ -4060,183 +4283,198 @@ async function calculateInterni(
         const credits = [];
         for (const idUtenza of memberIds) {
           const memberCredits = await loadOpenAccontoCredits(conn, idUtenza);
+          credits.push(...memberCredits);
           for (const credit of memberCredits) {
+            const openEuro = Math.max(0, n2(credit.open_euro));
             if (credit.origine_credito === "LEGACY") {
-              legacyCreditsAvailable = round2(
-                legacyCreditsAvailable + Math.max(0, n2(credit.open_euro))
-              );
+              legacyCreditsAvailable = round2(legacyCreditsAvailable + openEuro);
             } else {
-              platformCreditsAvailable = round2(
-                platformCreditsAvailable + Math.max(0, n2(credit.open_euro))
-              );
+              platformCreditsAvailable = round2(platformCreditsAvailable + openEuro);
             }
           }
-          credits.push(...memberCredits);
         }
         creditsByPrimary.set(row, credits);
       }
 
-      const openEuroFor = (row) =>
-        round2(
-          (creditsByPrimary.get(row) || []).reduce(
+      // The TXT is allocated before applying transition rules. This produces
+      // the per-user TXT amount that must be compared with the certified legacy
+      // acconto. Capacity is intentionally applied afterwards.
+      const txtRequestedShares = allocateByWeight(
+        requestedReduction,
+        primaries,
+        moneyWeightFn,
+        2
+      );
+      const txtRequestedMcShares = allocateByWeight(
+        totalStornoMc,
+        txtRequestedShares.map((share) => ({ share })),
+        (item) => item.share,
+        3
+      );
+
+      for (let index = 0; index < primaries.length; index++) {
+        const row = primaries[index];
+        const credits = creditsByPrimary.get(row) || [];
+        const legacyCredits = credits.filter(
+          (credit) => credit.origine_credito === "LEGACY"
+        );
+        const platformCredits = credits.filter(
+          (credit) => credit.origine_credito !== "LEGACY"
+        );
+        const legacyOpen = round2(
+          legacyCredits.reduce(
             (sum, credit) => sum + Math.max(0, n2(credit.open_euro)),
             0
           )
         );
-
-      // Keep the established TXT allocation unchanged: first distribute the
-      // amount across every row that can absorb it, then store only the part
-      // that the condominium cannot absorb without breaking the minimum.
-      const totalTxtCapacity = round2(
-        primaries.reduce(
-          (sum, row) => sum + getAvailableStornoReductionEuro(row),
-          0
-        )
-      );
-      const appliedTxtTotal = round2(
-        Math.min(requestedReduction, totalTxtCapacity)
-      );
-      const appliedTxtShares = allocateByWeightWithCapacity(
-        appliedTxtTotal,
-        primaries,
-        moneyWeightFn,
-        getAvailableStornoReductionEuro,
-        2
-      );
-      const blockedTxtTotal = round2(
-        Math.max(0, requestedReduction - appliedTxtTotal)
-      );
-      const blockedTxtShares =
-        blockedTxtTotal > 0
-          ? allocateByWeight(blockedTxtTotal, primaries, moneyWeightFn, 2)
-          : primaries.map(() => 0);
-
-      const appliedCreditShares = primaries.map(() => 0);
-
-      for (let index = 0; index < primaries.length; index++) {
-        const row = primaries[index];
-        let remainingEuroCap = Math.max(
-          0,
-          round2(
-            getAvailableStornoReductionEuro(row) - n2(appliedTxtShares[index])
+        const platformOpen = round2(
+          platformCredits.reduce(
+            (sum, credit) => sum + Math.max(0, n2(credit.open_euro)),
+            0
           )
         );
+        const legacyOpenMc = round3(
+          legacyCredits.reduce(
+            (sum, credit) => sum + Math.max(0, n2(credit.open_mc)),
+            0
+          )
+        );
+        const platformOpenMc = round3(
+          platformCredits.reduce(
+            (sum, credit) => sum + Math.max(0, n2(credit.open_mc)),
+            0
+          )
+        );
+        const txtRequested = round2(Math.max(0, n2(txtRequestedShares[index])));
+        const txtRequestedMc = round3(
+          Math.max(0, n2(txtRequestedMcShares[index]))
+        );
+        let remainingEuroCap = round2(getAvailableStornoReductionEuro(row));
         let remainingMcCap = round3(Math.max(0, n2(row.consumo_normale)));
         let legacyUsed = 0;
+        let legacyMcUsed = 0;
         let platformUsed = 0;
-        let usedMc = 0;
+        let platformMcUsed = 0;
+        let txtApplied = 0;
+        let txtAppliedMc = 0;
+        let txtDeferred = 0;
+        let txtDeferredMc = 0;
+        let txtMatchedLegacy = 0;
+        let shortageAbsorbed = 0;
+        let status = "NESSUNO";
         const movements = [];
         const legacyPeriods = new Set();
 
-        for (const credit of creditsByPrimary.get(row) || []) {
-          const isLegacy = credit.origine_credito === "LEGACY";
-          if (remainingEuroCap <= 0) break;
+        row.storno_txt_richiesto = round2(-txtRequested);
+        row.credito_storno_ingresso = platformOpen;
 
-          let takeEuro = 0;
-          let takeMc = 0;
-          if (isLegacy) {
-            // Legacy amounts represent an operator-certified previous balance.
-            // Their euro absorption is limited by the minimum payable; MC is
-            // optional supporting information and must not reduce that amount.
-            takeEuro = round2(
-              Math.min(remainingEuroCap, Math.max(0, n2(credit.open_euro)))
-            );
-            takeMc =
-              n2(credit.open_euro) > 0
-                ? round3(
-                    Math.min(
-                      remainingMcCap,
-                      n2(credit.open_mc),
-                      (n2(credit.open_mc) * takeEuro) / n2(credit.open_euro)
-                    )
+        // Confirmed transition trigger: neither legacy nor deferred balances
+        // move when this user's allocated TXT storno is zero.
+        if (txtRequested > 0 && legacyOpen > 0) {
+          const transition = resolveLegacyTxtTransition(txtRequested, legacyOpen);
+          const legacyPlan = planCreditConsumption(
+            legacyCredits,
+            remainingEuroCap,
+            remainingMcCap,
+            true
+          );
+          legacyUsed = legacyPlan.euroUsed;
+          legacyMcUsed = legacyPlan.mcUsed;
+          remainingEuroCap = legacyPlan.remainingEuro;
+          remainingMcCap = legacyPlan.remainingMc;
+          movements.push(...legacyPlan.movements);
+          legacyPlan.periods.forEach((period) => legacyPeriods.add(period));
+
+          // Legacy replaces, rather than adds to, this period's TXT share.
+          txtMatchedLegacy = transition.matched;
+          shortageAbsorbed =
+            legacyUsed + 0.001 < legacyOpen
+              ? round2(Math.max(0, legacyUsed - txtRequested))
+              : transition.shortageAbsorbed;
+          txtDeferred = transition.deferred;
+          txtDeferredMc =
+            txtRequested > 0
+              ? round3((txtRequestedMc * txtDeferred) / txtRequested)
+              : 0;
+
+          if (legacyUsed + 0.001 < legacyOpen) {
+            status = "LEGACY_PARZIALE_MINIMO";
+          } else {
+            status = transition.status;
+          }
+        } else if (txtRequested > 0) {
+          // Once the legacy transition is complete, consume the oldest saved
+          // residual first. The current TXT is applied second and any part that
+          // does not fit becomes the next period's residual.
+          const platformPlan = planCreditConsumption(
+            platformCredits,
+            remainingEuroCap,
+            remainingMcCap,
+            false
+          );
+          platformUsed = platformPlan.euroUsed;
+          platformMcUsed = platformPlan.mcUsed;
+          remainingEuroCap = platformPlan.remainingEuro;
+          remainingMcCap = platformPlan.remainingMc;
+          movements.push(...platformPlan.movements);
+
+          txtApplied = round2(Math.min(txtRequested, remainingEuroCap));
+          txtAppliedMc =
+            txtRequested > 0
+              ? round3(
+                  Math.min(
+                    remainingMcCap,
+                    txtRequestedMc,
+                    (txtRequestedMc * txtApplied) / txtRequested
                   )
-                : 0;
-          } else {
-            // Preserve the established platform-credit behavior exactly when
-            // no legacy balance exists: both euro and MC capacity constrain it.
-            const euroFactor =
-              n2(credit.open_euro) > 0
-                ? remainingEuroCap / n2(credit.open_euro)
-                : Number.POSITIVE_INFINITY;
-            const mcFactor =
-              n2(credit.open_mc) > 0
-                ? remainingMcCap / n2(credit.open_mc)
-                : Number.POSITIVE_INFINITY;
-            const factor = Math.max(0, Math.min(1, euroFactor, mcFactor));
-            takeEuro =
-              n2(credit.open_euro) > 0
-                ? round2(n2(credit.open_euro) * factor)
-                : 0;
-            takeMc =
-              n2(credit.open_mc) > 0
-                ? round3(n2(credit.open_mc) * factor)
-                : 0;
-          }
+                )
+              : 0;
+          txtDeferred = round2(Math.max(0, txtRequested - txtApplied));
+          txtDeferredMc = round3(Math.max(0, txtRequestedMc - txtAppliedMc));
 
-          if (takeEuro > remainingEuroCap) takeEuro = round2(remainingEuroCap);
-          if (takeMc > remainingMcCap) takeMc = round3(remainingMcCap);
-          if (takeEuro <= 0 && takeMc <= 0) continue;
-
-          if (isLegacy) {
-            legacyUsed = round2(legacyUsed + takeEuro);
-            if (credit.periodo_origine) legacyPeriods.add(String(credit.periodo_origine));
+          if (platformUsed > 0 && txtDeferred > 0) {
+            status = "RESIDUO_ASSORBITO_TXT_DIFFERITO";
+          } else if (platformUsed > 0) {
+            status = "RESIDUO_ASSORBITO";
+          } else if (txtDeferred > 0) {
+            status = "TXT_PARZIALE_DIFFERITO";
           } else {
-            platformUsed = round2(platformUsed + takeEuro);
+            status = "TXT_APPLICATO";
           }
-          usedMc = round3(usedMc + takeMc);
-          remainingEuroCap = round2(remainingEuroCap - takeEuro);
-          remainingMcCap = round3(remainingMcCap - takeMc);
-          movements.push({
-            source_movimento_id: credit.id,
-            id_utenza: credit.id_utenza,
-            importo_euro: takeEuro,
-            importo_mc: takeMc,
-            origine_credito: credit.origine_credito,
-          });
         }
+
+        const existingCreditsRemaining = round2(
+          Math.max(0, legacyOpen - legacyUsed) +
+            Math.max(0, platformOpen - platformUsed)
+        );
+        const totalAppliedForRow = round2(legacyUsed + platformUsed + txtApplied);
 
         row.storno_legacy = round2(-legacyUsed);
         row.storno_legacy_periodo = [...legacyPeriods].join(", ") || null;
         row.storno_pregresso = round2(-platformUsed);
-        appliedCreditShares[index] = round2(legacyUsed + platformUsed);
-        row._storno_mc = usedMc;
-        row._storno_movements = movements;
-        row.credito_storno_residuo = round2(
-          Math.max(0, openEuroFor(row) - n2(appliedCreditShares[index]))
-        );
-      }
-
-      const totalAppliedShares = primaries.map((row, index) =>
-        round2(n2(appliedCreditShares[index]) + n2(appliedTxtShares[index]))
-      );
-      const appliedMcTotal =
-        requestedReduction > 0
-          ? round3((totalStornoMc * appliedTxtTotal) / requestedReduction)
-          : 0;
-      const appliedMcShares = allocateByWeight(
-        appliedMcTotal,
-        appliedTxtShares.map((share) => ({ share })),
-        (item) => item.share,
-        3
-      );
-      const blockedTxtMcTotal = round3(Math.max(0, totalStornoMc - appliedMcTotal));
-      const blockedTxtMcShares = allocateByWeight(
-        blockedTxtMcTotal,
-        blockedTxtShares.map((share) => ({ share })),
-        (item) => item.share,
-        3
-      );
-
-      for (let index = 0; index < primaries.length; index++) {
-        const row = primaries[index];
-        const txtApplied = round2(appliedTxtShares[index] || 0);
-        const totalAppliedForRow = round2(totalAppliedShares[index] || 0);
-
         row.storno_txt_aggiuntivo = round2(-txtApplied);
-        row.storno_calcolato = round2(-txtApplied);
-        row._storno_calcolato_mc = round3(appliedMcShares[index] || 0);
-        row._storno_credit_euro = round2(blockedTxtShares[index] || 0);
-        row._storno_credit_mc = round3(blockedTxtMcShares[index] || 0);
+        row.storno_calcolato = row.storno_txt_aggiuntivo;
+        row.storno_txt_compensato_legacy = round2(txtMatchedLegacy);
+        row.storno_carenza_assorbita = round2(shortageAbsorbed);
+        row.credito_storno_assorbito = round2(platformUsed);
+        row.credito_storno_differito = round2(txtDeferred);
+        row.credito_storno_residuo = round2(
+          existingCreditsRemaining + txtDeferred
+        );
+        row.credito_storno_residuo_mc = round3(
+          Math.max(0, legacyOpenMc - legacyMcUsed) +
+            Math.max(0, platformOpenMc - platformMcUsed) +
+            txtDeferredMc
+        );
+        row.storno_transition_status = status;
+        row._storno_mc = round3(legacyMcUsed + platformMcUsed);
+        row._storno_calcolato_mc = txtAppliedMc;
+        row.storno_mc_applicato = round3(
+          legacyMcUsed + platformMcUsed + txtAppliedMc
+        );
+        row._storno_movements = movements;
+        row._storno_credit_euro = txtDeferred;
+        row._storno_credit_mc = txtDeferredMc;
         row.base_totale = round2(n2(row._base_prima_storno) - totalAppliedForRow);
       }
     } else {
@@ -4367,11 +4605,20 @@ async function calculateInterni(
         0
       )
     );
+    const txtStornoMatchedLegacy = round2(
+      rows.reduce(
+        (sum, row) => sum + Math.max(0, n2(row.storno_txt_compensato_legacy)),
+        0
+      )
+    );
     const txtStornoDeferred = round2(
       rows.reduce((sum, row) => sum + n2(row._storno_credit_euro), 0)
     );
     const txtStornoConservationResidual = round2(
-      txtStornoRequested - txtStornoApplied - txtStornoDeferred
+      txtStornoRequested -
+        txtStornoApplied -
+        txtStornoMatchedLegacy -
+        txtStornoDeferred
     );
     const rowFormulaErrors = rows
       .filter(
@@ -4406,6 +4653,7 @@ async function calculateInterni(
       reconciliationResidual: finalReconciliation.residual,
       txtStornoRequested,
       txtStornoApplied,
+      txtStornoMatchedLegacy,
       txtStornoDeferred,
       txtStornoConservationResidual,
       previousCreditsApplied,
@@ -4481,10 +4729,15 @@ async function calculateInterni(
          conguaglio, imp_arr,
          totale,
          imp_acconto, depfog_acconto, acconto, storno_acconto,
-         storno_legacy, storno_txt_aggiuntivo, credito_storno_residuo,
-         storno_legacy_periodo,
+         storno_legacy, storno_pregresso, storno_txt_aggiuntivo,
+         storno_txt_richiesto, storno_txt_compensato_legacy,
+         storno_carenza_assorbita, storno_mc_applicato,
+         credito_storno_residuo, credito_storno_residuo_mc,
+         credito_storno_ingresso, credito_storno_assorbito,
+         credito_storno_differito, storno_legacy_periodo,
+         storno_transition_status,
          recupero_lettura, recupero_note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           rowId,
@@ -4520,9 +4773,19 @@ async function calculateInterni(
           r.acconto,
           r.storno_totale,
           r.storno_legacy,
+          r.storno_pregresso,
           r.storno_txt_aggiuntivo,
+          r.storno_txt_richiesto,
+          r.storno_txt_compensato_legacy,
+          r.storno_carenza_assorbita,
+          r.storno_mc_applicato,
           r.credito_storno_residuo,
+          r.credito_storno_residuo_mc,
+          r.credito_storno_ingresso,
+          r.credito_storno_assorbito,
+          r.credito_storno_differito,
           r.storno_legacy_periodo,
+          r.storno_transition_status,
           r.recupero_lettura ? 1 : 0,
           r.recupero_note || null,
         ]
@@ -4559,8 +4822,9 @@ async function calculateInterni(
           `
           INSERT INTO fatture_acconti_movimenti
           (id, id_utenza, id_fattura, id_riga_fattura,
-           tipo_movimento, importo_euro, importo_mc, source_movimento_id, note)
-          VALUES (?, ?, ?, ?, 'RETTIFICA_POS', ?, ?, NULL, ?)
+           tipo_movimento, importo_euro, importo_mc, source_movimento_id,
+           origine_credito, periodo_origine, note)
+          VALUES (?, ?, ?, ?, 'RETTIFICA_POS', ?, ?, NULL, 'TXT_DIFFERITO', ?, ?)
           `,
           [
             uuid(),
@@ -4569,7 +4833,8 @@ async function calculateInterni(
             r.id_riga_fattura,
             round2(n2(r._storno_credit_euro)),
             round3(n2(r._storno_credit_mc)),
-            'Credito storno non applicato per minimo fatturabile',
+            `${Number(periodoAttuale.period_month)}/${Number(periodoAttuale.period_year)}`,
+            'Credito storno TXT differito al periodo successivo',
           ]
         );
       }
@@ -4679,6 +4944,7 @@ exports.calculateSession = async function ({
     if (session.stato === "CONFERMATA") {
       throw new Error("Session is confirmed and cannot be recalculated");
     }
+    await assertNoLaterCalculatedBillingPeriods(conn, session);
     const effectiveTfCode = normalizeTfCode(
       tfCode || calculationContext?.tfCode,
       session.tf_code || "TF1"
@@ -4750,7 +5016,10 @@ exports.calculateSession = async function ({
       }
 
       const stornoFromDoc = getStornoValuesFromParsedPayload(importedPayload);
-      if (stornoFromDoc.euro !== 0 || stornoFromDoc.mc !== 0) {
+      // A parsed TXT is authoritative even when its storno is exactly zero.
+      // Treating zero as a missing value could reuse a stale request/session
+      // amount and consume credits in a period that contains no TXT storno.
+      if (importedPayload) {
         resolvedEurStorno = stornoFromDoc.euro;
         resolvedMcStorno = stornoFromDoc.mc;
         resolvedStornoSource = stornoFromDoc.source;

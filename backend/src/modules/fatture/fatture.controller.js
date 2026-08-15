@@ -157,6 +157,8 @@ exports.calculateSession = async (req, res) => {
       ...(err.accountingChecks
         ? { accountingChecks: err.accountingChecks }
         : {}),
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.dependencies ? { dependencies: err.dependencies } : {}),
     });
   }
 };

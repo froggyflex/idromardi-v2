@@ -2672,7 +2672,11 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         const res = await api.post(`/fatture/sessioni/${targetSessionId}/calcola`, {
           tfCode: selectedTfCode,
           annoTariffa: Number(annoTariffa) || null,
-          eurStorno: parsedStornoForCalc.euro || (eurStorno ? Number(eurStorno) : null),
+          eurStorno: parsedPayloadObject
+            ? parsedStornoForCalc.euro
+            : eurStorno
+            ? Number(eurStorno)
+            : null,
           parsedQF: null,
           parsedAccontoImporto: calcMcAcconto > 0
             ? Number(parsedAccontoForCalc?.acquedotto ?? eurAcconto ?? 0)
@@ -2701,8 +2705,12 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             giorniAcconto: parsedParamsForCalc.giorniAcconto ?? null,
             giorniInterni: resolveGiorniCasaInterniValue(),
             mcAcconto: parsedParamsForCalc.mcAcconto ?? null,
-            mcStorno: parsedStornoForCalc.mc || Number(mcStorno || 0),
-            eurStorno: parsedStornoForCalc.euro || Number(eurStorno || 0),
+            mcStorno: parsedPayloadObject
+              ? parsedStornoForCalc.mc
+              : Number(mcStorno || 0),
+            eurStorno: parsedPayloadObject
+              ? parsedStornoForCalc.euro
+              : Number(eurStorno || 0),
             parsedStornoAcquedotto: parsedStornoForCalc.acquedotto ?? Number(acquedottoStorno || 0),
             parsedStornoDepFog: parsedStornoForCalc.depFog ?? Number(depfogStorno || 0),
             parsedStornoIva: parsedStornoForCalc.iva ?? Number(ivaStorno || 0),
@@ -2710,7 +2718,9 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
               parsedStornoForCalc.oneri ?? Number(oneriPerequazioneStorno || 0),
             parsedStornoTotale: parsedStornoForCalc.totale ?? Number(totaleStorno || eurStorno || 0),
             stornoBreakdown: {
-              mc: parsedStornoForCalc.mc || Number(mcStorno || 0),
+              mc: parsedPayloadObject
+                ? parsedStornoForCalc.mc
+                : Number(mcStorno || 0),
               acquedotto: parsedStornoForCalc.acquedotto ?? Number(acquedottoStorno || 0),
               depurazione: parsedStornoForCalc.depurazione ?? 0,
               fognatura: parsedStornoForCalc.fognatura ?? 0,
@@ -2825,7 +2835,17 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         const baseMessage =
           responseData?.error ||
           "Errore calcolo: " + (err?.message || "Errore sconosciuto");
-        setError(checkDetails ? `${baseMessage} Dettagli: ${checkDetails}.` : baseMessage);
+        const dependencyDetails =
+          responseData?.code === "LATER_BILLING_PERIOD_DEPENDENCY" &&
+          Array.isArray(responseData?.dependencies)
+            ? responseData.dependencies
+                .map((period: any) => `${period.mese}/${period.anno} (${period.stato})`)
+                .join(", ")
+            : "";
+        const fullMessage = dependencyDetails
+          ? `${baseMessage} Periodi successivi: ${dependencyDetails}.`
+          : baseMessage;
+        setError(checkDetails ? `${fullMessage} Dettagli: ${checkDetails}.` : fullMessage);
       } finally {
         setLoadingCalc(false);
         if (options.auto) {
@@ -3660,6 +3680,9 @@ const getRowTotalDelta = (row: any) =>
 const isRowTotalOk = (row: any) => Math.abs(getRowTotalDelta(row)) <= 0.01;
 
 const getRowStornoMc = (row: any) => {
+  const persisted = Number(row?.riga?.storno_mc_applicato || 0);
+  if (Math.abs(persisted) > 0.0004) return persisted;
+
   const rowStornoEuro = Number(row?.riga?.storno_txt_aggiuntivo || 0);
   const totalStornoEuro = righe.reduce(
     (sum: number, item: any) =>
@@ -3673,6 +3696,21 @@ const getRowStornoMc = (row: any) => {
   }
 
   return (rowStornoEuro / totalStornoEuro) * totalStornoMc;
+};
+
+const getStornoTransitionLabel = (status: any) => {
+  const labels: Record<string, string> = {
+    NESSUNO: "Nessuno storno TXT per l'utenza",
+    LEGACY_PARZIALE_MINIMO: "Acconto legacy applicato parzialmente per il minimo",
+    LEGACY_CARENZA_ASSORBITA: "Differenza legacy assorbita",
+    LEGACY_ECCESSO_DIFFERITO: "Acconto legacy applicato; eccedenza TXT rinviata",
+    LEGACY_ESATTO: "TXT allineato all'acconto legacy",
+    RESIDUO_ASSORBITO_TXT_DIFFERITO: "Residuo precedente assorbito; nuovo TXT rinviato",
+    RESIDUO_ASSORBITO: "Residuo precedente assorbito",
+    TXT_PARZIALE_DIFFERITO: "TXT applicato parzialmente; residuo rinviato",
+    TXT_APPLICATO: "TXT applicato",
+  };
+  return labels[String(status || "")] || "Calcolo storno ordinario";
 };
 
 const totaleOneriPereqVisibile = righe.reduce(
@@ -5083,7 +5121,7 @@ return (
                               Acconti precedenti per utenza
                             </h3>
                             <p className="mt-0.5 text-xs text-slate-500">
-                              Applicati alle singole utenze insieme allo storno presente nel TXT.
+                              Quando il TXT contiene storno, l'acconto legacy sostituisce la quota TXT dell'utenza; senza storno TXT il saldo resta invariato.
                             </p>
                           </div>
                           <button
@@ -5113,9 +5151,9 @@ return (
                             <div className={`mt-0.5 text-xs font-bold ${Math.abs(Number(eurStorno || 0)) > 0 ? "text-emerald-700" : "text-amber-700"}`}>
                               {Math.abs(Number(eurStorno || 0)) > 0
                                 ? legacyDraftTotal > 0
-                                  ? "Storno TXT + saldo precedente, nel rispetto del minimo"
+                                  ? "Acconto legacy in sostituzione della quota TXT; eccedenze rinviate"
                                   : "Solo storno TXT; nessun saldo precedente inserito"
-                                : "Nessun saldo consumato senza storno TXT"}
+                                : "Nessun saldo legacy o residuo consumato senza storno TXT"}
                             </div>
                           </div>
                         </div>
@@ -5393,13 +5431,21 @@ return (
                                           <td className="p-2 text-center">
                                             {getRowStornoMc(r).toFixed(2)}mc
                                             <br />
-                                            {Number(r.riga?.storno_acconto ?? 0).toFixed(2)}
-                                            {(Math.abs(Number(r.riga?.storno_legacy || 0)) > 0.004 ||
-                                              Math.abs(Number(r.riga?.storno_txt_aggiuntivo || 0)) > 0.004) && (
-                                              <div className="mt-1 text-[9px] leading-tight text-slate-500">
-                                                TXT {Number(r.riga?.storno_txt_aggiuntivo || 0).toFixed(2)}
-                                                <br />
-                                                Prec. {Number(r.riga?.storno_legacy || 0).toFixed(2)}
+                                            <span className="font-bold">{Number(r.riga?.storno_acconto ?? 0).toFixed(2)}</span>
+                                            {r.riga?.storno_transition_status && (
+                                              <div className="mt-1 space-y-0.5 text-[9px] leading-tight text-slate-500">
+                                                <div>TXT rich. {Number(r.riga?.storno_txt_richiesto || 0).toFixed(2)}</div>
+                                                {Math.abs(Number(r.riga?.storno_legacy || 0)) > 0.004 && (
+                                                  <div>Legacy {Number(r.riga?.storno_legacy || 0).toFixed(2)}</div>
+                                                )}
+                                                {Math.abs(Number(r.riga?.storno_pregresso || 0)) > 0.004 && (
+                                                  <div>Residuo {Number(r.riga?.storno_pregresso || 0).toFixed(2)}</div>
+                                                )}
+                                                {Number(r.riga?.credito_storno_differito || 0) > 0.004 && (
+                                                  <div className="font-semibold text-amber-700">
+                                                    Rinviato +{Number(r.riga?.credito_storno_differito || 0).toFixed(2)}
+                                                  </div>
+                                                )}
                                               </div>
                                             )}
                                           </td>
@@ -5468,18 +5514,30 @@ return (
                                                       <span>Totale Consumo</span>
                                                       <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
                                                     </div>
-                                                    {(Math.abs(Number(r.riga?.storno_acconto || 0)) > 0.004 || minimumCreditEuro > 0) && (
+                                                    {(Math.abs(Number(r.riga?.storno_acconto || 0)) > 0.004 ||
+                                                      minimumCreditEuro > 0 ||
+                                                      r.riga?.storno_transition_status) && (
                                                       <div className="mt-3 border-t border-slate-200 pt-3 text-xs text-slate-700">
                                                         <div className="mb-2 font-bold uppercase tracking-wide text-slate-500">
-                                                          Composizione storno
+                                                          Tracciamento storno
                                                         </div>
-                                                        <div className="grid gap-1 sm:grid-cols-3">
-                                                          <span>Da TXT: EUR {Number(r.riga?.storno_txt_aggiuntivo || 0).toFixed(2)}</span>
+                                                        <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 font-semibold text-sky-800">
+                                                          {getStornoTransitionLabel(r.riga?.storno_transition_status)}
+                                                        </div>
+                                                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                                          <span>TXT richiesto: EUR {Number(r.riga?.storno_txt_richiesto || 0).toFixed(2)}</span>
+                                                          <span>TXT applicato direttamente: EUR {Number(r.riga?.storno_txt_aggiuntivo || 0).toFixed(2)}</span>
+                                                          <span>TXT compensato dal legacy: EUR {Number(r.riga?.storno_txt_compensato_legacy || 0).toFixed(2)}</span>
                                                           <span>
-                                                            Acconto piattaforma precedente
+                                                            Acconto legacy applicato
                                                             {r.riga?.storno_legacy_periodo ? ` (${r.riga.storno_legacy_periodo})` : ""}: EUR {Number(r.riga?.storno_legacy || 0).toFixed(2)}
                                                           </span>
+                                                          <span>Differenza legacy assorbita: EUR {Number(r.riga?.storno_carenza_assorbita || 0).toFixed(2)}</span>
+                                                          <span>Residuo precedente disponibile: EUR {Number(r.riga?.credito_storno_ingresso || 0).toFixed(2)}</span>
+                                                          <span>Residuo precedente assorbito: EUR {Number(r.riga?.credito_storno_assorbito || 0).toFixed(2)}</span>
+                                                          <span>Nuovo residuo rinviato: EUR {Number(r.riga?.credito_storno_differito || 0).toFixed(2)}</span>
                                                           <span>Totale applicato: EUR {Number(r.riga?.storno_acconto || 0).toFixed(2)}</span>
+                                                          <span>Residuo totale disponibile: EUR {Number(r.riga?.credito_storno_residuo || 0).toFixed(2)}</span>
                                                         </div>
                                                       </div>
                                                     )}

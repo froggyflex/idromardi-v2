@@ -12,6 +12,7 @@ services:
       - db_data:/var/lib/mysql
       - ./miteamx1_fatturazione.sql:/docker-entrypoint-initdb.d/001_base.sql:ro
       - ./database/migrations/001_mobile_readings.sql:/docker-entrypoint-initdb.d/002_mobile_readings.sql:ro
+      - ./database/migrations/002_storno_transition.sql:/docker-entrypoint-initdb.d/003_storno_transition.sql:ro
     ports:
       - "3306:3306"
     healthcheck:
