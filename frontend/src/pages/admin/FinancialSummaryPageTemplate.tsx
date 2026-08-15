@@ -25,6 +25,17 @@ type PaymentRow = {
   totale_allocato: number;
 };
 
+type PaymentSortKey =
+  | "numero"
+  | "payment_method"
+  | "data_pagamento"
+  | "importo"
+  | "totale_allocato"
+  | "stato"
+  | "descrizione";
+
+type SortDirection = "asc" | "desc";
+
 type PaymentDetail = {
   id: string;
   numero_progressivo: number;
@@ -46,6 +57,44 @@ type PaymentDetail = {
     descrizione: string | null;
   }>;
 };
+
+function SortablePaymentHeader({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  onSort,
+  align = "left",
+}: {
+  label: string;
+  sortKey: PaymentSortKey;
+  activeKey: PaymentSortKey;
+  direction: SortDirection;
+  onSort: (key: PaymentSortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = activeKey === sortKey;
+  return (
+    <th
+      className={`px-6 py-4 ${align === "right" ? "text-right" : "text-left"}`}
+      aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex w-full items-center gap-1.5 transition hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 ${
+          align === "right" ? "justify-end" : "justify-start"
+        }`}
+        title={`Ordina per ${label}`}
+      >
+        <span>{label}</span>
+        <span className={`text-[11px] ${active ? "text-slate-800" : "text-slate-300"}`} aria-hidden="true">
+          {active ? (direction === "asc" ? "▲" : "▼") : "↕"}
+        </span>
+      </button>
+    </th>
+  );
+}
 type FatturaDetail = {
   id: string;
   condominio_id: string;
@@ -352,6 +401,8 @@ export default function FinancialSummaryPageTemplate() {
 
   const [paymentSearch, setPaymentSearch] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("TUTTI");
+  const [paymentSortKey, setPaymentSortKey] = useState<PaymentSortKey>("data_pagamento");
+  const [paymentSortDirection, setPaymentSortDirection] = useState<SortDirection>("desc");
 
   const [importedDocsPage, setImportedDocsPage] = useState(1);
   const [importedDocsPageSize] = useState(25);
@@ -1865,29 +1916,85 @@ async function uploadProformaFiles() {
     void loadPaymentsRows();
   }
   }, [activeDetailSection]);
+
+  useEffect(() => {
+    if (!selectedPaymentDetail) return;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedPaymentDetail(null);
+    };
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [selectedPaymentDetail]);
+
+  function handlePaymentSort(key: PaymentSortKey) {
+    if (key === paymentSortKey) {
+      setPaymentSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setPaymentSortKey(key);
+    setPaymentSortDirection(key === "data_pagamento" ? "desc" : "asc");
+  }
+
   const filteredPaymentsRows = useMemo(() => {
-  return paymentsRows.filter((row) => {
-    const q = paymentSearch.trim().toLowerCase();
+    const filtered = paymentsRows.filter((row) => {
+      const q = paymentSearch.trim().toLowerCase();
 
-    const matchesSearch =
-      !q ||
-      [
-        row.numero,
-        row.payment_method || "",
-        row.descrizione || "",
-        String(row.importo || ""),
-        String(row.totale_allocato || ""),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
+      const matchesSearch =
+        !q ||
+        [
+          row.numero,
+          row.payment_method || "",
+          row.descrizione || "",
+          String(row.importo || ""),
+          String(row.totale_allocato || ""),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
 
-    const matchesStatus =
-      paymentStatusFilter === "TUTTI" || row.stato === paymentStatusFilter;
+      const matchesStatus =
+        paymentStatusFilter === "TUTTI" || row.stato === paymentStatusFilter;
 
-    return matchesSearch && matchesStatus;
-  });
-}, [paymentsRows, paymentSearch, paymentStatusFilter]);
+      return matchesSearch && matchesStatus;
+    });
+
+    return filtered.sort((left, right) => {
+      let comparison = 0;
+
+      if (paymentSortKey === "importo" || paymentSortKey === "totale_allocato") {
+        comparison = Number(left[paymentSortKey] || 0) - Number(right[paymentSortKey] || 0);
+      } else if (paymentSortKey === "data_pagamento") {
+        const leftTime = new Date(left.data_pagamento).getTime();
+        const rightTime = new Date(right.data_pagamento).getTime();
+        comparison = (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
+      } else {
+        comparison = String(left[paymentSortKey] || "").localeCompare(
+          String(right[paymentSortKey] || ""),
+          "it",
+          { numeric: true, sensitivity: "base" }
+        );
+      }
+
+      return paymentSortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [
+    paymentsRows,
+    paymentSearch,
+    paymentStatusFilter,
+    paymentSortKey,
+    paymentSortDirection,
+  ]);
 
 
   function handleCreateManualCard(cardKey: string) {
@@ -3439,13 +3546,13 @@ const renderImportedTableSection = (
                     <table className="min-w-full text-sm">
                       <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                         <tr>
-                          <th className="px-6 py-4">Numero</th>
-                          <th className="px-6 py-4">Metodo</th>
-                          <th className="px-6 py-4">Data</th>
-                          <th className="px-6 py-4 text-right">Importo</th>
-                          <th className="px-6 py-4 text-right">Totale allocato</th>
-                          <th className="px-6 py-4">Stato</th>
-                          <th className="px-6 py-4">Descrizione</th>
+                          <SortablePaymentHeader label="Numero" sortKey="numero" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} />
+                          <SortablePaymentHeader label="Metodo" sortKey="payment_method" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} />
+                          <SortablePaymentHeader label="Data" sortKey="data_pagamento" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} />
+                          <SortablePaymentHeader label="Importo" sortKey="importo" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} align="right" />
+                          <SortablePaymentHeader label="Totale allocato" sortKey="totale_allocato" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} align="right" />
+                          <SortablePaymentHeader label="Stato" sortKey="stato" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} />
+                          <SortablePaymentHeader label="Descrizione" sortKey="descrizione" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} />
                           <th className="px-6 py-4 text-right">Azioni</th>
                         </tr>
                       </thead>
@@ -3501,10 +3608,20 @@ const renderImportedTableSection = (
                 </section>
 
                 {selectedPaymentDetail ? (
-                  <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+                  <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[2px]"
+                    onMouseDown={() => setSelectedPaymentDetail(null)}
+                  >
+                  <section
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="payment-detail-title"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-3xl border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.28)]"
+                  >
                     <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                       <div>
-                        <h3 className="text-xl font-bold">Dettaglio pagamento {selectedPaymentDetail.numero}</h3>
+                        <h3 id="payment-detail-title" className="text-xl font-bold">Dettaglio pagamento {selectedPaymentDetail.numero}</h3>
                         <p className="mt-1 text-sm text-slate-500">
                           Allocazioni del pagamento sulle fatture collegate.
                         </p>
@@ -3610,6 +3727,7 @@ const renderImportedTableSection = (
                       </table>
                     </div>
                   </section>
+                  </div>
                 ) : null}
               </section>
             ) : null}
