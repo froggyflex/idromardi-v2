@@ -3073,6 +3073,32 @@ async function getPaymentDetail(id) {
   };
 }
 
+async function updatePaymentDescription(id, value) {
+  const paymentId = String(id || "").trim();
+  const descrizione = String(value ?? "").trim();
+
+  if (!paymentId) {
+    const error = new Error("ID pagamento mancante.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (descrizione.length > 255) {
+    const error = new Error("La descrizione non può superare 255 caratteri.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const [result] = await db.query(
+    `UPDATE payments
+     SET descrizione = ?, updated_at = NOW()
+     WHERE id = ?`,
+    [descrizione || null, paymentId]
+  );
+
+  if (!result.affectedRows) return null;
+  return getPaymentDetail(paymentId);
+}
+
 async function createManualProforma(payload) {
   const conn = await db.getConnection();
 
@@ -4649,6 +4675,7 @@ async function resetToEmessa(id) {
   registraPagamentoFattura,
   listPayments,
   getPaymentDetail,
+  updatePaymentDescription,
   createManualProforma,
   createManualFattura,
   generateProformaPdf,

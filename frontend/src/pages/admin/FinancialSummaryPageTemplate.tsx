@@ -398,6 +398,9 @@ export default function FinancialSummaryPageTemplate() {
 
   const [selectedPaymentDetail, setSelectedPaymentDetail] = useState<PaymentDetail | null>(null);
   const [loadingPaymentDetail, setLoadingPaymentDetail] = useState(false);
+  const [paymentDescriptionDraft, setPaymentDescriptionDraft] = useState("");
+  const [savingPaymentDescription, setSavingPaymentDescription] = useState(false);
+  const [paymentDescriptionError, setPaymentDescriptionError] = useState("");
 
   const [paymentSearch, setPaymentSearch] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("TUTTI");
@@ -722,12 +725,45 @@ async function createManualFattura() {
 async function loadPaymentDetail(id: string) {
   try {
     setLoadingPaymentDetail(true);
+    setPaymentDescriptionError("");
     const { data } = await api.get(`/financial-summary/payments/${id}`);
     setSelectedPaymentDetail(data);
+    setPaymentDescriptionDraft(data.descrizione || "");
   } catch (err: any) {
     setError(err?.response?.data?.error || "Errore nel caricamento del dettaglio pagamento.");
   } finally {
     setLoadingPaymentDetail(false);
+  }
+}
+
+async function savePaymentDescription() {
+  if (!selectedPaymentDetail || savingPaymentDescription) return;
+  const descrizione = paymentDescriptionDraft.trim();
+  if (descrizione.length > 255) {
+    setPaymentDescriptionError("La descrizione non può superare 255 caratteri.");
+    return;
+  }
+
+  try {
+    setSavingPaymentDescription(true);
+    setPaymentDescriptionError("");
+    const { data } = await api.patch(
+      `/financial-summary/payments/${selectedPaymentDetail.id}/description`,
+      { descrizione }
+    );
+    setSelectedPaymentDetail(data);
+    setPaymentDescriptionDraft(data.descrizione || "");
+    setPaymentsRows((current) =>
+      current.map((row) =>
+        row.id === data.id ? { ...row, descrizione: data.descrizione || null } : row
+      )
+    );
+  } catch (err: any) {
+    setPaymentDescriptionError(
+      err?.response?.data?.error || "Errore durante il salvataggio della descrizione."
+    );
+  } finally {
+    setSavingPaymentDescription(false);
   }
 }
 
@@ -3609,7 +3645,7 @@ const renderImportedTableSection = (
 
                 {selectedPaymentDetail ? (
                   <div
-                    className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-[2px]"
+                    className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 px-2 py-3 backdrop-blur-[2px] sm:px-5 sm:py-5"
                     onMouseDown={() => setSelectedPaymentDetail(null)}
                   >
                   <section
@@ -3617,7 +3653,7 @@ const renderImportedTableSection = (
                     aria-modal="true"
                     aria-labelledby="payment-detail-title"
                     onMouseDown={(event) => event.stopPropagation()}
-                    className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-3xl border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.28)]"
+                    className="max-h-[95vh] w-full max-w-[1500px] overflow-y-auto rounded-3xl border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.28)]"
                   >
                     <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                       <div>
@@ -3677,6 +3713,40 @@ const renderImportedTableSection = (
                             {String(selectedPaymentDetail.stato || "").replaceAll("_", " ")}
                           </span>
                         </div>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200 px-6 py-6 sm:px-8">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                        <label className="flex-1 text-sm font-semibold text-slate-700">
+                          Descrizione
+                          <textarea
+                            value={paymentDescriptionDraft}
+                            onChange={(event) => {
+                              setPaymentDescriptionDraft(event.target.value);
+                              if (paymentDescriptionError) setPaymentDescriptionError("");
+                            }}
+                            maxLength={255}
+                            rows={3}
+                            placeholder="Inserisci una descrizione per il pagamento..."
+                            className="mt-2 block w-full resize-y rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void savePaymentDescription()}
+                          disabled={
+                            savingPaymentDescription ||
+                            paymentDescriptionDraft.trim() === (selectedPaymentDetail.descrizione || "")
+                          }
+                          className="h-11 rounded-2xl bg-slate-900 px-6 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {savingPaymentDescription ? "Salvataggio..." : "Salva descrizione"}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-4 text-xs">
+                        <span className="font-medium text-red-700">{paymentDescriptionError}</span>
+                        <span className="ml-auto text-slate-400">{paymentDescriptionDraft.length}/255</span>
                       </div>
                     </div>
 

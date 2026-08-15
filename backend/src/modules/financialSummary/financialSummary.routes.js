@@ -53,6 +53,7 @@ router.delete("/imported-documents/proforma/:id", controller.deleteImportedDocum
 router.post("/:id/registra-pagamento", controller.registraPagamentoFattura);
 router.get("/payments", controller.listPayments);
 router.get("/payments/:id", controller.getPaymentDetail);
+router.patch("/payments/:id/description", controller.updatePaymentDescription);
 router.get("/proforme/:id/print",controller.printProformaPdf);
 router.get("/fatture/:id/print",controller.printFatturaPdf);
 

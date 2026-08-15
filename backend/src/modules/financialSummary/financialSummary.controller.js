@@ -399,6 +399,26 @@ async function getPaymentDetail(req, res) {
   }
 }
 
+async function updatePaymentDescription(req, res) {
+  try {
+    const row = await service.updatePaymentDescription(
+      req.params.id,
+      req.body?.descrizione
+    );
+
+    if (!row) {
+      return res.status(404).json({ error: "Pagamento non trovato." });
+    }
+
+    return res.json(row);
+  } catch (err) {
+    console.error("updatePaymentDescription error:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || "Errore durante l'aggiornamento della descrizione.",
+    });
+  }
+}
+
 async function getImportedDocuments(req, res) {
   try {
     const result = await service.listImportedDocuments({
@@ -556,6 +576,7 @@ module.exports = {
   registraPagamentoFattura,
   listPayments,
   getPaymentDetail,
+  updatePaymentDescription,
   getImportedDocuments,
   createManualProforma,
   createManualFattura,
