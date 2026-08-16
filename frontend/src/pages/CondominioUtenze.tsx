@@ -166,19 +166,30 @@ export default function CondominioUtenze() {
       }
     }
 
-    // interno: you said duplicates may exist for CHIUSA; for ATTIVA we enforce uniqueness here
-    const internoMap = new Map<string, Utenza[]>();
+    // The same interno can exist on different scale. For active utenze, the
+    // location is unique within a condominio by scala + interno.
+    const locationMap = new Map<string, Utenza[]>();
     for (const r of active) {
-      const key = normStr(r.Interno);
-      if (!internoMap.has(key)) internoMap.set(key, []);
-      internoMap.get(key)!.push(r);
+      const interno = normStr(r.Interno);
+      if (!interno) continue;
+
+      const key = [
+        normStr(r.condominio_id).toLocaleLowerCase(),
+        normStr(r.Scala).toLocaleLowerCase(),
+        interno.toLocaleLowerCase(),
+      ].join("\u0000");
+
+      if (!locationMap.has(key)) locationMap.set(key, []);
+      locationMap.get(key)!.push(r);
     }
-    for (const [k, list] of internoMap.entries()) {
-      if (!k || list.length <= 1) continue;
+    for (const list of locationMap.values()) {
+      if (list.length <= 1) continue;
       for (const r of list) {
         errs.push({
           id: r.id,
-          fields: { Interno: `Interno duplicato (${k}) tra utenze ATTIVE` },
+          fields: {
+            Interno: `Scala ${normStr(r.Scala) || "(vuota)"}, interno ${normStr(r.Interno)} duplicati tra utenze ATTIVE`,
+          },
         });
       }
     }
