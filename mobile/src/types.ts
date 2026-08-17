@@ -25,6 +25,10 @@ export type AssignmentSummary = {
   condominio_nome: string;
   condominio_indirizzo?: string | null;
   item_count?: number;
+  captured_count?: number;
+  submitted_count?: number;
+  pending_count?: number;
+  rejected_count?: number;
   accepted_count?: number;
 };
 
@@ -37,6 +41,7 @@ export type CondominiumCatalogItem = {
   session_id?: string | null;
   session_status?: string | null;
   assignment_id?: string | null;
+  assignment_status?: string | null;
   utenze_count: number;
 };
 

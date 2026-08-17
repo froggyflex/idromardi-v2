@@ -45,9 +45,11 @@ npx eas-cli@latest build --profile development --platform ios
 
 - Operator authentication and securely stored bearer token
 - Assignment download and durable offline SQLite storage
-- Manual readings with immutable UUIDs
-- Single-flight outbox synchronization with safe retries/backoff
+- Daily overview with condominium and meter progress
+- Locally editable manual readings with immutable submission UUIDs
+- Explicit, single-flight outbox synchronization with safe retries
 - Server-status reconciliation
+- Transactional local cleanup after a complete condominium is acknowledged
 - Logout protection while readings are unsynchronized
 
 The photo upload protocol is implemented in the API/sync layer and backend.

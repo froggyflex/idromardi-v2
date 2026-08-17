@@ -90,7 +90,7 @@ export default function App() {
     }
   }, [operatorId]);
 
-  async function refreshCatalog() {
+  const refreshCatalog = useCallback(async () => {
     const year = Number(periodYear);
     const month = Number(periodMonth);
     if (!Number.isInteger(year) || year < 2000 || year > 2100) {
@@ -110,7 +110,7 @@ export default function App() {
     } catch (error) {
       setMessage((error as Error).message);
     }
-  }
+  }, [periodMonth, periodYear]);
 
   const sync = useCallback(async () => {
     if (!authenticated || !operatorId) return;
@@ -126,16 +126,29 @@ export default function App() {
         setMessage("Sessione scaduta. Accedi di nuovo: le letture locali sono al sicuro.");
         return;
       }
-      setMessage(
+      const clearedIds = new Set(result.clearedAssignments.map((assignment) => assignment.id));
+      if (activeAssignment && clearedIds.has(activeAssignment.id)) {
+        setActiveAssignment(null);
+        setItems([]);
+      }
+      const successMessage =
         result.failed
           ? `${result.uploaded} inviate, ${result.failed} ancora in attesa.`
-          : `${result.uploaded} letture sincronizzate.`
-      );
+          : result.clearedAssignments.length
+            ? `${result.uploaded} letture inviate. ${result.clearedAssignments.length} condomini rimossi dal dispositivo dopo la conferma del server.`
+            : result.uploaded
+              ? `${result.uploaded} letture inviate al server.`
+              : "Nessun dato da inviare.";
       await refreshLocal();
+      await refreshRemote();
+      await refreshCatalog();
+      setMessage(successMessage);
+    } catch (error) {
+      setMessage((error as Error).message || "Invio non riuscito: i dati restano sul dispositivo.");
     } finally {
       setBusy(false);
     }
-  }, [authenticated, operatorId, refreshLocal]);
+  }, [activeAssignment, authenticated, operatorId, refreshCatalog, refreshLocal, refreshRemote]);
 
   useEffect(() => {
     (async () => {
@@ -160,16 +173,14 @@ export default function App() {
     if (!authenticated) return;
     void refreshRemote();
     void refreshCatalog();
-    void sync();
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void sync();
+      if (state === "active") {
+        void refreshLocal();
+        void refreshRemote();
+      }
     });
-    const interval = setInterval(() => void sync(), 30_000);
-    return () => {
-      subscription.remove();
-      clearInterval(interval);
-    };
-  }, [authenticated, refreshRemote, sync]);
+    return () => subscription.remove();
+  }, [authenticated, refreshCatalog, refreshLocal, refreshRemote]);
 
   async function handleLogin() {
     setBusy(true);
@@ -309,8 +320,7 @@ export default function App() {
         operatorId,
       });
       await refreshLocal();
-      setMessage("Lettura salvata localmente. Verrà inviata quando la rete è disponibile.");
-      void sync();
+      setMessage("Lettura salvata sul dispositivo. Puoi modificarla fino a quando scegli Invia dati.");
     } catch (error) {
       Alert.alert("Lettura non salvata", (error as Error).message);
     }
@@ -334,6 +344,21 @@ export default function App() {
     setRemoteAssignments([]);
     setCatalog([]);
     setSelectedCondominiumIds([]);
+  }
+
+  function confirmSync() {
+    if (unsynchronized <= 0) {
+      void sync();
+      return;
+    }
+    Alert.alert(
+      "Invia dati",
+      `Stai per inviare ${unsynchronized} letture salvate. Dopo la conferma del server non saranno più modificabili sul dispositivo.`,
+      [
+        { text: "Annulla", style: "cancel" },
+        { text: "Invia", onPress: () => void sync() },
+      ]
+    );
   }
 
   if (!ready) {
@@ -386,7 +411,10 @@ export default function App() {
             <Text style={styles.headerTitle}>{activeAssignment.condominio_nome}</Text>
             <Text style={styles.muted}>{activeAssignment.period_month}/{activeAssignment.period_year}</Text>
           </View>
-          <Text style={styles.counter}>{unsynchronized} in attesa</Text>
+          <Pressable onPress={confirmSync} disabled={busy} style={styles.sendCompact}>
+            <Text style={styles.link}>{busy ? "Invio..." : "Invia"}</Text>
+            <Text style={styles.counter}>{unsynchronized} in attesa</Text>
+          </Pressable>
         </View>
         <View style={styles.progressPanel}>
           <View style={styles.rowBetween}>
@@ -407,10 +435,14 @@ export default function App() {
           contentContainerStyle={styles.list}
           keyboardShouldPersistTaps="handled"
         >
-          {items.map((item) => (
-            <View key={item.utenza_id} style={styles.card}>
+          {items.map((item) => {
+            const locked = Boolean(item.server_status);
+            return (
+            <View key={item.utenza_id} style={[styles.card, locked && styles.lockedCard]}>
               <View style={styles.rowBetween}>
-                <Text style={styles.cardTitle}>#{item.snapshot.idUser} · Interno {item.snapshot.interno || "-"}</Text>
+                <Text style={styles.cardTitle}>
+                  #{item.snapshot.idUser} · Scala {item.snapshot.scala || "-"} · Interno {item.snapshot.interno || "-"}
+                </Text>
                 <Text style={styles.badge}>{item.server_status || item.local_status || "DA LEGGERE"}</Text>
               </View>
               <Text>{[item.snapshot.nome, item.snapshot.cognome].filter(Boolean).join(" ") || "Senza intestatario"}</Text>
@@ -424,6 +456,7 @@ export default function App() {
                       accessibilityRole="button"
                       accessibilityLabel={`${state.codice}: ${state.descrizione}`}
                       style={[styles.stateChip, selected && styles.stateChipSelected]}
+                      disabled={locked}
                       onPress={() =>
                         setStateDrafts((current) => ({
                           ...current,
@@ -449,11 +482,12 @@ export default function App() {
                   value={drafts[item.utenza_id] || ""}
                   onChangeText={(value) => setDrafts((current) => ({ ...current, [item.utenza_id]: value }))}
                   placeholder="Lettura"
+                  editable={!locked}
                 />
-                <Button title="Salva" onPress={() => saveReading(item)} />
+                <Button title={locked ? "Inviata" : "Salva"} onPress={() => saveReading(item)} disabled={locked} />
               </View>
             </View>
-          ))}
+          )})}
           {items.length > 5 && (
             <Button
               title="Torna in cima"
@@ -466,6 +500,21 @@ export default function App() {
   }
 
   const localIds = new Set(localAssignments.map((assignment) => assignment.id));
+  const assignmentFullySubmitted = (assignment: AssignmentSummary) =>
+    Number(assignment.item_count || 0) > 0 &&
+    Number(assignment.submitted_count || 0) >= Number(assignment.item_count || 0);
+  const remoteById = new Map(remoteAssignments.map((assignment) => [assignment.id, assignment]));
+  const overviewAssignments = localAssignments.filter(
+    (assignment) => assignment.data_lettura_operatore === readingDate
+  );
+  const overview = overviewAssignments.reduce(
+    (totals, assignment) => ({
+      meters: totals.meters + Number(assignment.item_count || 0),
+      captured: totals.captured + Number(assignment.captured_count || 0),
+      pending: totals.pending + Number(assignment.pending_count || 0),
+    }),
+    { meters: 0, captured: 0, pending: 0 }
+  );
   const normalizedSearch = catalogSearch.trim().toLocaleLowerCase("it");
   const filteredCatalog = catalog.filter((item) => {
     if (!normalizedSearch) return true;
@@ -475,12 +524,21 @@ export default function App() {
       item.condominio_indirizzo,
     ].some((value) => String(value || "").toLocaleLowerCase("it").includes(normalizedSearch));
   });
-  const remoteNotDownloaded = remoteAssignments.filter((assignment) => !localIds.has(assignment.id));
+  const remoteNotDownloaded = remoteAssignments.filter(
+    (assignment) => !localIds.has(assignment.id) && !assignmentFullySubmitted(assignment)
+  );
   const selectableVisibleIds = filteredCatalog
     .filter(
-      (item) =>
+      (item) => {
+        const serverAssignment = item.assignment_id
+          ? remoteById.get(item.assignment_id)
+          : undefined;
+        return (
         Number(item.utenze_count || 0) > 0 &&
-        (!item.session_status || item.session_status === "BOZZA")
+        (!item.session_status || item.session_status === "BOZZA") &&
+        (!serverAssignment || !assignmentFullySubmitted(serverAssignment))
+        );
+      }
     )
     .map((item) => item.condominio_id);
   return (
@@ -491,10 +549,34 @@ export default function App() {
           <Text style={styles.title}>Ambiente letture</Text>
           <Text style={styles.muted}>{localAssignments.length} condomini offline · {unsynchronized} letture da inviare</Text>
         </View>
-        <Button title="Sincronizza" onPress={sync} disabled={busy} />
+        <Button title={busy ? "Invio..." : "Invia dati"} onPress={confirmSync} disabled={busy} />
       </View>
       {!!message && <Text style={styles.message}>{message}</Text>}
       <ScrollView contentContainerStyle={styles.list}>
+        <View style={styles.overviewPanel}>
+          <View style={styles.rowBetween}>
+            <View>
+              <Text style={styles.overviewTitle}>Panoramica del giorno</Text>
+              <Text style={styles.overviewDate}>{readingDate}</Text>
+            </View>
+            <Text style={styles.periodBadge}>{overviewAssignments.length} condomini</Text>
+          </View>
+          <View style={styles.overviewGrid}>
+            <View style={styles.overviewMetric}>
+              <Text style={styles.overviewValue}>{overview.meters}</Text>
+              <Text style={styles.overviewLabel}>Contatori</Text>
+            </View>
+            <View style={styles.overviewMetric}>
+              <Text style={styles.overviewValue}>{overview.captured}</Text>
+              <Text style={styles.overviewLabel}>Salvati</Text>
+            </View>
+            <View style={styles.overviewMetric}>
+              <Text style={styles.overviewValue}>{overview.pending}</Text>
+              <Text style={styles.overviewLabel}>Da inviare</Text>
+            </View>
+          </View>
+        </View>
+
         <View style={styles.setupPanel}>
           <View style={styles.rowBetween}>
             <View style={styles.cardText}>
@@ -538,7 +620,7 @@ export default function App() {
               />
             </View>
           </View>
-          <Button title={busy ? "Caricamento..." : "Carica condomini"} onPress={refreshCatalog} disabled={busy} />
+          <Button title={busy ? "Caricamento..." : "Carica condomini"} onPress={() => void refreshCatalog()} disabled={busy} />
         </View>
 
         <View style={styles.catalogHeader}>
@@ -570,7 +652,15 @@ export default function App() {
         )}
         {filteredCatalog.map((item) => {
           const selected = selectedCondominiumIds.includes(item.condominio_id);
-          const blocked = Boolean(item.session_status && item.session_status !== "BOZZA");
+          const serverAssignment = item.assignment_id
+            ? remoteById.get(item.assignment_id)
+            : undefined;
+          const alreadySubmitted = Boolean(
+            serverAssignment && assignmentFullySubmitted(serverAssignment)
+          );
+          const blocked = Boolean(
+            alreadySubmitted || (item.session_status && item.session_status !== "BOZZA")
+          );
           const empty = Number(item.utenze_count || 0) === 0;
           return (
             <Pressable
@@ -596,8 +686,12 @@ export default function App() {
               </View>
               <View style={styles.catalogMeta}>
                 <Text style={styles.countText}>{Number(item.utenze_count || 0)} utenze</Text>
-                {!!item.assignment_id && <Text style={styles.readyText}>Gia preparato</Text>}
-                {blocked && <Text style={styles.closedText}>{item.session_status}</Text>}
+                {alreadySubmitted
+                  ? <Text style={styles.readyText}>Inviato</Text>
+                  : Number(serverAssignment?.rejected_count || 0) > 0
+                    ? <Text style={styles.closedText}>Da correggere</Text>
+                    : !!item.assignment_id && <Text style={styles.readyText}>Già preparato</Text>}
+                {blocked && !alreadySubmitted && <Text style={styles.closedText}>{item.session_status}</Text>}
               </View>
             </Pressable>
           );
@@ -618,13 +712,26 @@ export default function App() {
 
         <Text style={styles.sectionTitle}>Disponibili offline</Text>
         {localAssignments.length === 0 && <Text style={styles.muted}>Nessun giro scaricato.</Text>}
-        {localAssignments.map((assignment) => (
-          <Pressable key={assignment.id} style={styles.card} onPress={() => openAssignment(assignment)}>
-            <Text style={styles.cardTitle}>{assignment.condominio_nome}</Text>
-            <Text>{assignment.period_month}/{assignment.period_year}</Text>
-            <Text style={styles.muted}>{assignment.condominio_indirizzo || ""}</Text>
-          </Pressable>
-        ))}
+        {localAssignments.map((assignment) => {
+          const itemCount = Number(assignment.item_count || 0);
+          const capturedCount = Number(assignment.captured_count || 0);
+          const progress = itemCount ? Math.round((capturedCount / itemCount) * 100) : 0;
+          return (
+            <Pressable key={assignment.id} style={styles.card} onPress={() => openAssignment(assignment)}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{assignment.condominio_nome}</Text>
+                <Text style={styles.periodBadge}>{capturedCount}/{itemCount}</Text>
+              </View>
+              <Text>{assignment.period_month}/{assignment.period_year} · visita {assignment.data_lettura_operatore || "-"}</Text>
+              <Text style={styles.muted}>{assignment.condominio_indirizzo || ""}</Text>
+              <View style={styles.progressTrack}>
+                <View
+                  style={[styles.progressFill, { width: `${progress}%` as `${number}%` }]}
+                />
+              </View>
+            </Pressable>
+          );
+        })}
 
         <Text style={styles.sectionTitle}>Da scaricare dal server</Text>
         {remoteNotDownloaded.length === 0 && (
@@ -634,6 +741,9 @@ export default function App() {
           <View key={assignment.id} style={styles.card}>
             <Text style={styles.cardTitle}>{assignment.condominio_nome}</Text>
             <Text>{assignment.period_month}/{assignment.period_year} · {assignment.item_count || 0} contatori</Text>
+            {Number(assignment.rejected_count || 0) > 0 && (
+              <Text style={styles.closedText}>{assignment.rejected_count} letture da correggere e reinviare</Text>
+            )}
             <Button
               title={localIds.has(assignment.id) ? "Aggiorna copia offline" : "Scarica per uso offline"}
               onPress={() => handleDownload(assignment)}
@@ -664,8 +774,10 @@ const styles = StyleSheet.create({
   headerText: { flex: 1 },
   link: { color: "#2563eb", fontSize: 16, fontWeight: "600" },
   counter: { color: "#9a3412", fontSize: 12, fontWeight: "700" },
+  sendCompact: { alignItems: "flex-end" },
   list: { padding: 16, gap: 12, paddingBottom: 40 },
   card: { gap: 8, padding: 15, borderRadius: 14, backgroundColor: "white", borderWidth: 1, borderColor: "#e2e8f0" },
+  lockedCard: { backgroundColor: "#f8fafc", opacity: 0.78 },
   cardText: { flex: 1 },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   readingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
@@ -681,6 +793,13 @@ const styles = StyleSheet.create({
   progressLabel: { color: "#334155", fontSize: 12, fontWeight: "700" },
   progressTrack: { height: 8, overflow: "hidden", borderRadius: 999, backgroundColor: "#e2e8f0" },
   progressFill: { height: "100%", borderRadius: 999, backgroundColor: "#047857" },
+  overviewPanel: { gap: 12, padding: 16, borderRadius: 16, backgroundColor: "#0f172a" },
+  overviewTitle: { color: "white", fontSize: 17, fontWeight: "700" },
+  overviewDate: { color: "#cbd5e1", lineHeight: 20 },
+  overviewGrid: { flexDirection: "row", gap: 8 },
+  overviewMetric: { flex: 1, alignItems: "center", gap: 2, paddingVertical: 10, borderRadius: 12, backgroundColor: "#1e293b" },
+  overviewValue: { color: "white", fontSize: 22, fontWeight: "800" },
+  overviewLabel: { color: "#cbd5e1", fontSize: 10, fontWeight: "700" },
   setupPanel: { gap: 12, padding: 14, borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 8, backgroundColor: "white" },
   sectionHeading: { fontSize: 17, fontWeight: "700", color: "#0f172a" },
   selectionBadge: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, backgroundColor: "#e0f2fe", color: "#075985", fontSize: 11, fontWeight: "700" },

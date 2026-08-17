@@ -204,7 +204,15 @@ async function getAssignmentPackage(assignmentId, actor, { markDownloaded = fals
     `SELECT assignment_id, utenza_id, position, context_hash,
             meter_serial_snapshot, previous_value, previous_state, snapshot_json
      FROM mobile_reading_assignment_items
-     WHERE assignment_id = ? ORDER BY position`,
+     WHERE assignment_id = ?
+       AND NOT EXISTS (
+         SELECT 1
+         FROM mobile_reading_submissions current_submission
+         WHERE current_submission.assignment_id = mobile_reading_assignment_items.assignment_id
+           AND current_submission.utenza_id = mobile_reading_assignment_items.utenza_id
+           AND current_submission.workflow_status != 'REJECTED'
+       )
+     ORDER BY position`,
     [assignmentId]
   );
   const [readingStates] = await db.query(
@@ -390,9 +398,11 @@ async function listAssignments(actor) {
   if (operatorFilter) params.push(actor.sub);
   const [rows] = await db.query(
     `SELECT a.*, s.period_year, s.period_month, s.data_lettura_operatore,
-            c.nome AS condominio_nome, c.indirizzo AS condominio_indirizzo,
-            COUNT(DISTINCT i.utenza_id) AS item_count,
-            COUNT(DISTINCT CASE WHEN ms.workflow_status = 'ACCEPTED' THEN i.utenza_id END) AS accepted_count
+             c.nome AS condominio_nome, c.indirizzo AS condominio_indirizzo,
+             COUNT(DISTINCT i.utenza_id) AS item_count,
+             COUNT(DISTINCT CASE WHEN ms.workflow_status != 'REJECTED' THEN i.utenza_id END) AS submitted_count,
+             COUNT(DISTINCT CASE WHEN ms.workflow_status = 'REJECTED' THEN i.utenza_id END) AS rejected_count,
+             COUNT(DISTINCT CASE WHEN ms.workflow_status = 'ACCEPTED' THEN i.utenza_id END) AS accepted_count
      FROM mobile_reading_assignments a
      JOIN letture_sessioni s ON s.id = a.session_id
      JOIN condomini_v2 c ON c.id = a.condominio_id
@@ -424,8 +434,9 @@ async function listCondominiumCatalog({ periodYear, periodMonth }, actor) {
             c.codice AS condominio_codice,
             s.id AS session_id,
             s.stato AS session_status,
-            s.data_lettura_operatore,
-            own_assignment.id AS assignment_id,
+             s.data_lettura_operatore,
+             own_assignment.id AS assignment_id,
+             own_assignment.status AS assignment_status,
             (
               SELECT COUNT(*)
               FROM utenze_v2 u
@@ -800,7 +811,8 @@ async function listReviewQueue({ status = "TO_BE_ACCEPTED", limit = 100 } = {}) 
      JOIN app_auth_users operator ON operator.id = ms.operator_id
      LEFT JOIN app_auth_users reviewer ON reviewer.id = ms.reviewed_by
      WHERE ms.workflow_status = ?
-     ORDER BY ms.received_at ASC
+     ORDER BY c.nome ASC, s.period_year DESC, s.period_month DESC,
+              u.id_user ASC, ms.received_at ASC
      LIMIT ?`,
     [normalizedStatus, safeLimit]
   );

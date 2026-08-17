@@ -9,6 +9,8 @@ noted otherwise.
 | `GET` | `/auth/users` | ADMIN | List assignable users |
 | `POST` | `/mobile-readings/assignments` | ADMIN, REVIEWER | Snapshot a session for an operator |
 | `GET` | `/mobile-readings/assignments` | ADMIN, METER_READER | List permitted assignments |
+| `GET` | `/mobile-readings/catalog` | ADMIN, METER_READER | List active condominiums for a period |
+| `POST` | `/mobile-readings/workspace/prepare` | ADMIN, METER_READER | Prepare and download a day's condominium packages |
 | `GET` | `/mobile-readings/assignments/:id` | ADMIN, METER_READER | Download the offline package |
 | `POST` | `/mobile-readings/submissions` | ADMIN, METER_READER | Idempotently stage a capture |
 | `POST` | `/mobile-readings/submissions/:id/photo` | ADMIN, METER_READER | Upload a checksum-bound photo |
@@ -22,6 +24,8 @@ noted otherwise.
 
 - Replaying an identical submission UUID returns success with
   `idempotentReplay: true`.
+- A package downloaded after a rejection contains only rejected or outstanding
+  items. Items with a current non-rejected submission are omitted.
 - `SUBMISSION_MISMATCH` means a UUID was reused with different content and must
   be investigated, not automatically retried with a new UUID.
 - `CONTEXT_CHANGED` and `SESSION_CLOSED` retain the candidate as

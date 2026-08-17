@@ -1,5 +1,6 @@
 import { ApiError, reconcileStatuses, submitReading, uploadReadingPhoto } from "./api";
 import {
+  clearFullySubmittedAssignments,
   getPendingCaptures,
   getReconcileCandidates,
   markRetry,
@@ -8,7 +9,14 @@ import {
   updateReconciledStatus,
 } from "./database";
 
-let syncPromise: Promise<{ uploaded: number; failed: number; authRequired: boolean }> | null = null;
+type SyncResult = {
+  uploaded: number;
+  failed: number;
+  authRequired: boolean;
+  clearedAssignments: Array<{ id: string; condominio_nome: string }>;
+};
+
+let syncPromise: Promise<SyncResult> | null = null;
 
 export function synchronizeOutbox(operatorId: string) {
   if (syncPromise) return syncPromise;
@@ -90,5 +98,12 @@ async function runSync(operatorId: string) {
     }
   }
 
-  return { uploaded, failed, authRequired };
+  const clearedAssignments = authRequired
+    ? []
+    : (await clearFullySubmittedAssignments(operatorId)).map((assignment) => ({
+        id: assignment.id,
+        condominio_nome: assignment.condominio_nome,
+      }));
+
+  return { uploaded, failed, authRequired, clearedAssignments };
 }

@@ -161,13 +161,36 @@ export async function listReadingStates(assignmentId: string): Promise<ReadingSt
 
 export async function listLocalAssignments(operatorId: string): Promise<AssignmentSummary[]> {
   const database = await getDatabase();
-  const rows = await database.getAllAsync<{ data_json: string }>(
-    `SELECT data_json FROM assignments
-     WHERE operator_id = ?
-     ORDER BY downloaded_at DESC`,
+  const rows = await database.getAllAsync<{
+    data_json: string;
+    item_count: number;
+    captured_count: number;
+    submitted_count: number;
+    pending_count: number;
+  }>(
+    `SELECT a.data_json,
+            (SELECT COUNT(*) FROM assignment_items ai
+             WHERE ai.assignment_id = a.id) AS item_count,
+            (SELECT COUNT(*) FROM captures c
+             WHERE c.assignment_id = a.id) AS captured_count,
+            (SELECT COUNT(*) FROM captures c
+             WHERE c.assignment_id = a.id
+               AND c.local_status = 'SERVER_CONFIRMED') AS submitted_count,
+            (SELECT COUNT(*) FROM captures c
+             WHERE c.assignment_id = a.id
+               AND c.local_status != 'SERVER_CONFIRMED') AS pending_count
+     FROM assignments a
+     WHERE a.operator_id = ?
+     ORDER BY a.downloaded_at DESC`,
     operatorId
   );
-  return rows.map((row) => JSON.parse(row.data_json) as AssignmentSummary);
+  return rows.map((row) => ({
+    ...(JSON.parse(row.data_json) as AssignmentSummary),
+    item_count: Number(row.item_count || 0),
+    captured_count: Number(row.captured_count || 0),
+    submitted_count: Number(row.submitted_count || 0),
+    pending_count: Number(row.pending_count || 0),
+  }));
 }
 
 export async function listAssignmentItems(
@@ -286,11 +309,9 @@ export async function getPendingCaptures(operatorId: string): Promise<LocalCaptu
      JOIN assignments a ON a.id = c.assignment_id
      WHERE a.operator_id = ?
        AND c.local_status IN ('READY_TO_SYNC', 'RETRY', 'UPLOADING', 'AUTH_REQUIRED')
-       AND c.next_retry_at <= ?
      ORDER BY c.capture_sequence
      LIMIT 100`,
-    operatorId,
-    Date.now()
+    operatorId
   );
 }
 
@@ -359,4 +380,54 @@ export async function countUnsynchronized(operatorId: string) {
     operatorId
   );
   return Number(row?.count || 0);
+}
+
+export async function clearFullySubmittedAssignments(
+  operatorId: string
+): Promise<AssignmentSummary[]> {
+  const database = await getDatabase();
+  const completed = await database.getAllAsync<{ id: string; data_json: string }>(
+    `SELECT a.id, a.data_json
+     FROM assignments a
+     WHERE a.operator_id = ?
+       AND EXISTS (
+         SELECT 1 FROM assignment_items ai
+         WHERE ai.assignment_id = a.id
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM assignment_items ai
+         LEFT JOIN captures c
+           ON c.assignment_id = ai.assignment_id
+          AND c.utenza_id = ai.utenza_id
+         WHERE ai.assignment_id = a.id
+           AND (c.id IS NULL OR c.local_status != 'SERVER_CONFIRMED')
+       )`,
+    operatorId
+  );
+
+  if (!completed.length) return [];
+
+  await database.withTransactionAsync(async () => {
+    for (const assignment of completed) {
+      await database.runAsync(
+        `DELETE FROM captures
+         WHERE assignment_id = ?
+           AND EXISTS (
+             SELECT 1 FROM assignments a
+             WHERE a.id = ? AND a.operator_id = ?
+           )`,
+        assignment.id,
+        assignment.id,
+        operatorId
+      );
+      await database.runAsync(
+        "DELETE FROM assignments WHERE id = ? AND operator_id = ?",
+        assignment.id,
+        operatorId
+      );
+    }
+  });
+
+  return completed.map((row) => JSON.parse(row.data_json) as AssignmentSummary);
 }

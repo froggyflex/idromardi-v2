@@ -35,19 +35,26 @@ flowchart LR
 ## Offline behavior
 
 SQLite runs in WAL mode and contains assignment snapshots, captures, and the
-outbox. Synchronization is single-flight and safe to invoke on app foreground,
-on a timer, or manually. Failures use bounded exponential backoff. A `401`
-requires login again but deliberately does not erase pending work. Logout is
-blocked while unsynchronized readings remain.
+outbox. The operator explicitly starts synchronization with **Invia dati**, so
+locally saved readings remain editable until that point. Synchronization is
+single-flight and idempotent. Failed or partial uploads stay in the outbox; a
+manual retry may run immediately. A `401` requires login again but deliberately
+does not erase pending work. Logout is blocked while unsynchronized readings
+remain.
 
 All local queries and outbox operations are scoped to the authenticated operator
 ID. On a shared device, signing into another account cannot display or upload the
 previous operator's assignments. Legacy local snapshots are migrated in place
 and remain hidden if their owner cannot be recovered.
 
-The operating system may suspend a mobile app, so timer-based sync is only a
-convenience. The durable outbox is the fallback: every foreground launch and
-manual sync resumes pending work.
+Once every item in a condominium assignment has been acknowledged by the
+server, the app removes that assignment, its item snapshots, and its captures
+from SQLite in one transaction. Staging and audit data remain on the server.
+Incomplete assignments are never cleared.
+
+If an administrator rejects a candidate, the assignment becomes downloadable
+again. The new offline package contains only rejected or otherwise outstanding
+items, so already staged or accepted readings are not captured twice.
 
 ## Photo handling
 
