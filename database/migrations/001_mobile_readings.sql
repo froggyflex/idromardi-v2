@@ -45,14 +45,7 @@ CREATE TABLE IF NOT EXISTS mobile_reading_assignments (
   UNIQUE KEY uq_mobile_assignment_session_operator (session_id, operator_id),
   KEY idx_mobile_assignment_operator_status (operator_id, status),
   KEY idx_mobile_assignment_condominio (condominio_id),
-  CONSTRAINT fk_mobile_assignment_session
-    FOREIGN KEY (session_id) REFERENCES letture_sessioni (id),
-  CONSTRAINT fk_mobile_assignment_condominio
-    FOREIGN KEY (condominio_id) REFERENCES condomini_v2 (id),
-  CONSTRAINT fk_mobile_assignment_operator
-    FOREIGN KEY (operator_id) REFERENCES app_auth_users (id),
-  CONSTRAINT fk_mobile_assignment_creator
-    FOREIGN KEY (created_by) REFERENCES app_auth_users (id)
+  KEY idx_mobile_assignment_creator (created_by)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS mobile_reading_assignment_items (
@@ -69,9 +62,7 @@ CREATE TABLE IF NOT EXISTS mobile_reading_assignment_items (
   UNIQUE KEY uq_mobile_assignment_position (assignment_id, position),
   KEY idx_mobile_assignment_item_utenza (utenza_id),
   CONSTRAINT fk_mobile_assignment_item_assignment
-    FOREIGN KEY (assignment_id) REFERENCES mobile_reading_assignments (id) ON DELETE CASCADE,
-  CONSTRAINT fk_mobile_assignment_item_utenza
-    FOREIGN KEY (utenza_id) REFERENCES utenze_v2 (id)
+    FOREIGN KEY (assignment_id) REFERENCES mobile_reading_assignments (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS mobile_reading_submissions (
@@ -119,19 +110,7 @@ CREATE TABLE IF NOT EXISTS mobile_reading_submissions (
   KEY idx_mobile_submission_operator (operator_id, received_at),
   KEY idx_mobile_submission_session (session_id, utenza_id),
   CONSTRAINT fk_mobile_submission_assignment
-    FOREIGN KEY (assignment_id) REFERENCES mobile_reading_assignments (id),
-  CONSTRAINT fk_mobile_submission_session
-    FOREIGN KEY (session_id) REFERENCES letture_sessioni (id),
-  CONSTRAINT fk_mobile_submission_condominio
-    FOREIGN KEY (condominio_id) REFERENCES condomini_v2 (id),
-  CONSTRAINT fk_mobile_submission_utenza
-    FOREIGN KEY (utenza_id) REFERENCES utenze_v2 (id),
-  CONSTRAINT fk_mobile_submission_operator
-    FOREIGN KEY (operator_id) REFERENCES app_auth_users (id),
-  CONSTRAINT fk_mobile_submission_reviewer
-    FOREIGN KEY (reviewed_by) REFERENCES app_auth_users (id),
-  CONSTRAINT fk_mobile_submission_accepted_reading
-    FOREIGN KEY (accepted_reading_id) REFERENCES letture_righe (id)
+    FOREIGN KEY (assignment_id) REFERENCES mobile_reading_assignments (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS mobile_reading_submission_events (
@@ -146,7 +125,5 @@ CREATE TABLE IF NOT EXISTS mobile_reading_submission_events (
   PRIMARY KEY (id),
   KEY idx_mobile_submission_event (submission_id, created_at),
   CONSTRAINT fk_mobile_submission_event_submission
-    FOREIGN KEY (submission_id) REFERENCES mobile_reading_submissions (id) ON DELETE CASCADE,
-  CONSTRAINT fk_mobile_submission_event_actor
-    FOREIGN KEY (actor_id) REFERENCES app_auth_users (id)
+    FOREIGN KEY (submission_id) REFERENCES mobile_reading_submissions (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
