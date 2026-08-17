@@ -7,10 +7,12 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "it.idromardi.letture"
+      "bundleIdentifier": "it.idromardi.letture",
+      "buildNumber": "1"
     },
     "android": {
-      "package": "it.idromardi.letture"
+      "package": "it.idromardi.letture",
+      "versionCode": 1
     },
     "plugins": [
       "expo-secure-store",

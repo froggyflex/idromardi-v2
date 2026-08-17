@@ -8,8 +8,21 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://idromardi-v2.onrender.com/api"
+      },
+      "android": {
+        "buildType": "apk"
+      }
     },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://idromardi-v2.onrender.com/api"
+      }
+    }
+  },
+  "submit": {
     "production": {}
   }
 }

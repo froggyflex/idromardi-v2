@@ -6,7 +6,7 @@ submission UUID.
 
 ## Bootstrap
 
-The physical-device test build currently uses Expo SDK 54 for compatibility
+The physical-device test build currently uses Expo SDK 57 for compatibility
 with the Expo Go version distributed through the mobile stores. Node.js 22 is
 recommended for this repository.
 
@@ -40,6 +40,29 @@ For iOS, use EAS Build or a macOS machine with Xcode:
 ```powershell
 npx eas-cli@latest build --profile development --platform ios
 ```
+
+## Installable builds
+
+The preview profile connects to `https://idromardi-v2.onrender.com/api` and
+produces standalone builds that do not require the Expo development server.
+
+```powershell
+# Directly installable Android APK
+npm run build:android:apk
+
+# Directly installable iOS IPA (registered devices only)
+npx eas-cli@latest device:create
+npm run build:ios:internal
+
+# Production iOS build uploaded to TestFlight
+npm run build:ios:testflight
+```
+
+The first build asks you to sign in to Expo and initialize/link the EAS project.
+Android signing can be managed by EAS. Physical iOS builds require a paid Apple
+Developer account. Internal iOS builds only install on devices registered in
+the ad-hoc provisioning profile; TestFlight is the preferred route for a wider
+operator rollout.
 
 ## Current vertical slice
 

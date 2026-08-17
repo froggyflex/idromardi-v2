@@ -9,19 +9,23 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
-    "doctor": "npx expo-doctor"
+    "doctor": "npx expo-doctor",
+    "build:android:apk": "npx eas-cli@latest build --platform android --profile preview",
+    "build:ios:internal": "npx eas-cli@latest build --platform ios --profile preview",
+    "build:ios:testflight": "npx eas-cli@latest build --platform ios --profile production --auto-submit",
+    "build:stores": "npx eas-cli@latest build --platform all --profile production"
   },
   "dependencies": {
-    "expo": "~54.0.0",
-    "expo-crypto": "~15.0.9",
-    "expo-secure-store": "~15.0.8",
-    "expo-sqlite": "~16.0.10",
-    "expo-status-bar": "~3.0.9",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
+    "expo": "~57.0.14",
+    "expo-crypto": "~57.0.1",
+    "expo-secure-store": "~57.0.1",
+    "expo-sqlite": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2"
   },
   "devDependencies": {
-    "@types/react": "~19.1.10",
-    "typescript": "~5.9.2"
+    "@types/react": "~19.2.0",
+    "typescript": "~6.0.3"
   }
 }
