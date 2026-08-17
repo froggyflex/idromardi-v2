@@ -2,21 +2,27 @@
   "expo": {
     "name": "Idromardi Letture",
     "slug": "idromardi-letture",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "it.idromardi.letture",
-      "buildNumber": "1"
+      "buildNumber": "2"
     },
     "android": {
       "package": "it.idromardi.letture",
-      "versionCode": 1
+      "versionCode": 2
     },
     "plugins": [
       "expo-secure-store",
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "aeaa9910-ca09-4ce7-833e-6e8883c85154"
+      }
+    },
+    "owner": "froggyflex"
   }
 }

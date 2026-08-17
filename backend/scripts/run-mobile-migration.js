@@ -4,7 +4,7 @@ const mysql = require("mysql2/promise");
 
 require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 
-async function run() {
+async function runMobileMigration() {
   const connection = await mysql.createConnection({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -26,13 +26,19 @@ async function run() {
        WHERE TABLE_SCHEMA = DATABASE()
          AND TABLE_NAME LIKE 'mobile_reading_%'`
     );
-    console.log(`Mobile reading tables ready: ${rows[0].count}`);
+    const tableCount = Number(rows[0].count || 0);
+    console.log(`Mobile reading tables ready: ${tableCount}`);
+    return { tableCount };
   } finally {
     await connection.end();
   }
 }
 
-run().catch((error) => {
-  console.error(error.code || "MIGRATION_ERROR", error.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  runMobileMigration().catch((error) => {
+    console.error(error.code || "MIGRATION_ERROR", error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { runMobileMigration };
