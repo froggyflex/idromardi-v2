@@ -45,6 +45,23 @@ function currentLocalDate() {
   return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
 
+const MONTHS = [
+  "Gennaio",
+  "Febbraio",
+  "Marzo",
+  "Aprile",
+  "Maggio",
+  "Giugno",
+  "Luglio",
+  "Agosto",
+  "Settembre",
+  "Ottobre",
+  "Novembre",
+  "Dicembre",
+];
+
+type HomeTab = "prepare" | "rounds";
+
 export default function App() {
   const readingScrollRef = useRef<ScrollView>(null);
   const [ready, setReady] = useState(false);
@@ -68,6 +85,9 @@ export default function App() {
   const [stateDrafts, setStateDrafts] = useState<Record<string, string>>({});
   const [readingStates, setReadingStates] = useState<ReadingState[]>([]);
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [homeTab, setHomeTab] = useState<HomeTab>("prepare");
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
   const [deviceId, setDeviceId] = useState("");
   const [unsynchronized, setUnsynchronized] = useState(0);
 
@@ -101,6 +121,8 @@ export default function App() {
       setMessage("Inserisci un mese da 1 a 12.");
       return;
     }
+    setCatalogLoading(true);
+    setCatalogError("");
     try {
       const result = await listCondominiumCatalog(year, month);
       setCatalog(result.condomini);
@@ -108,7 +130,11 @@ export default function App() {
       setSelectedCondominiumIds((current) => current.filter((id) => availableIds.has(id)));
       setMessage(`${result.condomini.length} condomini attivi disponibili.`);
     } catch (error) {
-      setMessage((error as Error).message);
+      const errorMessage = (error as Error).message;
+      setCatalogError(errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      setCatalogLoading(false);
     }
   }, [periodMonth, periodYear]);
 
@@ -253,6 +279,15 @@ export default function App() {
     );
   }
 
+  function shiftPeriod(direction: -1 | 1) {
+    const currentYear = Number(periodYear);
+    const currentMonth = Number(periodMonth);
+    if (!Number.isInteger(currentYear) || !Number.isInteger(currentMonth)) return;
+    const shifted = new Date(currentYear, currentMonth - 1 + direction, 1);
+    setPeriodYear(String(shifted.getFullYear()));
+    setPeriodMonth(String(shifted.getMonth() + 1));
+  }
+
   async function prepareOfflineWorkspace() {
     const year = Number(periodYear);
     const month = Number(periodMonth);
@@ -289,6 +324,7 @@ export default function App() {
       await refreshRemote();
       await refreshCatalog();
       setSelectedCondominiumIds([]);
+      setHomeTab("rounds");
       const prepared = result.assignments.length;
       const failed = result.errors.length;
       setMessage(
@@ -503,7 +539,10 @@ export default function App() {
   const assignmentFullySubmitted = (assignment: AssignmentSummary) =>
     Number(assignment.item_count || 0) > 0 &&
     Number(assignment.submitted_count || 0) >= Number(assignment.item_count || 0);
-  const remoteById = new Map(remoteAssignments.map((assignment) => [assignment.id, assignment]));
+  const operatorAssignments = remoteAssignments.filter(
+    (assignment) => assignment.operator_id === operatorId
+  );
+  const remoteById = new Map(operatorAssignments.map((assignment) => [assignment.id, assignment]));
   const overviewAssignments = localAssignments.filter(
     (assignment) => assignment.data_lettura_operatore === readingDate
   );
@@ -524,7 +563,7 @@ export default function App() {
       item.condominio_indirizzo,
     ].some((value) => String(value || "").toLocaleLowerCase("it").includes(normalizedSearch));
   });
-  const remoteNotDownloaded = remoteAssignments.filter(
+  const remoteNotDownloaded = operatorAssignments.filter(
     (assignment) => !localIds.has(assignment.id) && !assignmentFullySubmitted(assignment)
   );
   const selectableVisibleIds = filteredCatalog
@@ -546,13 +585,30 @@ export default function App() {
       <StatusBar style="dark" />
       <View style={styles.header}>
         <View style={styles.headerText}>
-          <Text style={styles.title}>Ambiente letture</Text>
-          <Text style={styles.muted}>{localAssignments.length} condomini offline · {unsynchronized} letture da inviare</Text>
+          <Text style={styles.title}>Letture contatori</Text>
+          <Text style={styles.muted}>{localAssignments.length} condomini offline · {unsynchronized} da inviare</Text>
         </View>
         <Button title={busy ? "Invio..." : "Invia dati"} onPress={confirmSync} disabled={busy} />
       </View>
-      {!!message && <Text style={styles.message}>{message}</Text>}
+      <View style={styles.tabBar}>
+        <Pressable
+          style={[styles.tab, homeTab === "prepare" && styles.tabActive]}
+          onPress={() => setHomeTab("prepare")}
+        >
+          <Text style={[styles.tabText, homeTab === "prepare" && styles.tabTextActive]}>Prepara giro</Text>
+          <Text style={[styles.tabCount, homeTab === "prepare" && styles.tabCountActive]}>{catalog.length}</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tab, homeTab === "rounds" && styles.tabActive]}
+          onPress={() => setHomeTab("rounds")}
+        >
+          <Text style={[styles.tabText, homeTab === "rounds" && styles.tabTextActive]}>Letture</Text>
+          <Text style={[styles.tabCount, homeTab === "rounds" && styles.tabCountActive]}>{localAssignments.length}</Text>
+        </Pressable>
+      </View>
+      {!!message && !catalogError && <Text style={styles.message}>{message}</Text>}
       <ScrollView contentContainerStyle={styles.list}>
+        {homeTab === "rounds" && (
         <View style={styles.overviewPanel}>
           <View style={styles.rowBetween}>
             <View>
@@ -576,7 +632,10 @@ export default function App() {
             </View>
           </View>
         </View>
+        )}
 
+        {homeTab === "prepare" && (
+        <>
         <View style={styles.setupPanel}>
           <View style={styles.rowBetween}>
             <View style={styles.cardText}>
@@ -585,31 +644,23 @@ export default function App() {
             </View>
             <Text style={styles.selectionBadge}>{selectedCondominiumIds.length} selezionati</Text>
           </View>
+          <View style={styles.periodSelector}>
+            <Pressable style={styles.periodArrow} onPress={() => shiftPeriod(-1)}>
+              <Text style={styles.periodArrowText}>‹</Text>
+            </Pressable>
+            <View style={styles.periodSummary}>
+              <Text style={styles.fieldLabel}>PERIODO LETTURE</Text>
+              <Text style={styles.periodValue}>
+                {MONTHS[Number(periodMonth) - 1] || "Mese"} {periodYear}
+              </Text>
+            </View>
+            <Pressable style={styles.periodArrow} onPress={() => shiftPeriod(1)}>
+              <Text style={styles.periodArrowText}>›</Text>
+            </Pressable>
+          </View>
           <View style={styles.setupRow}>
-            <View style={styles.compactField}>
-              <Text style={styles.fieldLabel}>ANNO</Text>
-              <TextInput
-                style={styles.compactInput}
-                value={periodYear}
-                onChangeText={setPeriodYear}
-                keyboardType="number-pad"
-                maxLength={4}
-                placeholder="2026"
-              />
-            </View>
-            <View style={styles.compactField}>
-              <Text style={styles.fieldLabel}>MESE</Text>
-              <TextInput
-                style={styles.compactInput}
-                value={periodMonth}
-                onChangeText={setPeriodMonth}
-                keyboardType="number-pad"
-                maxLength={2}
-                placeholder="7"
-              />
-            </View>
             <View style={styles.dateField}>
-              <Text style={styles.fieldLabel}>DATA LETTURA</Text>
+              <Text style={styles.fieldLabel}>DATA DELL'OPERATORE</Text>
               <TextInput
                 style={styles.compactInput}
                 value={readingDate}
@@ -619,8 +670,16 @@ export default function App() {
                 placeholder="AAAA-MM-GG"
               />
             </View>
+            <Pressable
+              style={[styles.refreshAction, catalogLoading && styles.actionDisabled]}
+              onPress={() => void refreshCatalog()}
+              disabled={catalogLoading}
+            >
+              {catalogLoading
+                ? <ActivityIndicator color="#1d4ed8" />
+                : <Text style={styles.refreshActionText}>Aggiorna</Text>}
+            </Pressable>
           </View>
-          <Button title={busy ? "Caricamento..." : "Carica condomini"} onPress={() => void refreshCatalog()} disabled={busy} />
         </View>
 
         <View style={styles.catalogHeader}>
@@ -647,10 +706,29 @@ export default function App() {
           autoCapitalize="none"
           placeholder="Cerca codice, condominio o indirizzo"
         />
-        {filteredCatalog.length === 0 && (
-          <Text style={styles.muted}>Nessun condominio trovato per questo periodo.</Text>
+        {catalogLoading && catalog.length === 0 && (
+          <View style={styles.statePanel}>
+            <ActivityIndicator color="#1d4ed8" />
+            <Text style={styles.stateTitle}>Caricamento condomini...</Text>
+            <Text style={styles.muted}>Il primo accesso può richiedere qualche secondo.</Text>
+          </View>
         )}
-        {filteredCatalog.map((item) => {
+        {!!catalogError && (
+          <View style={styles.errorPanel}>
+            <Text style={styles.errorTitle}>Elenco non disponibile</Text>
+            <Text style={styles.errorBody}>{catalogError}</Text>
+            <Pressable style={styles.retryAction} onPress={() => void refreshCatalog()}>
+              <Text style={styles.retryActionText}>Riprova</Text>
+            </Pressable>
+          </View>
+        )}
+        {!catalogLoading && !catalogError && filteredCatalog.length === 0 && (
+          <View style={styles.statePanel}>
+            <Text style={styles.stateTitle}>{catalogSearch ? "Nessun risultato" : "Nessun condominio disponibile"}</Text>
+            <Text style={styles.muted}>{catalogSearch ? "Modifica la ricerca." : "Aggiorna l'elenco o verifica la connessione."}</Text>
+          </View>
+        )}
+        {!catalogError && filteredCatalog.map((item) => {
           const selected = selectedCondominiumIds.includes(item.condominio_id);
           const serverAssignment = item.assignment_id
             ? remoteById.get(item.assignment_id)
@@ -709,9 +787,21 @@ export default function App() {
             {busy ? <ActivityIndicator color="white" /> : <Text style={styles.primaryActionText}>Prepara offline</Text>}
           </Pressable>
         </View>
+        </>
+        )}
 
+        {homeTab === "rounds" && (
+        <>
         <Text style={styles.sectionTitle}>Disponibili offline</Text>
-        {localAssignments.length === 0 && <Text style={styles.muted}>Nessun giro scaricato.</Text>}
+        {localAssignments.length === 0 && (
+          <View style={styles.statePanel}>
+            <Text style={styles.stateTitle}>Nessun condominio preparato</Text>
+            <Text style={styles.muted}>Seleziona i condomini prima di iniziare il giro.</Text>
+            <Pressable style={styles.retryAction} onPress={() => setHomeTab("prepare")}>
+              <Text style={styles.retryActionText}>Vai a Prepara giro</Text>
+            </Pressable>
+          </View>
+        )}
         {localAssignments.map((assignment) => {
           const itemCount = Number(assignment.item_count || 0);
           const capturedCount = Number(assignment.captured_count || 0);
@@ -722,7 +812,7 @@ export default function App() {
                 <Text style={styles.cardTitle}>{assignment.condominio_nome}</Text>
                 <Text style={styles.periodBadge}>{capturedCount}/{itemCount}</Text>
               </View>
-              <Text>{assignment.period_month}/{assignment.period_year} · visita {assignment.data_lettura_operatore || "-"}</Text>
+              <Text>{MONTHS[assignment.period_month - 1]} {assignment.period_year} · visita {assignment.data_lettura_operatore || "-"}</Text>
               <Text style={styles.muted}>{assignment.condominio_indirizzo || ""}</Text>
               <View style={styles.progressTrack}>
                 <View
@@ -733,14 +823,11 @@ export default function App() {
           );
         })}
 
-        <Text style={styles.sectionTitle}>Da scaricare dal server</Text>
-        {remoteNotDownloaded.length === 0 && (
-          <Text style={styles.muted}>Nessun giro ancora assegnato a questo operatore.</Text>
-        )}
+        {remoteNotDownloaded.length > 0 && <Text style={styles.sectionTitle}>Da riprendere dal server</Text>}
         {remoteNotDownloaded.map((assignment) => (
           <View key={assignment.id} style={styles.card}>
             <Text style={styles.cardTitle}>{assignment.condominio_nome}</Text>
-            <Text>{assignment.period_month}/{assignment.period_year} · {assignment.item_count || 0} contatori</Text>
+            <Text>{MONTHS[assignment.period_month - 1]} {assignment.period_year} · {assignment.item_count || 0} contatori</Text>
             {Number(assignment.rejected_count || 0) > 0 && (
               <Text style={styles.closedText}>{assignment.rejected_count} letture da correggere e reinviare</Text>
             )}
@@ -751,6 +838,8 @@ export default function App() {
             />
           </View>
         ))}
+        </>
+        )}
         <Button title="Esci" color="#991b1b" onPress={logout} />
       </ScrollView>
     </SafeAreaView>
@@ -772,6 +861,13 @@ const styles = StyleSheet.create({
   readingInput: { flex: 1, fontSize: 20, fontWeight: "700" },
   header: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderBottomWidth: 1, borderColor: "#e2e8f0", backgroundColor: "white" },
   headerText: { flex: 1 },
+  tabBar: { flexDirection: "row", gap: 6, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8, backgroundColor: "white", borderBottomWidth: 1, borderColor: "#e2e8f0" },
+  tab: { flex: 1, minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, borderRadius: 8, backgroundColor: "#f1f5f9" },
+  tabActive: { backgroundColor: "#dbeafe", borderWidth: 1, borderColor: "#93c5fd" },
+  tabText: { color: "#64748b", fontSize: 14, fontWeight: "700" },
+  tabTextActive: { color: "#1d4ed8" },
+  tabCount: { minWidth: 22, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, overflow: "hidden", textAlign: "center", color: "#64748b", backgroundColor: "#e2e8f0", fontSize: 10, fontWeight: "800" },
+  tabCountActive: { color: "#ffffff", backgroundColor: "#2563eb" },
   link: { color: "#2563eb", fontSize: 16, fontWeight: "600" },
   counter: { color: "#9a3412", fontSize: 12, fontWeight: "700" },
   sendCompact: { alignItems: "flex-end" },
@@ -808,9 +904,24 @@ const styles = StyleSheet.create({
   dateField: { flex: 1, gap: 5 },
   fieldLabel: { color: "#64748b", fontSize: 10, fontWeight: "700" },
   compactInput: { minHeight: 44, borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 8, paddingHorizontal: 10, backgroundColor: "white", color: "#0f172a", fontSize: 15 },
+  periodSelector: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 8, backgroundColor: "#f8fafc", padding: 6 },
+  periodArrow: { width: 42, height: 42, alignItems: "center", justifyContent: "center", borderRadius: 7, backgroundColor: "white", borderWidth: 1, borderColor: "#cbd5e1" },
+  periodArrowText: { color: "#1d4ed8", fontSize: 28, lineHeight: 30, fontWeight: "600" },
+  periodSummary: { flex: 1, alignItems: "center", gap: 3 },
+  periodValue: { color: "#0f172a", fontSize: 17, fontWeight: "800" },
+  refreshAction: { minWidth: 92, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 8, borderWidth: 1, borderColor: "#93c5fd", backgroundColor: "#eff6ff", paddingHorizontal: 12 },
+  refreshActionText: { color: "#1d4ed8", fontSize: 13, fontWeight: "700" },
+  actionDisabled: { opacity: 0.6 },
   catalogHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 4 },
   catalogActions: { flexDirection: "row", alignItems: "center", gap: 14 },
   secondaryLink: { color: "#64748b", fontSize: 13, fontWeight: "600" },
+  statePanel: { alignItems: "center", gap: 7, padding: 22, borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8, backgroundColor: "white" },
+  stateTitle: { color: "#0f172a", fontSize: 15, fontWeight: "700", textAlign: "center" },
+  errorPanel: { gap: 8, padding: 16, borderWidth: 1, borderColor: "#fecaca", borderRadius: 8, backgroundColor: "#fef2f2" },
+  errorTitle: { color: "#991b1b", fontSize: 15, fontWeight: "800" },
+  errorBody: { color: "#b91c1c", lineHeight: 19 },
+  retryAction: { alignSelf: "center", minHeight: 40, alignItems: "center", justifyContent: "center", paddingHorizontal: 18, borderRadius: 8, backgroundColor: "#1d4ed8" },
+  retryActionText: { color: "white", fontSize: 13, fontWeight: "700" },
   selectionCard: { minHeight: 70, flexDirection: "row", alignItems: "center", gap: 11, padding: 12, borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8, backgroundColor: "white" },
   selectionCardSelected: { borderColor: "#2563eb", backgroundColor: "#eff6ff" },
   selectionCardDisabled: { opacity: 0.55 },
