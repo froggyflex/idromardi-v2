@@ -5657,6 +5657,17 @@ exports.updateImportedDocumentParsedResult = async function (id, payload) {
     throw err;
   }
 
+  const allowedParseStatuses = new Set(["uploaded", "parsed", "reviewed", "imported", "failed"]);
+  const allowedValidationStatuses = new Set(["pending", "valid", "warning", "error"]);
+  const allowedBillTypes = new Set(["estimated", "actual", "mixed", "unknown"]);
+  const parseStatus = allowedParseStatuses.has(payload.parseStatus)
+    ? payload.parseStatus
+    : "parsed";
+  const validationStatus = allowedValidationStatuses.has(payload.validationStatus)
+    ? payload.validationStatus
+    : "pending";
+  const billType = allowedBillTypes.has(payload.billType) ? payload.billType : "unknown";
+
   const sql = `
     UPDATE imported_invoice_documents
     SET
@@ -5684,6 +5695,10 @@ exports.updateImportedDocumentParsedResult = async function (id, payload) {
       parsed_at = CASE
         WHEN parsed_at IS NULL THEN NOW()
         ELSE parsed_at
+      END,
+      reviewed_at = CASE
+        WHEN ? = 'reviewed' THEN NOW()
+        ELSE reviewed_at
       END
     WHERE id = ?
   `;
@@ -5698,18 +5713,19 @@ exports.updateImportedDocumentParsedResult = async function (id, payload) {
     payload.intestatario ?? null,
     payload.indirizzoFornitura ?? null,
     payload.fornitoreServizi ?? null,
-    payload.billType ?? "unknown",
+    billType,
     payload.dataInizioPeriodo ?? null,
     payload.dataFinePeriodo ?? null,
     payload.consumoGlobaleMc ?? null,
     payload.importoTotaleDaPagare ?? null,
     payload.parserVersion ?? null,
     payload.parserConfidence ?? null,
-    payload.parseStatus ?? "parsed",
-    payload.validationStatus ?? "pending",
-    payload.parsedPayload ? JSON.stringify(payload.parsedPayload) : null,
-    payload.validation ? JSON.stringify(payload.validation) : null,
+    parseStatus,
+    validationStatus,
+    payload.parsedPayload !== undefined ? JSON.stringify(payload.parsedPayload) : null,
+    payload.validation !== undefined ? JSON.stringify(payload.validation) : null,
     payload.parserErrorText ?? null,
+    parseStatus,
     id,
   ];
 

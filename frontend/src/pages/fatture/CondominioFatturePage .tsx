@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   FileText,
   Loader2,
+  Pencil,
   Search,
   ReceiptText,
   Trash2,
@@ -41,6 +42,12 @@ type ImportedInvoiceDocument = {
     display_name?: string | null;
     numero_bolletta?: string | null;
     codice_fornitura?: string | null;
+    codice_cliente?: string | null;
+    punto_erogazione?: string | null;
+    matricola_contatore?: string | null;
+    intestatario?: string | null;
+    indirizzo_fornitura?: string | null;
+    provider_id?: string | null;
     fornitore_servizi?: string | null;
     bill_type?: string | null;
     data_inizio_periodo?: string | null;
@@ -52,7 +59,48 @@ type ImportedInvoiceDocument = {
     linked_session_id?: string | null;
     parsed_payload_json?: string | null;
     validation_json?: string | null;
+    parser_version?: string | null;
+    parser_confidence?: number | null;
+    parser_error_text?: string | null;
   };
+type ImportedDocumentEditForm = {
+  providerId: string;
+  numeroBolletta: string;
+  codiceFornitura: string;
+  codiceCliente: string;
+  puntoErogazione: string;
+  matricolaContatore: string;
+  intestatario: string;
+  indirizzoFornitura: string;
+  fornitoreServizi: string;
+  billType: string;
+  dataInizioPeriodo: string;
+  dataFinePeriodo: string;
+  consumoGlobaleMc: string;
+  importoTotaleDaPagare: string;
+  letturaPrecedente: string;
+  letturaAttuale: string;
+  giorniQF: string;
+  giorniConsumi: string;
+  acquedotto: string;
+  depFog: string;
+  quotaFissa: string;
+  oneri: string;
+  totaleLettura: string;
+  giorniAcconto: string;
+  mcAcconto: string;
+  acquedottoAcconto: string;
+  depFogAcconto: string;
+  oneriAcconto: string;
+  ivaAcconto: string;
+  totaleAcconto: string;
+  mcStorno: string;
+  acquedottoStorno: string;
+  depFogStorno: string;
+  oneriStorno: string;
+  ivaStorno: string;
+  totaleStorno: string;
+};
 type LetturaItem = {
   data_lettura?: string | null;
   lettura_mc?: number | null;
@@ -283,6 +331,9 @@ export default function CondominioFatturePage() {
     const [selectedImportedDoc, setSelectedImportedDoc] = useState<ImportedInvoiceDocument | null>(null);
     const [loadingImportedDocs, setLoadingImportedDocs] = useState(false);
     const [loadingImportedDetail, setLoadingImportedDetail] = useState(false);
+    const [editingImportedDoc, setEditingImportedDoc] = useState(false);
+    const [savingImportedDoc, setSavingImportedDoc] = useState(false);
+    const [importedDocEdit, setImportedDocEdit] = useState<ImportedDocumentEditForm | null>(null);
     const [creatingImport, setCreatingImport] = useState(false);
 
     const [importFilename, setImportFilename] = useState("");
@@ -768,25 +819,29 @@ export default function CondominioFatturePage() {
       const mainPeriod = hasAGiro ? null : getEstimatedConsumptionPeriod(payload, summary);
       const mainOldest = hasAGiro ? null : mediaLike?.oldest;
       const mainNewest = hasAGiro ? null : mediaLike?.newest;
+      const manual = payload?.manual_overrides || {};
 
       return {
-        giorniQF: deriveGiorniQfFromPayload(payload),
+        giorniQF: manualNumber(manual.giorni_qf) ?? deriveGiorniQfFromPayload(payload),
         giorniConsumi:
-          aGiro?.oldest?.data_lettura && aGiro?.newest?.data_lettura
+          manualNumber(manual.giorni_consumi) ??
+          (aGiro?.oldest?.data_lettura && aGiro?.newest?.data_lettura
             ? diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura)
             : mainOldest?.data_lettura && mainNewest?.data_lettura
             ? diffDaysExclusive(mainOldest.data_lettura, mainNewest.data_lettura)
             : mainPeriod?.data_inizio && mainPeriod?.data_fine
             ? diffDaysExclusive(mainPeriod.data_inizio, mainPeriod.data_fine)
-            : null,
+            : null),
         giorniAcconto:
-          hasAGiro && resolvedAcconto?.dataInizio && resolvedAcconto?.dataFine
+          manualNumber(manual?.acconto?.giorni) ??
+          (hasAGiro && resolvedAcconto?.dataInizio && resolvedAcconto?.dataFine
             ? diffDaysExclusive(resolvedAcconto.dataInizio, resolvedAcconto.dataFine)
-            : 0,
+            : 0),
         mcAcconto:
-          hasAGiro && resolvedAcconto?.consumo !== undefined && resolvedAcconto?.consumo !== null
+          manualNumber(manual?.acconto?.mc) ??
+          (hasAGiro && resolvedAcconto?.consumo !== undefined && resolvedAcconto?.consumo !== null
             ? Number(resolvedAcconto.consumo)
-            : 0,
+            : 0),
       };
     } catch {
       return {};
@@ -800,6 +855,12 @@ export default function CondominioFatturePage() {
     } catch {
       return null;
     }
+  }
+
+  function manualNumber(value: any): number | null {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   function isMainAcquedottoTariffRow(row: any) {
@@ -825,6 +886,26 @@ export default function CondominioFatturePage() {
   function getStornoValuesFromPayload(payload: any) {
     const money = (value: number) =>
       Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+    const manual = payload?.manual_overrides?.storno;
+    if (manual && Object.values(manual).some((value) => manualNumber(value) !== null)) {
+      const acquedotto = manualNumber(manual.acquedotto) ?? 0;
+      const depFog = manualNumber(manual.dep_fog) ?? 0;
+      const oneri = manualNumber(manual.oneri) ?? 0;
+      const iva = manualNumber(manual.iva) ?? money((acquedotto + depFog + oneri) * 0.1);
+      const totale = manualNumber(manual.totale) ?? money(acquedotto + depFog + oneri + iva);
+      return {
+        mc: manualNumber(manual.mc) ?? 0,
+        acquedotto,
+        depurazione: 0,
+        fognatura: 0,
+        depFog,
+        oneri,
+        iva,
+        totale,
+        euro: totale,
+        source: "manual_override",
+      };
+    }
     const sumNegativeRows = (key: string, predicate?: (row: any) => boolean) => {
       const rows = Array.isArray(payload?.[key]) ? payload[key] : [];
       const negativeRows = rows.filter(
@@ -973,6 +1054,8 @@ export default function CondominioFatturePage() {
       if (selectedImportedDoc?.id === doc.id) {
         setSelectedImportedDoc(null);
         setSelectedImportedId(null);
+        setImportedDocEdit(null);
+        setEditingImportedDoc(false);
         setSelectedDoc(null);
         setAnnoTariffa("");
         setImportedDocYear(null);
@@ -1249,7 +1332,11 @@ function hasOneriPerequazioneRows(payloadJson?: string | null): boolean {
     const payload =
       typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
 
-    return Array.isArray(payload?.oneri_perequazione) && payload.oneri_perequazione.length > 0;
+    return (
+      manualNumber(payload?.manual_overrides?.main?.oneri) !== null ||
+      manualNumber(payload?.manual_overrides?.acconto?.oneri) !== null ||
+      Array.isArray(payload?.oneri_perequazione) && payload.oneri_perequazione.length > 0
+    );
   } catch (err) {
     return false;
   }
@@ -1369,6 +1456,25 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
     parseAccontoFromParsedPayload(payloadJson, parsedSummary);
     parseStornoFromParsedPayload(payloadJson);
 
+    const manual = payload?.manual_overrides || {};
+    const manualMain = manual?.main || {};
+    const manualPrevious = manualNumber(manualMain.lettura_precedente);
+    const manualCurrent = manualNumber(manualMain.lettura_attuale);
+    const manualConsumption = manualNumber(manualMain.consumo_mc);
+    if (manualNumber(manualMain.acquedotto) !== null) setParsedImpCons(Number(manualMain.acquedotto));
+    if (manualNumber(manualMain.dep_fog) !== null) setDepFog(Number(manualMain.dep_fog));
+    if (manualNumber(manualMain.oneri) !== null) setOneriPerequazione(Number(manualMain.oneri));
+    if (manualNumber(manual.giorni_qf) !== null) setGiorniQf(Number(manual.giorni_qf));
+    if (manualNumber(manual.giorni_consumi) !== null) setGiorniConsumi(Number(manual.giorni_consumi));
+    if (manualPrevious !== null) setValPrec(String(manualPrevious));
+    if (manualCurrent !== null) setValAtt(String(manualCurrent));
+    else if (manualPrevious !== null && manualConsumption !== null) {
+      setValAtt(String(manualPrevious + manualConsumption));
+    } else if (manualPrevious === null && manualConsumption !== null) {
+      setValPrec("0");
+      setValAtt(String(manualConsumption));
+    }
+
 
     console.log("Parsed summary from payload:", parsedSummary);
 
@@ -1379,12 +1485,14 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
 
     if (aGiro?.oldest?.lettura_mc != null && aGiro?.newest?.lettura_mc != null) {
 
-      setValPrec(String(aGiro.oldest.lettura_mc));
-      setValAtt(String(aGiro.newest.lettura_mc));
-      setGiorniConsumi(diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura) ?? 0);
+      if (manualPrevious === null) setValPrec(String(aGiro.oldest.lettura_mc));
+      if (manualCurrent === null && manualConsumption === null) setValAtt(String(aGiro.newest.lettura_mc));
+      if (manualNumber(manual.giorni_consumi) === null) {
+        setGiorniConsumi(diffDaysExclusive(aGiro.oldest.data_lettura, aGiro.newest.data_lettura) ?? 0);
+      }
       
       
-      parseQFFromParsedPayload(payloadJson);
+      if (manualNumber(manual.giorni_qf) === null) parseQFFromParsedPayload(payloadJson);
       if (!parsedBuckets.aGiro.hasPeriod) {
         setOneriPerequazione(parseOneriPerequazioneFromPayload(payloadJson, parsedSummary, "non_media"));
         setDepFog(getDepFogData(payloadJson, "positive", "non_acconto").totale); //JSON.parse(payloadJson).totale_dep_fog
@@ -1403,15 +1511,22 @@ function assignStateFromParsedPayload(payloadJson?: string | null) {
       estimatedReadings?.oldest?.lettura_mc != null &&
       estimatedReadings?.newest?.lettura_mc != null
     ) {
-      setValPrec(String(estimatedReadings.oldest.lettura_mc));
-      setValAtt(String(estimatedReadings.newest.lettura_mc));
-      setGiorniConsumi(
-        diffDaysExclusive(
-          estimatedReadings.oldest.data_lettura,
-          estimatedReadings.newest.data_lettura
-        ) ?? 0
-      );
-      parseQFFromParsedPayload(payloadJson);
+      if (manualPrevious === null) setValPrec(String(estimatedReadings.oldest.lettura_mc));
+      if (manualCurrent === null && manualConsumption === null) setValAtt(String(estimatedReadings.newest.lettura_mc));
+      if (manualNumber(manual.giorni_consumi) === null) {
+        setGiorniConsumi(
+          diffDaysExclusive(
+            estimatedReadings.oldest.data_lettura,
+            estimatedReadings.newest.data_lettura
+          ) ?? 0
+        );
+      }
+      if (manualNumber(manual.giorni_qf) === null) parseQFFromParsedPayload(payloadJson);
+      setParsingAlert?.(null);
+      return;
+    }
+
+    if (manualPrevious !== null || manualCurrent !== null || manualConsumption !== null) {
       setParsingAlert?.(null);
       return;
     }
@@ -1546,6 +1661,8 @@ function resetAccontoFromParsedPayload() {
 function resetParsedDocumentState() {
   setSelectedImportedId(null);
   setSelectedImportedDoc(null);
+  setImportedDocEdit(null);
+  setEditingImportedDoc(false);
   setSelectedDoc(null);
   setImportedDocYear(null);
   setParsedImpCons(0);
@@ -1912,13 +2029,30 @@ function getParsedBuckets(payload: any, parsedSummary: any[] | undefined) {
     };
   };
 
+  const aGiro = bucketFor(aGiroPeriod, aGiroMc);
+  const manualMain = payload?.manual_overrides?.main;
+  const hasManualMain =
+    manualMain && Object.values(manualMain).some((value) => manualNumber(value) !== null);
+
   return {
-    aGiro: bucketFor(aGiroPeriod, aGiroMc),
+    aGiro: hasManualMain
+      ? {
+          ...aGiro,
+          hasPeriod: true,
+          consumoMc: manualNumber(manualMain.consumo_mc) ?? aGiro.consumoMc,
+          acquedotto: manualNumber(manualMain.acquedotto) ?? aGiro.acquedotto,
+          depFog: manualNumber(manualMain.dep_fog) ?? aGiro.depFog,
+          oneri: manualNumber(manualMain.oneri) ?? aGiro.oneri,
+        }
+      : aGiro,
     acconto: bucketFor(mediaPeriod, mediaMc),
   };
 }
 
 function getParsedQuotaFissaFromPayload(payload: any) {
+  const manualQuotaFissa = manualNumber(payload?.manual_overrides?.main?.quota_fissa);
+  if (manualQuotaFissa !== null) return manualQuotaFissa;
+
   const rows = Array.isArray(payload?.componente_quota_tariffa_acqua)
     ? payload.componente_quota_tariffa_acqua
     : [];
@@ -1929,6 +2063,14 @@ function getParsedQuotaFissaFromPayload(payload: any) {
 }
 
 function getFornituraSummaryByType(payload: any, tipo: "a_giro" | "media") {
+  const manualTotal =
+    tipo === "a_giro"
+      ? manualNumber(payload?.manual_overrides?.main?.totale)
+      : manualNumber(payload?.manual_overrides?.acconto?.totale);
+  if (manualTotal !== null) {
+    return { tipo_lettura: tipo, totale_fornitura: manualTotal, source: "manual_override" };
+  }
+
   const summaries = Array.isArray(payload?.forniture_summary)
     ? payload.forniture_summary
     : [];
@@ -1984,6 +2126,22 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
   try {
     const payload = JSON.parse(payloadJson);
+    const manual = payload?.manual_overrides?.acconto;
+    if (manual && Object.values(manual).some((value) => manualNumber(value) !== null)) {
+      const acquedotto = manualNumber(manual.acquedotto) ?? 0;
+      const depFog = manualNumber(manual.dep_fog) ?? 0;
+      const oneri = manualNumber(manual.oneri) ?? 0;
+      const iva = manualNumber(manual.iva) ?? (acquedotto + depFog + oneri) * 0.1;
+      return {
+        giorni: manualNumber(manual.giorni) ?? 0,
+        mc: manualNumber(manual.mc) ?? 0,
+        acquedotto,
+        depFog,
+        oneri,
+        iva,
+        totale: manualNumber(manual.totale) ?? acquedotto + depFog + oneri + iva,
+      };
+    }
     const summary = parsedSummary ?? summarizePeriodiAndTariffe(payload || null);
     const resolvedAcconto = resolveAccontoPeriodFromPayload(payload, summary);
 
@@ -2105,6 +2263,218 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       console.error("Errore durante il parsing del payload per il QF:", err);
     }
   }
+
+  function editValue(value: any): string {
+    return value === null || value === undefined ? "" : String(value);
+  }
+
+  function buildImportedDocumentEditForm(document: ImportedInvoiceDocument): ImportedDocumentEditForm {
+    const payloadJson =
+      typeof document.parsed_payload_json === "string"
+        ? document.parsed_payload_json
+        : document.parsed_payload_json
+        ? JSON.stringify(document.parsed_payload_json)
+        : null;
+    const payload = getParsedPayloadObject(payloadJson) || {};
+    const manual = payload?.manual_overrides || {};
+    const summary = summarizePeriodiAndTariffe(payload || null);
+    const buckets = getParsedBuckets(payload, summary);
+    const main = manual?.main || {};
+    const groupedMain = payload?.grouped_letture?.a_giro ||
+      payload?.grouped_letture?.media ||
+      payload?.grouped_letture?.acconto || {};
+    const acconto = getAccontoValuesFromParsedPayload(payloadJson || undefined, summary);
+    const storno = getStornoValuesFromPayload(payload);
+    const params = getParsedCalculationParams(payloadJson || undefined, summary);
+    const anagrafica = payload?.anagrafica || {};
+
+    return {
+      providerId: editValue(document.provider_id),
+      numeroBolletta: editValue(document.numero_bolletta ?? payload?.numero_bolletta),
+      codiceFornitura: editValue(document.codice_fornitura ?? payload?.codice_fornitura),
+      codiceCliente: editValue(document.codice_cliente ?? anagrafica?.codice_cliente),
+      puntoErogazione: editValue(document.punto_erogazione ?? payload?.punto_erogazione),
+      matricolaContatore: editValue(document.matricola_contatore ?? anagrafica?.matricola_contatore),
+      intestatario: editValue(document.intestatario ?? anagrafica?.intestatario),
+      indirizzoFornitura: editValue(document.indirizzo_fornitura ?? anagrafica?.indirizzo_fornitura),
+      fornitoreServizi: editValue(document.fornitore_servizi ?? payload?.fornitore_servizi),
+      billType: editValue(document.bill_type || payload?.bill_type || "unknown"),
+      dataInizioPeriodo: editValue(document.data_inizio_periodo).slice(0, 10),
+      dataFinePeriodo: editValue(document.data_fine_periodo).slice(0, 10),
+      consumoGlobaleMc: editValue(document.consumo_globale_mc ?? payload?.consumo_globale_mc),
+      importoTotaleDaPagare: editValue(document.importo_totale_da_pagare ?? payload?.importo_totale_da_pagare),
+      letturaPrecedente: editValue(manualNumber(main.lettura_precedente) ?? groupedMain?.oldest?.lettura_mc),
+      letturaAttuale: editValue(manualNumber(main.lettura_attuale) ?? groupedMain?.newest?.lettura_mc),
+      giorniQF: editValue(manualNumber(manual.giorni_qf) ?? params?.giorniQF),
+      giorniConsumi: editValue(manualNumber(manual.giorni_consumi) ?? params?.giorniConsumi),
+      acquedotto: editValue(manualNumber(main.acquedotto) ?? buckets.aGiro.acquedotto),
+      depFog: editValue(manualNumber(main.dep_fog) ?? buckets.aGiro.depFog),
+      quotaFissa: editValue(manualNumber(main.quota_fissa) ?? getParsedQuotaFissaFromPayload(payload)),
+      oneri: editValue(manualNumber(main.oneri) ?? buckets.aGiro.oneri),
+      totaleLettura: editValue(
+        manualNumber(main.totale) ?? Number(getFornituraSummaryByType(payload, "a_giro")?.totale_fornitura || 0)
+      ),
+      giorniAcconto: editValue(acconto?.giorni),
+      mcAcconto: editValue(acconto?.mc),
+      acquedottoAcconto: editValue(acconto?.acquedotto),
+      depFogAcconto: editValue(acconto?.depFog),
+      oneriAcconto: editValue(acconto?.oneri),
+      ivaAcconto: editValue(acconto?.iva),
+      totaleAcconto: editValue(acconto?.totale),
+      mcStorno: editValue(storno?.mc),
+      acquedottoStorno: editValue(storno?.acquedotto),
+      depFogStorno: editValue(storno?.depFog),
+      oneriStorno: editValue(storno?.oneri),
+      ivaStorno: editValue(storno?.iva),
+      totaleStorno: editValue(storno?.totale),
+    };
+  }
+
+  function openImportedDocumentEditor(document: ImportedInvoiceDocument) {
+    setImportedDocEdit(buildImportedDocumentEditForm(document));
+    setEditingImportedDoc(true);
+    setError(null);
+  }
+
+  function updateImportedDocumentEdit(field: keyof ImportedDocumentEditForm, value: string) {
+    setImportedDocEdit((previous) => previous ? { ...previous, [field]: value } : previous);
+  }
+
+  async function saveImportedDocumentManualEdit() {
+    if (!selectedImportedDoc?.id || !importedDocEdit) return;
+
+    const optionalNumber = (value: string, label: string, allowNegative = false) => {
+      if (value.trim() === "") return null;
+      const parsed = Number(value.replace(",", "."));
+      if (!Number.isFinite(parsed) || (!allowNegative && parsed < 0)) {
+        throw new Error(`${label}: inserisci un numero valido${allowNegative ? "" : " non negativo"}.`);
+      }
+      return parsed;
+    };
+
+    try {
+      setSavingImportedDoc(true);
+      setError(null);
+      const form = importedDocEdit;
+      if (form.dataInizioPeriodo && form.dataFinePeriodo && form.dataInizioPeriodo > form.dataFinePeriodo) {
+        throw new Error("La data di inizio periodo non può essere successiva alla data di fine.");
+      }
+
+      const currentPayload = getParsedPayloadObject(selectedImportedDoc.parsed_payload_json) || {};
+      const mainConsumption = optionalNumber(form.consumoGlobaleMc, "Consumo globale");
+      const previousReading = optionalNumber(form.letturaPrecedente, "Lettura precedente");
+      const currentReading = optionalNumber(form.letturaAttuale, "Lettura attuale");
+      const inferredConsumption =
+        previousReading !== null && currentReading !== null
+          ? currentReading - previousReading
+          : mainConsumption;
+      if (inferredConsumption !== null && inferredConsumption < 0) {
+        throw new Error("La lettura attuale non può essere inferiore alla lettura precedente.");
+      }
+
+      const manualOverrides = {
+        edited_at: new Date().toISOString(),
+        giorni_qf: optionalNumber(form.giorniQF, "Giorni QF"),
+        giorni_consumi: optionalNumber(form.giorniConsumi, "Giorni consumi"),
+        main: {
+          lettura_precedente: previousReading,
+          lettura_attuale: currentReading,
+          consumo_mc: inferredConsumption,
+          acquedotto: optionalNumber(form.acquedotto, "Acquedotto"),
+          dep_fog: optionalNumber(form.depFog, "Depurazione e fognatura"),
+          quota_fissa: optionalNumber(form.quotaFissa, "Quota fissa"),
+          oneri: optionalNumber(form.oneri, "Oneri"),
+          totale: optionalNumber(form.totaleLettura, "Totale lettura"),
+        },
+        acconto: {
+          giorni: optionalNumber(form.giorniAcconto, "Giorni acconto"),
+          mc: optionalNumber(form.mcAcconto, "Consumo acconto"),
+          acquedotto: optionalNumber(form.acquedottoAcconto, "Acquedotto acconto"),
+          dep_fog: optionalNumber(form.depFogAcconto, "Depurazione e fognatura acconto"),
+          oneri: optionalNumber(form.oneriAcconto, "Oneri acconto"),
+          iva: optionalNumber(form.ivaAcconto, "IVA acconto"),
+          totale: optionalNumber(form.totaleAcconto, "Totale acconto"),
+        },
+        storno: {
+          mc: optionalNumber(form.mcStorno, "Consumo storno", true),
+          acquedotto: optionalNumber(form.acquedottoStorno, "Acquedotto storno", true),
+          dep_fog: optionalNumber(form.depFogStorno, "Depurazione e fognatura storno", true),
+          oneri: optionalNumber(form.oneriStorno, "Oneri storno", true),
+          iva: optionalNumber(form.ivaStorno, "IVA storno", true),
+          totale: optionalNumber(form.totaleStorno, "Totale storno", true),
+        },
+      };
+      const parsedPayload = {
+        ...currentPayload,
+        numero_bolletta: form.numeroBolletta.trim() || null,
+        codice_fornitura: form.codiceFornitura.trim() || null,
+        punto_erogazione: form.puntoErogazione.trim() || null,
+        fornitore_servizi: form.fornitoreServizi.trim() || null,
+        bill_type: form.billType || "unknown",
+        consumo_globale_mc: mainConsumption,
+        importo_totale_da_pagare: optionalNumber(form.importoTotaleDaPagare, "Totale documento"),
+        anagrafica: {
+          ...(currentPayload?.anagrafica || {}),
+          codice_cliente: form.codiceCliente.trim() || null,
+          matricola_contatore: form.matricolaContatore.trim() || null,
+          intestatario: form.intestatario.trim() || null,
+          indirizzo_fornitura: form.indirizzoFornitura.trim() || null,
+        },
+        manual_overrides: manualOverrides,
+      };
+      const existingValidation = getParsedPayloadObject(selectedImportedDoc.validation_json) || {};
+      const response = await api.put(
+        `/fatture/imported-documents/${selectedImportedDoc.id}/parsed-result`,
+        {
+          providerId: form.providerId || null,
+          numeroBolletta: form.numeroBolletta.trim() || null,
+          codiceFornitura: form.codiceFornitura.trim() || null,
+          codiceCliente: form.codiceCliente.trim() || null,
+          puntoErogazione: form.puntoErogazione.trim() || null,
+          matricolaContatore: form.matricolaContatore.trim() || null,
+          intestatario: form.intestatario.trim() || null,
+          indirizzoFornitura: form.indirizzoFornitura.trim() || null,
+          fornitoreServizi: form.fornitoreServizi.trim() || null,
+          billType: form.billType || "unknown",
+          dataInizioPeriodo: form.dataInizioPeriodo || null,
+          dataFinePeriodo: form.dataFinePeriodo || null,
+          consumoGlobaleMc: mainConsumption,
+          importoTotaleDaPagare: optionalNumber(form.importoTotaleDaPagare, "Totale documento"),
+          parserVersion: selectedImportedDoc.parser_version || "manual-entry-v1",
+          parserConfidence: 1,
+          parseStatus: selectedImportedDoc.parse_status === "imported" ? "imported" : "reviewed",
+          validationStatus: "valid",
+          parsedPayload,
+          validation: {
+            ...existingValidation,
+            manual_review: { edited_at: manualOverrides.edited_at, source: "fatturazione" },
+          },
+          parserErrorText: null,
+        }
+      );
+      const rawDocument = response.data?.document;
+      const savedDocument = (Array.isArray(rawDocument) ? rawDocument[0] : rawDocument) || selectedImportedDoc;
+      setSelectedImportedDoc(savedDocument);
+      setSelectedImportedId(savedDocument.id);
+      setImportedDocs((previous) => previous.map((item) =>
+        String(item.id) === String(savedDocument.id) ? { ...item, ...savedDocument } : item
+      ));
+      setSelectedDoc(savedDocument.importo_totale_da_pagare ?? null);
+      assignStateFromParsedPayload(savedDocument.parsed_payload_json);
+      setImportedDocEdit(buildImportedDocumentEditForm(savedDocument));
+      setEditingImportedDoc(false);
+      if (savedDocument.data_fine_periodo) {
+        const year = new Date(savedDocument.data_fine_periodo).getFullYear();
+        setImportedDocYear(year);
+        setAnnoTariffa(String(year));
+      }
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || "Errore salvataggio dati manuali");
+    } finally {
+      setSavingImportedDoc(false);
+    }
+  }
+
     async function loadImportedDocumentDetail(id: string) {
       try {
         setLoadingImportedDetail(true);
@@ -2116,6 +2486,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
         setSelectedImportedDoc(document);
         setSelectedImportedId(id);
+        setEditingImportedDoc(false);
+        setImportedDocEdit(document ? buildImportedDocumentEditForm(document) : null);
 
         if (!document) {
           setSelectedDoc(null);
@@ -3303,11 +3675,7 @@ const selectedParsedPayload = useMemo(() => {
 const consumo = Number(valAtt || 0) - Number(valPrec || 0);
 const impConsumo = Number(parsedImpCons ?? 0);
 const depFogValue = Number(depfog ?? 0);
-const parsedQuotaFissaFromPayload = Array.isArray(selectedParsedPayload?.componente_quota_tariffa_acqua)
-  ? selectedParsedPayload.componente_quota_tariffa_acqua
-      .filter((row: any) => Number(row?.importo || 0) > 0)
-      .reduce((sum: number, row: any) => sum + Number(row?.importo || 0), 0)
-  : 0;
+const parsedQuotaFissaFromPayload = getParsedQuotaFissaFromPayload(selectedParsedPayload);
 const quotaFissaSession = Number(session?.tot_qf ?? 0);
 const quotaFissa = quotaFissaSession > 0 ? quotaFissaSession : parsedQuotaFissaFromPayload;
 const oneriAGiro = Number(oneriPerequazione || 0);
@@ -4267,6 +4635,7 @@ return (
             <option value="all">Tutti</option>
             <option value="uploaded">Da analizzare</option>
             <option value="parsed">Analizzati</option>
+            <option value="reviewed">Corretti manualmente</option>
             <option value="imported">Associati</option>
           </select>
         </div>
@@ -4312,6 +4681,8 @@ return (
                     const statusLabel =
                       status === "imported"
                         ? "Associato"
+                        : status === "reviewed"
+                        ? "Corretto manualmente"
                         : status === "parsed"
                         ? "Analizzato"
                         : status === "failed"
@@ -4321,6 +4692,8 @@ return (
                     const statusClass =
                       status === "imported"
                         ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                        : status === "reviewed"
+                        ? "bg-amber-50 text-amber-700 ring-amber-200"
                         : status === "parsed"
                         ? "bg-blue-50 text-blue-700 ring-blue-200"
                         : "bg-slate-100 text-slate-700 ring-slate-200";
@@ -4362,7 +4735,7 @@ return (
 
                         <td className="px-3 py-2.5">
                           <div className="flex justify-end gap-1">
-                            {status !== "parsed" && status !== "imported" && (
+                            {status !== "parsed" && status !== "reviewed" && status !== "imported" && (
                               <button
                                 type="button"
                                 onClick={() => parseImportedInvoice(doc.id)}
@@ -4519,6 +4892,187 @@ return (
           />
         </div>
       </div>
+    </div>
+
+    {/* FULL WIDTH - MODIFICA MANUALE DATI ESTRATTI */}
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white xl:col-span-2">
+      <div className="flex flex-col gap-3 border-b border-slate-200 bg-amber-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Pencil className="h-4 w-4 text-amber-700" />
+            <h4 className="text-sm font-bold text-slate-900">Inserimento e correzione manuale</h4>
+          </div>
+          <p className="mt-1 text-xs text-slate-600">
+            Correggi i campi normalmente estratti dal PDF. I valori salvati sostituiscono quelli del parser nel calcolo.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={!selectedImportedDoc || loadingImportedDetail}
+          onClick={() => {
+            if (!selectedImportedDoc) return;
+            if (editingImportedDoc) {
+              setImportedDocEdit(buildImportedDocumentEditForm(selectedImportedDoc));
+              setEditingImportedDoc(false);
+            } else {
+              openImportedDocumentEditor(selectedImportedDoc);
+            }
+          }}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Pencil className="h-4 w-4" />
+          {editingImportedDoc ? "Annulla modifica" : "Modifica dati estratti"}
+        </button>
+      </div>
+
+      {!selectedImportedDoc ? (
+        <div className="px-4 py-6 text-center text-sm text-slate-500">
+          Seleziona un documento caricato per inserire o correggere i dati.
+        </div>
+      ) : !editingImportedDoc || !importedDocEdit ? (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-4 text-sm sm:grid-cols-4">
+          {[
+            ["Bolletta", selectedImportedDoc.numero_bolletta || "-"],
+            ["Fornitura", selectedImportedDoc.codice_fornitura || "-"],
+            ["Periodo", `${selectedImportedDoc.data_inizio_periodo?.slice(0, 10) || "-"} → ${selectedImportedDoc.data_fine_periodo?.slice(0, 10) || "-"}`],
+            ["Totale", `€ ${Number(selectedImportedDoc.importo_totale_da_pagare || 0).toFixed(2)}`],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
+              <div className="mt-0.5 truncate font-semibold text-slate-800">{value}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-5 p-4">
+          <section>
+            <h5 className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-slate-500">Documento e fornitura</h5>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="flex flex-col gap-1 text-xs font-semibold text-slate-600">
+                Provider
+                <select
+                  value={importedDocEdit.providerId}
+                  onChange={(event) => updateImportedDocumentEdit("providerId", event.target.value)}
+                  className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                >
+                  <option value="">Non specificato</option>
+                  {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.nome}</option>)}
+                </select>
+              </label>
+              {([
+                ["numeroBolletta", "Numero bolletta"],
+                ["codiceFornitura", "Codice fornitura"],
+                ["codiceCliente", "Codice cliente"],
+                ["puntoErogazione", "Punto erogazione"],
+                ["matricolaContatore", "Matricola contatore"],
+                ["intestatario", "Intestatario"],
+                ["indirizzoFornitura", "Indirizzo fornitura"],
+                ["fornitoreServizi", "Fornitore servizi"],
+              ] as Array<[keyof ImportedDocumentEditForm, string]>).map(([field, label]) => (
+                <label key={field} className="flex flex-col gap-1 text-xs font-semibold text-slate-600">
+                  {label}
+                  <input
+                    value={importedDocEdit[field]}
+                    onChange={(event) => updateImportedDocumentEdit(field, event.target.value)}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                  />
+                </label>
+              ))}
+              <label className="flex flex-col gap-1 text-xs font-semibold text-slate-600">
+                Tipo bolletta
+                <select
+                  value={importedDocEdit.billType}
+                  onChange={(event) => updateImportedDocumentEdit("billType", event.target.value)}
+                  className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                >
+                  <option value="unknown">Non specificato</option>
+                  <option value="actual">Consumi effettivi</option>
+                  <option value="estimated">Consumi stimati</option>
+                  <option value="mixed">Mista</option>
+                </select>
+              </label>
+              {([
+                ["dataInizioPeriodo", "Inizio periodo", "date"],
+                ["dataFinePeriodo", "Fine periodo", "date"],
+                ["consumoGlobaleMc", "Consumo globale (mc)", "number"],
+                ["importoTotaleDaPagare", "Totale documento (€)", "number"],
+              ] as Array<[keyof ImportedDocumentEditForm, string, string]>).map(([field, label, type]) => (
+                <label key={field} className="flex flex-col gap-1 text-xs font-semibold text-slate-600">
+                  {label}
+                  <input
+                    type={type}
+                    step={type === "number" ? "0.01" : undefined}
+                    value={importedDocEdit[field]}
+                    onChange={(event) => updateImportedDocumentEdit(field, event.target.value)}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+
+          {([
+            {
+              title: "Lettura a giro",
+              fields: [
+                ["letturaPrecedente", "Lettura precedente"], ["letturaAttuale", "Lettura attuale"],
+                ["giorniQF", "Giorni QF"], ["giorniConsumi", "Giorni consumi"],
+                ["acquedotto", "Acquedotto (€)"], ["depFog", "Depurazione + fognatura (€)"],
+                ["quotaFissa", "Quota fissa (€)"], ["oneri", "Oneri (€)"], ["totaleLettura", "Totale lettura (€)"],
+              ],
+            },
+            {
+              title: "Acconto",
+              fields: [
+                ["giorniAcconto", "Giorni"], ["mcAcconto", "Consumo (mc)"],
+                ["acquedottoAcconto", "Acquedotto (€)"], ["depFogAcconto", "Depurazione + fognatura (€)"],
+                ["oneriAcconto", "Oneri (€)"], ["ivaAcconto", "IVA (€)"], ["totaleAcconto", "Totale (€)"],
+              ],
+            },
+            {
+              title: "Storno",
+              fields: [
+                ["mcStorno", "Consumo (mc)"], ["acquedottoStorno", "Acquedotto (€)"],
+                ["depFogStorno", "Depurazione + fognatura (€)"], ["oneriStorno", "Oneri (€)"],
+                ["ivaStorno", "IVA (€)"], ["totaleStorno", "Totale (€)"],
+              ],
+            },
+          ] as Array<{ title: string; fields: Array<[keyof ImportedDocumentEditForm, string]> }>).map((group) => (
+            <section key={group.title} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+              <h5 className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{group.title}</h5>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {group.fields.map(([field, label]) => (
+                  <label key={field} className="flex flex-col gap-1 text-xs font-semibold text-slate-600">
+                    {label}
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={importedDocEdit[field]}
+                      onChange={(event) => updateImportedDocumentEdit(field, event.target.value)}
+                      className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
+                    />
+                  </label>
+                ))}
+              </div>
+            </section>
+          ))}
+
+          <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-slate-500">
+              Il documento verrà marcato come corretto manualmente; i dati originali del file restano disponibili nel payload.
+            </p>
+            <button
+              type="button"
+              onClick={saveImportedDocumentManualEdit}
+              disabled={savingImportedDoc}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {savingImportedDoc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {savingImportedDoc ? "Salvataggio..." : "Salva correzioni"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   </div>
 </section>
