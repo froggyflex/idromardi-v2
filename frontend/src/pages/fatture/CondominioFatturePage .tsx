@@ -6169,7 +6169,7 @@ return (
                                        className="p-2"
                                        title="Totale acconto meno acquedotto e depurazione/fognatura: comprende QF, IVA, perequazione ed eventuali altri importi"
                                      >
-                                       Acconto<br></br>Altri
+                                       Acconto<br></br>QF/IVA/Pereq.<br></br>+ altri
                                      </th>
                                      <th className="p-2">Storno<br></br>MC/EUR</th>
                                     <th className="p-2">Arr</th>
@@ -6509,7 +6509,7 @@ return (
                                           </div>
                                         </div>
                                         <div className="mt-1 border-t border-slate-200 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                          Altri acconto {totals.accontoExtra.toFixed(2)}
+                                          QF/IVA/Pereq. + altri {totals.accontoExtra.toFixed(2)}
                                         </div>
                                       </div>
                                     </td>
