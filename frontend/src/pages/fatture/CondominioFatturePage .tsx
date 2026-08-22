@@ -3237,8 +3237,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             parsedDepFogNormale: parsedMainBucketForCalc?.depFog ?? null,
             parsedQuotaFissa: useParsedQuotaFissaForCalc ? parsedQuotaFissaForCalc : null,
             parsedIvaNormale:
-              manualNumber(parsedPayloadObject?.manual_overrides?.main?.iva) ??
-              (isAsisDocumentForCalc ? 0 : null),
+              manualNumber(parsedPayloadObject?.manual_overrides?.main?.iva),
             parsedVarie: Number(varie || 0),
             parsedTotaleLetturaAGiro: Number.isFinite(parsedTotaleLetturaAGiroForCalc)
               ? parsedTotaleLetturaAGiroForCalc
