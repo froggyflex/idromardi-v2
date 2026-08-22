@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   allocateTariffConsumption,
+  buildTariffDateSegments,
   effectiveNucleus,
   getTierSpan,
 } = require("./tariff-allocation");
@@ -93,4 +94,39 @@ test("refuses incomplete tariff configurations", () => {
       }),
     /non coprono 5 mc/
   );
+});
+
+test("splits a billing interval when tariff year changes", () => {
+  const segments = buildTariffDateSegments({
+    startDate: "2025-12-20",
+    endDate: "2026-01-11",
+    versions: [
+      { id: "v2025", anno: 2025, valid_from: "2025-01-01", valid_to: "2025-12-31" },
+      { id: "v2026", anno: 2026, valid_from: "2026-01-01", valid_to: "2026-12-31" },
+    ],
+  });
+
+  assert.deepEqual(
+    segments.map((segment) => ({ id: segment.version.id, days: segment.days })),
+    [
+      { id: "v2025", days: 12 },
+      { id: "v2026", days: 10 },
+    ]
+  );
+  assert.equal(segments.some((segment) => segment.fallback), false);
+});
+
+test("uses the latest configured tariff for uncovered dates", () => {
+  const segments = buildTariffDateSegments({
+    startDate: "2025-12-30",
+    endDate: "2026-01-02",
+    versions: [
+      { id: "v2024", anno: 2024, valid_from: "2024-01-01", valid_to: "2024-12-31" },
+      { id: "v2026", anno: 2026, valid_from: "2026-01-01", valid_to: "2026-12-31" },
+    ],
+  });
+
+  assert.equal(segments[0].version.id, "v2026");
+  assert.equal(segments[0].fallback, true);
+  assert.equal(segments.reduce((sum, segment) => sum + segment.days, 0), 3);
 });

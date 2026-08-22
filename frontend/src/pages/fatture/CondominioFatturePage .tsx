@@ -358,6 +358,7 @@ export default function CondominioFatturePage() {
     const [activeTariffPreview, setActiveTariffPreview] = useState<any | null>(null);
     const [loadingTariffPreview, setLoadingTariffPreview] = useState(false);
     const [activeTariffError, setActiveTariffError] = useState("");
+    const [activeTariffWarning, setActiveTariffWarning] = useState("");
     const [periodSearch, setPeriodSearch] = useState("");
     const [sessionPanelOpen, setSessionPanelOpen] = useState(!fatturaId);
 
@@ -3594,12 +3595,14 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       if (!providerId || !year) {
         setActiveTariffPreview(null);
         setActiveTariffError(fatturaId ? "Provider o anno tariffa non definito per la sessione." : "");
+        setActiveTariffWarning("");
         return;
       }
 
       try {
         setLoadingTariffPreview(true);
         setActiveTariffError("");
+        setActiveTariffWarning("");
         const periodTariffDate =
           periodoAttuale?.data_lettura_operatore ||
           periodoAttuale?.data_lettura_casa_idrica ||
@@ -3613,21 +3616,23 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             : new Date(`${year}-07-01T00:00:00`);
         const versionsResult = await listVersions(providerId);
         const versions = versionsResult.versions || [];
-        const version =
-          versions.find((item: any) => {
-            const from = item.valid_from ? new Date(`${item.valid_from}T00:00:00`) : null;
-            const to = item.valid_to ? new Date(`${item.valid_to}T00:00:00`) : null;
+          const exactVersion = versions.find((item: any) => {
+            const from = item.valid_from
+              ? new Date(`${String(item.valid_from).slice(0, 10)}T00:00:00`)
+              : null;
+            const to = item.valid_to
+              ? new Date(`${String(item.valid_to).slice(0, 10)}T00:00:00`)
+              : null;
             return from && tariffProbe >= from && (!to || tariffProbe <= to);
-          }) ||
-          versions.find((item: any) => Number(item.anno) === year) ||
-          null;
+          }) || null;
+        const version = exactVersion || versions[0] || null;
 
         if (!version) {
           if (!cancelled) {
             const provider = providers.find((item) => String(item.id) === String(providerId));
             setActiveTariffPreview(null);
             setActiveTariffError(
-              `Nessuna tariffa ${provider?.codice || provider?.nome || "provider"} configurata per il ${year}.`
+              `Nessuna tariffa ${provider?.codice || provider?.nome || "provider"} configurata.`
             );
           }
           return;
@@ -3658,12 +3663,19 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             version: full.version,
             category,
             provider,
+            fallback: !exactVersion,
           });
           setActiveTariffError("");
+          setActiveTariffWarning(
+            exactVersion
+              ? ""
+              : `Nessuna tariffa valida al ${tariffProbe.toLocaleDateString("it-IT")}: verra usata la versione piu recente (${full.version?.anno || "anno non indicato"}).`
+          );
         }
       } catch (err: any) {
         if (!cancelled) {
           setActiveTariffPreview(null);
+          setActiveTariffWarning("");
           setActiveTariffError(
             err?.response?.data?.error || err?.message || "Impossibile verificare la tariffa applicata."
           );
@@ -4356,6 +4368,9 @@ const isActiveTariffReady = Boolean(
     Array.isArray(activeTariffPreview.category.scaglioni) &&
     activeTariffPreview.category.scaglioni.length > 0
 );
+const appliedTariffPeriods = Array.isArray(persistedAppliedTariff?.periods)
+  ? persistedAppliedTariff.periods
+  : [];
 const activeSessionSummary = sessions.find(
   (item: any) => String(item?.id || "") === String(fatturaId || "")
 );
@@ -4504,8 +4519,28 @@ return (
                   <AlertTriangle size={13} />
                   {activeTariffError}
                 </span>
-              ) : activeTariffScaglioni.length > 0 ? (
-                activeTariffScaglioni.slice(0, 5).map((scaglione: any) => (
+              ) : (
+                <>
+                {activeTariffWarning && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
+                    <AlertTriangle size={13} />
+                    {activeTariffWarning}
+                  </span>
+                )}
+                {appliedTariffPeriods.length > 1 && appliedTariffPeriods.map((period: any) => (
+                  <span
+                    key={`${period.start}-${period.version?.id}`}
+                    className={`rounded-full border px-2 py-0.5 font-semibold ${
+                      period.fallback
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                    }`}
+                    title={period.fallback ? "Tariffa piu recente usata come fallback" : "Tariffa valida nel periodo"}
+                  >
+                    {period.start} / {period.end_exclusive}: {period.version?.anno}
+                  </span>
+                ))}
+                {activeTariffScaglioni.slice(0, 5).map((scaglione: any) => (
                   <span
                     key={scaglione.id || `${scaglione.ordine}-${scaglione.nome}`}
                     className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700"
@@ -4514,9 +4549,8 @@ return (
                     {scaglione.nome || `S${scaglione.ordine}`}: {formatScaglioneRange(scaglione)} mc
                     {" · "}€ {formatTariffNumber(scaglione.prezzo_acquedotto, 4)}
                   </span>
-                ))
-              ) : (
-                <span className="text-slate-400">Scaglioni non disponibili</span>
+                ))}
+                </>
               )}
             </div>
           </div>

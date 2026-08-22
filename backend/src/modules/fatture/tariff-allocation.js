@@ -50,6 +50,84 @@ function getTierSpan(ordered, index) {
   return Math.max(0, span);
 }
 
+function toIsoDate(value) {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+}
+
+function parseUtcDate(value) {
+  const iso = toIsoDate(value);
+  return iso ? new Date(`${iso}T00:00:00.000Z`) : null;
+}
+
+function addUtcDays(value, days) {
+  const date = value instanceof Date ? new Date(value.getTime()) : parseUtcDate(value);
+  if (!date || Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date;
+}
+
+function dateApplies(version, isoDate) {
+  const from = toIsoDate(version.valid_from);
+  const to = toIsoDate(version.valid_to);
+  return (!from || from <= isoDate) && (!to || to >= isoDate);
+}
+
+function buildTariffDateSegments({ startDate, endDate, versions }) {
+  const start = parseUtcDate(startDate);
+  const end = parseUtcDate(endDate);
+  const orderedVersions = Array.isArray(versions)
+    ? [...versions].sort((a, b) =>
+        String(toIsoDate(b.valid_from) || "").localeCompare(
+          String(toIsoDate(a.valid_from) || "")
+        )
+      )
+    : [];
+
+  if (!start || !end || end <= start) {
+    throw new Error("Intervallo date non valido per la ripartizione tariffaria");
+  }
+  if (!orderedVersions.length) {
+    throw new Error("Nessuna versione tariffaria configurata per il provider");
+  }
+
+  const segments = [];
+  for (let cursor = new Date(start.getTime()); cursor < end; cursor = addUtcDays(cursor, 1)) {
+    const isoDate = cursor.toISOString().slice(0, 10);
+    const exact = orderedVersions.find((version) => dateApplies(version, isoDate));
+    const version = exact || orderedVersions[0];
+    const fallback = !exact;
+    const year = cursor.getUTCFullYear();
+    const previous = segments[segments.length - 1];
+
+    if (
+      previous &&
+      String(previous.version.id) === String(version.id) &&
+      previous.fallback === fallback &&
+      previous.year === year
+    ) {
+      previous.days += 1;
+      previous.end_exclusive = addUtcDays(cursor, 1).toISOString().slice(0, 10);
+      continue;
+    }
+
+    segments.push({
+      version,
+      fallback,
+      year,
+      days: 1,
+      start: isoDate,
+      end_exclusive: addUtcDays(cursor, 1).toISOString().slice(0, 10),
+    });
+  }
+
+  return segments;
+}
+
 function allocateTariffConsumption({
   consumption,
   tiers,
@@ -139,5 +217,8 @@ module.exports = {
   DEFAULT_NUCLEUS_SIZE,
   allocateTariffConsumption,
   effectiveNucleus,
+  buildTariffDateSegments,
+  addUtcDays,
   getTierSpan,
+  toIsoDate,
 };

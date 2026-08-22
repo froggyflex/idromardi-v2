@@ -12,8 +12,11 @@ const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
 const {
+  addUtcDays,
   allocateTariffConsumption,
+  buildTariffDateSegments,
   effectiveNucleus,
+  toIsoDate,
 } = require("./tariff-allocation");
 const {
   getGeneratedDocumentById,
@@ -2425,8 +2428,35 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
   });
 }
 
+function resolveBillingDateRange(periodoPrecedente, periodoAttuale, fallbackDays = 0) {
+  const currentYear = Number(periodoAttuale?.period_year || new Date().getFullYear());
+  const currentMonth = Number(periodoAttuale?.period_month || 1);
+  const monthEnd = new Date(Date.UTC(currentYear, currentMonth, 0))
+    .toISOString()
+    .slice(0, 10);
+  const endDate = toIsoDate(
+    periodoAttuale?.data_lettura_operatore ||
+      periodoAttuale?.data_lettura_casa_idrica ||
+      monthEnd
+  );
+  let startDate = toIsoDate(
+    periodoPrecedente?.data_lettura_operatore ||
+      periodoPrecedente?.data_lettura_casa_idrica
+  );
+
+  if (!startDate || !endDate || startDate >= endDate) {
+    const safeDays = Math.max(1, n2(fallbackDays));
+    startDate = addUtcDays(endDate, -safeDays)?.toISOString().slice(0, 10) || null;
+  }
+  if (!startDate || !endDate || startDate >= endDate) {
+    throw new Error("Date lettura non valide per la selezione delle tariffe");
+  }
+
+  return { startDate, endDate };
+}
+
 /* ---------------- Load tariffs for the session provider ---------------- */
-async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice, referenceDate = null }) {
+async function loadProviderTariffVersions(conn, providerId) {
   assertUUID(providerId, "providerId tariffa");
 
   const [verRows] = await conn.query(
@@ -2438,32 +2468,24 @@ async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice, re
     FROM casa_idrica_tariffe t
     JOIN casa_idrica p ON p.id = t.id_casa_idrica
     WHERE t.id_casa_idrica = ?
-      AND t.anno = ?
-      AND (
-        ? IS NULL
-        OR (
-          t.valid_from <= ?
-          AND (t.valid_to IS NULL OR t.valid_to >= ?)
-        )
-      )
     ORDER BY t.valid_from DESC
-    LIMIT 1
     `,
-    [providerId, anno, referenceDate, referenceDate, referenceDate]
+    [providerId]
   );
-  if (verRows.length === 0) {
+  if (!verRows.length) {
     const [[provider]] = await conn.query(
       `SELECT codice, nome FROM casa_idrica WHERE id = ? LIMIT 1`,
       [providerId]
     );
     const providerLabel = provider?.codice || provider?.nome || providerId;
-    throw new Error(
-      `Nessuna tariffa ${providerLabel} configurata per ${referenceDate || `l'anno ${anno}`}`
-    );
+    throw new Error(`Nessuna tariffa configurata per ${providerLabel}`);
   }
-  const version = verRows[0];
+  return verRows;
+}
 
-  
+async function loadTariffVersionDetails(conn, { version, providerId, categoriaCodice }) {
+  const anno = Number(version.anno);
+
   const [catRows] = await conn.query(
     `
     SELECT *
@@ -2543,6 +2565,214 @@ async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice, re
     prezzoFognatura,
     prezzoDepurazione,
     qfAnnua,
+  };
+}
+
+async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice, referenceDate = null }) {
+  const versions = await loadProviderTariffVersions(conn, providerId);
+  let version = null;
+  let fallback = false;
+
+  if (referenceDate) {
+    const nextDate = addUtcDays(referenceDate, 1);
+    const segment = buildTariffDateSegments({
+      startDate: referenceDate,
+      endDate: nextDate,
+      versions,
+    })[0];
+    version = segment.version;
+    fallback = segment.fallback;
+  } else {
+    version = versions.find((item) => Number(item.anno) === Number(anno)) || versions[0];
+    fallback = Number(version.anno) !== Number(anno);
+  }
+
+  const tariff = await loadTariffVersionDetails(conn, {
+    version,
+    providerId,
+    categoriaCodice,
+  });
+  return {
+    ...tariff,
+    fallback,
+    requestedDate: toIsoDate(referenceDate),
+  };
+}
+
+async function loadTariffTimeline(conn, {
+  providerId,
+  categoriaCodice,
+  startDate,
+  endDate,
+}) {
+  const versions = await loadProviderTariffVersions(conn, providerId);
+  const rawSegments = buildTariffDateSegments({ startDate, endDate, versions });
+  const detailsByVersion = new Map();
+  const segments = [];
+
+  for (const segment of rawSegments) {
+    const cacheKey = `${segment.version.id}:${categoriaCodice}`;
+    if (!detailsByVersion.has(cacheKey)) {
+      detailsByVersion.set(
+        cacheKey,
+        await loadTariffVersionDetails(conn, {
+          version: segment.version,
+          providerId,
+          categoriaCodice,
+        })
+      );
+    }
+    segments.push({
+      ...segment,
+      tariff: detailsByVersion.get(cacheKey),
+    });
+  }
+
+  return segments;
+}
+
+function calculateTariffPeriodAmounts({
+  consumption,
+  segments,
+  nucleus,
+  units = 1,
+  qfUnits = units,
+  qfDays = null,
+  parsedQF = null,
+  varie = 0,
+  aliquotaIva = 0.10,
+  key = null,
+}) {
+  const totalDays = segments.reduce((sum, segment) => sum + n2(segment.days), 0);
+  if (!segments.length || totalDays <= 0) {
+    throw new Error("Periodo tariffario non disponibile per il calcolo");
+  }
+
+  const totalConsumption = Math.max(0, n2(consumption));
+  const details = [];
+  let assignedMc = 0;
+  let impAcquedotto = 0;
+  let impFognatura = 0;
+  let impDepurazione = 0;
+  let calculatedQf = 0;
+
+  segments.forEach((segment, index) => {
+    const segmentMc = index === segments.length - 1
+      ? round3(Math.max(0, totalConsumption - assignedMc))
+      : round3((totalConsumption * n2(segment.days)) / totalDays);
+    assignedMc = round3(assignedMc + segmentMc);
+    const allocation = allocateTariffConsumption({
+      consumption: segmentMc,
+      tiers: segment.tariff.scaglioni,
+      nucleus,
+      units,
+      referenceDays: segment.days,
+      yearDays: yearDaysCount(segment.year),
+      key,
+    });
+    const fog = round2(segmentMc * n2(segment.tariff.prezzoFognatura));
+    const dep = round2(segmentMc * n2(segment.tariff.prezzoDepurazione));
+    const qfScale = qfDays === null ? 1 : Math.max(0, n2(qfDays)) / totalDays;
+    const qf = round2(
+      (n2(segment.tariff.qfAnnua) / yearDaysCount(segment.year)) *
+        Math.max(1, n2(qfUnits)) *
+        n2(segment.days) *
+        qfScale
+    );
+
+    impAcquedotto = round2(impAcquedotto + allocation.total);
+    impFognatura = round2(impFognatura + fog);
+    impDepurazione = round2(impDepurazione + dep);
+    calculatedQf = round2(calculatedQf + qf);
+    details.push({
+      start: segment.start,
+      end_exclusive: segment.end_exclusive,
+      days: segment.days,
+      year: segment.year,
+      fallback: segment.fallback,
+      consumption_mc: segmentMc,
+      provider: segment.tariff.provider,
+      version: segment.tariff.tariffVersion,
+      category: segment.tariff.categoria,
+      acquedotto: allocation,
+      fognatura: fog,
+      depurazione: dep,
+      quota_fissa: qf,
+    });
+  });
+
+  const hasParsedQF =
+    parsedQF !== null &&
+    parsedQF !== undefined &&
+    parsedQF !== "" &&
+    Number.isFinite(Number(parsedQF));
+  const qfTot = hasParsedQF ? round2(parsedQF) : calculatedQf;
+  const depFog = round2(impFognatura + impDepurazione);
+  const iva = round2((impAcquedotto + depFog + qfTot) * n2(aliquotaIva));
+
+  return {
+    impAcquedotto,
+    impFognatura,
+    impDepurazione,
+    depFog,
+    qfTot,
+    iva,
+    totale: round2(impAcquedotto + depFog + qfTot + iva + n2(varie)),
+    dettaglioAcquedotto: details.flatMap((item) => item.acquedotto.tiers),
+    tariffPeriods: details,
+    fallbackUsed: details.some((item) => item.fallback),
+  };
+}
+
+function buildAppliedTariffSnapshot(segments, periodStart, periodEnd) {
+  const lastSegment = segments[segments.length - 1];
+  const primaryTariff = lastSegment?.tariff;
+  if (!primaryTariff) return null;
+
+  return {
+    provider: primaryTariff.provider,
+    version: {
+      id: primaryTariff.tariffVersion.id,
+      anno: primaryTariff.tariffVersion.anno,
+      valid_from: primaryTariff.tariffVersion.valid_from,
+      valid_to: primaryTariff.tariffVersion.valid_to,
+    },
+    reference_date: periodEnd,
+    period_start: periodStart,
+    period_end: periodEnd,
+    fallback_used: segments.some((segment) => segment.fallback),
+    category: {
+      id: primaryTariff.categoria.id,
+      codice: primaryTariff.categoria.codice,
+      nome: primaryTariff.categoria.nome,
+    },
+    scaglioni: primaryTariff.scaglioni,
+    quote_fisse: primaryTariff.quoteFisse,
+    componenti_mc: primaryTariff.componentiMc,
+    qf_annua: primaryTariff.qfAnnua,
+    periods: segments.map((segment) => ({
+      start: segment.start,
+      end_exclusive: segment.end_exclusive,
+      days: segment.days,
+      year: segment.year,
+      fallback: segment.fallback,
+      provider: segment.tariff.provider,
+      version: {
+        id: segment.tariff.tariffVersion.id,
+        anno: segment.tariff.tariffVersion.anno,
+        valid_from: segment.tariff.tariffVersion.valid_from,
+        valid_to: segment.tariff.tariffVersion.valid_to,
+      },
+      category: {
+        id: segment.tariff.categoria.id,
+        codice: segment.tariff.categoria.codice,
+        nome: segment.tariff.categoria.nome,
+      },
+      scaglioni: segment.tariff.scaglioni,
+      quote_fisse: segment.tariff.quoteFisse,
+      componenti_mc: segment.tariff.componentiMc,
+      qf_annua: segment.tariff.qfAnnua,
+    })),
   };
 }
 
@@ -3391,13 +3621,16 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     if (!pa || !pp) throw new Error("Periodi non trovati");
 
     const anno = Number(annoAtt) || Number(pa.period_year);
-    const yd = yearDaysCount(anno);
     const y = Number(pa.period_year || new Date().getFullYear());
     const m = Number(pa.period_month || 1);
-    const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
-    const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-    const tariffReferenceDate =
-      pa.data_lettura_operatore || pa.data_lettura_casa_idrica || end;
+    const monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    const billingRange = resolveBillingDateRange(
+      pp,
+      pa,
+      session.giorni_consumi || session.giorni_interni
+    );
+    const start = billingRange.startDate;
+    const end = billingRange.endDate || monthEnd;
 
     // -----------------------------
     // GENERAL CONSUMPTION
@@ -3437,19 +3670,12 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
 
     const numNuae = condo?.nuae ? Math.max(1, n2(condo.nuae)) : 1;
 
-    // -----------------------------
-    // LOAD TARIFFE
-    // -----------------------------
-    const tariff = await loadTariffeProvider(conn, {
+    const baseTariffSegments = await loadTariffTimeline(conn, {
       providerId: session.id_casa_idrica,
-      anno,
       categoriaCodice: "RESIDENTE",
-      referenceDate: tariffReferenceDate,
+      startDate: billingRange.startDate,
+      endDate: billingRange.endDate,
     });
-
-    const imposteG = [...(tariff.scaglioni || [])].sort(
-      (a, b) => n2(a.ordine) - n2(b.ordine)
-    );
 
     // -----------------------------
     // MC ACCONTO CALCULATION
@@ -3474,38 +3700,43 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     // -----------------------------
     // BASE CALCULATION (NO ACCONTO)
     // -----------------------------
-    const base = calcolaGeneraleLegacy({
-      consumo: consumoNorm,
-      totNuc,
-      numNuae,
-      giorniInterni: session.giorni_consumi,
-      yearDays: yd,
-      imposteG,
-      prezzoFognatura: tariff.prezzoFognatura,
-      prezzoDepurazione: tariff.prezzoDepurazione,
-      qfAnnua: tariff.qfAnnua,
-      giorniQF: session.giorni_qf,
-      varie: session.varie, 
-      parsedQF: parsedQF,
-
+    const base = calculateTariffPeriodAmounts({
+      consumption: consumoNorm,
+      segments: baseTariffSegments,
+      nucleus: Math.max(1, totNuc),
+      units: 1,
+      qfUnits: numNuae,
+      qfDays: session.giorni_qf,
+      varie: session.varie,
+      parsedQF,
+      key: "CONTATORE_GENERALE",
     });
 
     // -----------------------------
     // WITH ACCONTO
     // -----------------------------
-    const withAcc = calcolaGeneraleLegacy({
-      consumo: consumoTot,
-      totNuc,
-      numNuae,
-      giorniInterni: n2(session.giorni_consumi) + n2(session.giorni_acconto),
-      yearDays: yd,
-      imposteG,
-      prezzoFognatura: tariff.prezzoFognatura,
-      prezzoDepurazione: tariff.prezzoDepurazione,
-      qfAnnua: tariff.qfAnnua,
-      giorniQF: session.giorni_qf,
+    const extendedEndDate = addUtcDays(
+      billingRange.endDate,
+      Math.max(0, n2(session.giorni_acconto))
+    ).toISOString().slice(0, 10);
+    const withAccTariffSegments = n2(session.giorni_acconto) > 0
+      ? await loadTariffTimeline(conn, {
+          providerId: session.id_casa_idrica,
+          categoriaCodice: "RESIDENTE",
+          startDate: billingRange.startDate,
+          endDate: extendedEndDate,
+        })
+      : baseTariffSegments;
+    const withAcc = calculateTariffPeriodAmounts({
+      consumption: consumoTot,
+      segments: withAccTariffSegments,
+      nucleus: Math.max(1, totNuc),
+      units: 1,
+      qfUnits: numNuae,
+      qfDays: session.giorni_qf,
       varie: session.varie,
-      parsedQF: parsedQF,
+      parsedQF,
+      key: "CONTATORE_GENERALE_CON_ACCONTO",
     });
 
     // -----------------------------
@@ -3524,17 +3755,18 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     const mcStorno =  n2(session.mcStorno) !== 0 ? n2(session.mcStorno) : 0;
 
    
-    const stornoCalc = calcolaStornoSoloAcquedotto({
-      consumo: mcStorno,
-      totNuc,
-      numNuae,
-      giorniInterni: session.giorni_consumi,
-      yearDays: yd,
-      imposteG,
+    const stornoPeriodCalculation = calculateTariffPeriodAmounts({
+      consumption: Math.abs(mcStorno),
+      segments: baseTariffSegments,
+      nucleus: Math.max(1, totNuc),
+      units: 1,
+      qfUnits: 1,
+      qfDays: 0,
+      parsedQF: 0,
+      aliquotaIva: 0,
+      key: "STORNO_CONTATORE_GENERALE",
     });
-
-   
-    const stornoEuro = eurStorno || round2(stornoCalc.impAcquedottoStorno);
+    const stornoEuro = eurStorno || round2(stornoPeriodCalculation.impAcquedotto);
 
     // final total after storno deduction
     const totalePrimaStorno = round2(n2(withAcc.totale));
@@ -3550,25 +3782,11 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
         consumoTot,
         mcStorno,
         stornoEuro,
-        appliedTariff: {
-          provider: tariff.provider,
-          version: {
-            id: tariff.tariffVersion.id,
-            anno: tariff.tariffVersion.anno,
-            valid_from: tariff.tariffVersion.valid_from,
-            valid_to: tariff.tariffVersion.valid_to,
-          },
-          reference_date: tariffReferenceDate,
-          category: {
-            id: tariff.categoria.id,
-            codice: tariff.categoria.codice,
-            nome: tariff.categoria.nome,
-          },
-          scaglioni: tariff.scaglioni,
-          quote_fisse: tariff.quoteFisse,
-          componenti_mc: tariff.componentiMc,
-          qf_annua: tariff.qfAnnua,
-        },
+        appliedTariff: buildAppliedTariffSnapshot(
+          baseTariffSegments,
+          billingRange.startDate,
+          billingRange.endDate
+        ),
       },
       generale: {
         ...withAcc,
@@ -3580,7 +3798,7 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
       
         mcStorno,
         stornoEuro,
-        stornoDettaglio: stornoCalc.righe,
+        stornoDettaglio: stornoPeriodCalculation.dettaglioAcquedotto,
 
         totalePrimaStorno,
         totale: totaleFinale,
@@ -3747,27 +3965,26 @@ async function calculateInterni(
     }
 
     const anno = Number(annoAtt) || Number(periodoAttuale.period_year);
-    const yearDays = yearDaysCount(anno);
-
     const y = Number(periodoAttuale.period_year);
     const m = Number(periodoAttuale.period_month);
     const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
     const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-    const tariffReferenceDate =
-      periodoAttuale.data_lettura_operatore ||
-      periodoAttuale.data_lettura_casa_idrica ||
-      end;
+    const billingRange = resolveBillingDateRange(
+      periodoPrecedente,
+      periodoAttuale,
+      session.giorni_interni || session.giorni_consumi
+    );
     const tariffCache = new Map();
     const getTariffForCategory = async (categoriaCodice) => {
       const code = upper(categoriaCodice, "RESIDENTE");
       if (!tariffCache.has(code)) {
         tariffCache.set(
           code,
-          await loadTariffeProvider(conn, {
+          await loadTariffTimeline(conn, {
             providerId: session.id_casa_idrica,
-            anno,
             categoriaCodice: code,
-            referenceDate: tariffReferenceDate,
+            startDate: billingRange.startDate,
+            endDate: billingRange.endDate,
           })
         );
       }
@@ -4038,7 +4255,7 @@ async function calculateInterni(
       const consumoTot = consumoNorm;
 
       const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
-      const tariff = await getTariffForCategory(categoriaCodice);
+      const tariffSegments = await getTariffForCategory(categoriaCodice);
 
       const nucleo = effectiveNucleus(first.nucleo);
       const nuaeU = Math.max(1, n2(first.nuae));
@@ -4046,29 +4263,35 @@ async function calculateInterni(
       //qui potremmo aggiornare consumoNorm e assegnare una percentuale (60 con tariffe 2024, 40 con tariffe 2025) da addebitare a cavallo di due periodi.
 
       let impAcq = 0;
+      let impFog = 0;
+      let impDep = 0;
       
       let user_id = ra0?.id_utenza ?? first.id;
 
        
       if (consumoNorm !== null) {
-        const impNorm = allocateAcquedotto({
-          consumo: consumoNorm,
-          scaglioni: tariff.scaglioni,
-          nucleo,
-          nuae: nuaeU,
-          giorniRef: Math.max(1, n2(session.giorni_interni)),
-          yearDays,
-          key:user_id
-
+        const impNorm = calculateTariffPeriodAmounts({
+          consumption: consumoNorm,
+          segments: tariffSegments,
+          nucleus: nucleo,
+          units: nuaeU,
+          qfUnits: 1,
+          qfDays: 0,
+          parsedQF: 0,
+          aliquotaIva: 0,
+          key: user_id,
         });
   
-        impAcq = round2(impNorm.total);
-        dettaglioConsumiAcquedotto.push(impNorm.tiers);
+        impAcq = round2(impNorm.impAcquedotto);
+        impFog = round2(impNorm.impFognatura);
+        impDep = round2(impNorm.impDepurazione);
+        dettaglioConsumiAcquedotto.push(impNorm.dettaglioAcquedotto);
       }
  
-       
-      const impFog = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoFognatura));
-      const impDep = consumoTot === null ? 0 : round2(consumoTot * n2(tariff.prezzoDepurazione));
+      if (consumoTot === null) {
+        impFog = 0;
+        impDep = 0;
+      }
       const impQf = flatTipo === "SPECIAL" ? 0 : round2(qfPerNuae * nuaeU);
 
       const meterCount = Math.max(1, group.length);
@@ -5184,6 +5407,25 @@ exports.calculateSession = async function ({
       parsedAccontoTotale,
       calculationContext?.parsedIvaNormale ?? null
     );
+
+    if (generaleResult.meta.appliedTariff?.fallback_used) {
+      const fallbackPeriods = (generaleResult.meta.appliedTariff.periods || [])
+        .filter((period) => period.fallback)
+        .map(
+          (period) =>
+            `${period.start} - ${period.end_exclusive} (${period.version.anno})`
+        );
+      interniTotals.calculationWarnings = [
+        ...(interniTotals.calculationWarnings || []),
+        {
+          code: "TARIFF_LATEST_FALLBACK",
+          level: "warning",
+          message:
+            `Tariffa valida non presente per una parte del periodo. ` +
+            `E stata applicata la versione piu recente disponibile: ${fallbackPeriods.join(", ")}.`,
+        },
+      ];
+    }
 
     if (calculationContextJson) {
       calculationContextJson = JSON.stringify({
