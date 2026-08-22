@@ -2474,37 +2474,33 @@ function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearD
   };
 }
 
-/* ---------------- Load Tariffe for ABC ---------------- */
-/**
- * For now we assume provider ABC has:
- * - categories: RESIDENTE / NON_RESIDENTE
- * - scaglioni per category
- * - componenti_mc: FOGNATURA, DEPURAZIONE per category
- * - quote_fisse: QF (annual amount) per category (or global)
- *
- * We'll read from your existing tariff tables:
- * - casa_idrica_tariffe (version)
- * - casa_idrica_tariff_categorie
- * - casa_idrica_tariff_scaglioni
- * - casa_idrica_tariff_componenti_mc
- * - casa_idrica_tariff_quote_fisse
- */
-async function loadTariffeABC(conn, { anno, categoriaCodice, tfCode }) {
-  // find latest tariff version for ABC that matches anno
-  // If you already select version elsewhere, change this to use that id.
+/* ---------------- Load tariffs for the session provider ---------------- */
+async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice }) {
+  assertUUID(providerId, "providerId tariffa");
+
   const [verRows] = await conn.query(
     `
-    SELECT t.*
+    SELECT
+      t.*,
+      p.codice AS provider_codice,
+      p.nome AS provider_nome
     FROM casa_idrica_tariffe t
     JOIN casa_idrica p ON p.id = t.id_casa_idrica
-    WHERE p.codice = 'ABC'
+    WHERE t.id_casa_idrica = ?
       AND t.anno = ?
     ORDER BY t.valid_from DESC
     LIMIT 1
     `,
-    [anno]
+    [providerId, anno]
   );
-  if (verRows.length === 0) throw new Error(`No ABC tariff version for anno ${anno}`);
+  if (verRows.length === 0) {
+    const [[provider]] = await conn.query(
+      `SELECT codice, nome FROM casa_idrica WHERE id = ? LIMIT 1`,
+      [providerId]
+    );
+    const providerLabel = provider?.codice || provider?.nome || providerId;
+    throw new Error(`Nessuna tariffa ${providerLabel} configurata per l'anno ${anno}`);
+  }
   const version = verRows[0];
 
   
@@ -2517,7 +2513,11 @@ async function loadTariffeABC(conn, { anno, categoriaCodice, tfCode }) {
     `,
     [version.id, categoriaCodice]
   );
-  if (catRows.length === 0) throw new Error(`No category ${categoriaCodice} for ABC anno ${anno}`);
+  if (catRows.length === 0) {
+    throw new Error(
+      `Categoria ${categoriaCodice} non configurata per ${version.provider_codice || version.provider_nome} ${anno}`
+    );
+  }
   const categoria = catRows[0];
 
   const [scaglioni] = await conn.query(
@@ -2551,19 +2551,29 @@ async function loadTariffeABC(conn, { anno, categoriaCodice, tfCode }) {
     `
     SELECT *
     FROM casa_idrica_tariff_quote_fisse
-    WHERE id_categoria = ? AND codice = 'QF'
-    LIMIT 1
+    WHERE id_categoria = ?
+    ORDER BY codice ASC
     `,
     [categoria.id]
   );
 
-  // interpret QF importo as annual amount (legacy behavior)
-  const qfAnnua = qfRows.length ? n2(qfRows[0].importo) : 0;
+  // ABC has one QF row; providers such as ASIS can configure multiple fixed
+  // fee components. Their sum is the provider's annual fixed-fee total.
+  const qfAnnua = round2(
+    qfRows.reduce((sum, row) => sum + n2(row.importo), 0)
+  );
   
   return {
     tariffVersion: version,
+    provider: {
+      id: providerId,
+      codice: version.provider_codice,
+      nome: version.provider_nome,
+    },
     categoria,
     scaglioni,
+    quoteFisse: qfRows,
+    componentiMc: comp,
     prezzoFognatura,
     prezzoDepurazione,
     qfAnnua,
@@ -2619,7 +2629,24 @@ exports.createOrLoadSession = async function ({
     );
 
     if (existing.length > 0) {
-      return { session: existing[0] };
+      const existingSession = existing[0];
+      if (String(existingSession.id_casa_idrica) !== String(idCasaIdrica)) {
+        if (String(existingSession.stato || "").toUpperCase() !== "BOZZA") {
+          const error = new Error(
+            "Esiste già una fatturazione calcolata per questi periodi con un provider diverso"
+          );
+          error.statusCode = 409;
+          throw error;
+        }
+
+        await conn.query(
+          `UPDATE fatture_sessioni SET id_casa_idrica = ? WHERE id = ?`,
+          [idCasaIdrica, existingSession.id]
+        );
+        existingSession.id_casa_idrica = idCasaIdrica;
+      }
+
+      return { session: existingSession };
     }
 
     const id = uuid();
@@ -3495,7 +3522,8 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     // -----------------------------
     // LOAD TARIFFE
     // -----------------------------
-    const tariff = await loadTariffeABC(conn, {
+    const tariff = await loadTariffeProvider(conn, {
+      providerId: session.id_casa_idrica,
       anno,
       categoriaCodice: "RESIDENTE",
     });
@@ -4054,7 +4082,11 @@ async function calculateInterni(
       const consumoTot = consumoNorm;
 
       const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
-      const tariff = await loadTariffeABC(conn, { anno, categoriaCodice, tfCode });
+      const tariff = await loadTariffeProvider(conn, {
+        providerId: session.id_casa_idrica,
+        anno,
+        categoriaCodice,
+      });
 
       const nucleo = Math.max(1, n2(first.nucleo));
       const nuaeU = Math.max(1, n2(first.nuae));

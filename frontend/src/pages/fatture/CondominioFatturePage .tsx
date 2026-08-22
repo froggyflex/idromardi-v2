@@ -4280,11 +4280,12 @@ const activeTariffScaglioni = Array.isArray(activeTariffCategory?.scaglioni)
       (a: any, b: any) => Number(a?.ordine || 0) - Number(b?.ordine || 0)
     )
   : [];
-const activeTariffQf = Array.isArray(activeTariffCategory?.quote_fisse)
-  ? activeTariffCategory.quote_fisse.find(
-      (item: any) => String(item?.codice || "").toUpperCase() === "QF"
-    ) || activeTariffCategory.quote_fisse[0]
-  : null;
+const activeTariffQfTotal = Array.isArray(activeTariffCategory?.quote_fisse)
+  ? activeTariffCategory.quote_fisse.reduce(
+      (sum: number, item: any) => sum + Number(item?.importo || 0),
+      0
+    )
+  : 0;
 const activeSessionSummary = sessions.find(
   (item: any) => String(item?.id || "") === String(fatturaId || "")
 );
@@ -4417,7 +4418,7 @@ return (
                 {activeTariffCategory?.codice || "Categoria -"}
               </span>
               <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
-                QF € {formatTariffNumber(activeTariffQf?.importo, 2)}
+                QF totale € {formatTariffNumber(activeTariffQfTotal, 2)}
               </span>
             </div>
 
