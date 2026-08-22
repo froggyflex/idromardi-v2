@@ -357,6 +357,7 @@ export default function CondominioFatturePage() {
     const [pdfSearch, setPdfSearch] = useState("");
     const [activeTariffPreview, setActiveTariffPreview] = useState<any | null>(null);
     const [loadingTariffPreview, setLoadingTariffPreview] = useState(false);
+    const [activeTariffError, setActiveTariffError] = useState("");
     const [periodSearch, setPeriodSearch] = useState("");
     const [sessionPanelOpen, setSessionPanelOpen] = useState(!fatturaId);
 
@@ -729,7 +730,7 @@ export default function CondominioFatturePage() {
     }
 
     const configuredCode = String(provider?.codice || "").trim().toUpperCase();
-    return configuredCode && configuredCode.length <= 12 ? configuredCode : "ABC";
+    return configuredCode && configuredCode.length <= 12 ? configuredCode : "N/D";
   }
 
   function isAsisBillingDocument(
@@ -3592,25 +3593,43 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
       if (!providerId || !year) {
         setActiveTariffPreview(null);
+        setActiveTariffError(fatturaId ? "Provider o anno tariffa non definito per la sessione." : "");
         return;
       }
 
       try {
         setLoadingTariffPreview(true);
+        setActiveTariffError("");
+        const periodTariffDate =
+          periodoAttuale?.data_lettura_operatore ||
+          periodoAttuale?.data_lettura_casa_idrica ||
+          null;
+        const parsedPeriodTariffDate = periodTariffDate
+          ? new Date(String(periodTariffDate).slice(0, 10) + "T00:00:00")
+          : null;
+        const tariffProbe =
+          parsedPeriodTariffDate && !Number.isNaN(parsedPeriodTariffDate.getTime())
+            ? parsedPeriodTariffDate
+            : new Date(`${year}-07-01T00:00:00`);
         const versionsResult = await listVersions(providerId);
         const versions = versionsResult.versions || [];
         const version =
-          versions.find((item: any) => Number(item.anno) === year) ||
           versions.find((item: any) => {
             const from = item.valid_from ? new Date(`${item.valid_from}T00:00:00`) : null;
             const to = item.valid_to ? new Date(`${item.valid_to}T00:00:00`) : null;
-            const probe = new Date(`${year}-07-01T00:00:00`);
-            return from && probe >= from && (!to || probe <= to);
+            return from && tariffProbe >= from && (!to || tariffProbe <= to);
           }) ||
+          versions.find((item: any) => Number(item.anno) === year) ||
           null;
 
         if (!version) {
-          if (!cancelled) setActiveTariffPreview(null);
+          if (!cancelled) {
+            const provider = providers.find((item) => String(item.id) === String(providerId));
+            setActiveTariffPreview(null);
+            setActiveTariffError(
+              `Nessuna tariffa ${provider?.codice || provider?.nome || "provider"} configurata per il ${year}.`
+            );
+          }
           return;
         }
 
@@ -3621,14 +3640,34 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           categories[0] ||
           null;
 
+        const provider = providers.find((item) => String(item.id) === String(providerId)) || null;
+        const scaglioni = Array.isArray(category?.scaglioni) ? category.scaglioni : [];
+
+        if (!category || scaglioni.length === 0) {
+          if (!cancelled) {
+            setActiveTariffPreview(null);
+            setActiveTariffError(
+              `Scaglioni acquedotto mancanti per ${provider?.codice || provider?.nome || "il provider selezionato"}, anno ${year}.`
+            );
+          }
+          return;
+        }
+
         if (!cancelled) {
           setActiveTariffPreview({
             version: full.version,
             category,
+            provider,
           });
+          setActiveTariffError("");
         }
-      } catch (err) {
-        if (!cancelled) setActiveTariffPreview(null);
+      } catch (err: any) {
+        if (!cancelled) {
+          setActiveTariffPreview(null);
+          setActiveTariffError(
+            err?.response?.data?.error || err?.message || "Impossibile verificare la tariffa applicata."
+          );
+        }
       } finally {
         if (!cancelled) setLoadingTariffPreview(false);
       }
@@ -3639,7 +3678,16 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     return () => {
       cancelled = true;
     };
-  }, [providerId, annoTariffa, importedDocYear, periodoAttuale?.period_year]);
+  }, [
+    providerId,
+    annoTariffa,
+    importedDocYear,
+    periodoAttuale?.period_year,
+    periodoAttuale?.data_lettura_operatore,
+    periodoAttuale?.data_lettura_casa_idrica,
+    providers,
+    fatturaId,
+  ]);
 
 
  
@@ -4274,7 +4322,21 @@ const totalAudit = useMemo(() => {
   totaleDocumentoConOneri,
 ]);
 
-const activeTariffCategory = activeTariffPreview?.category || null;
+const persistedAppliedTariff = detail?.appliedTariff || null;
+const displayedTariffPreview = activeTariffPreview ||
+  (persistedAppliedTariff
+    ? {
+        provider: persistedAppliedTariff.provider,
+        version: persistedAppliedTariff.version,
+        category: {
+          ...persistedAppliedTariff.category,
+          scaglioni: persistedAppliedTariff.scaglioni || [],
+          quote_fisse: persistedAppliedTariff.quote_fisse || [],
+          componenti_mc: persistedAppliedTariff.componenti_mc || [],
+        },
+      }
+    : null);
+const activeTariffCategory = displayedTariffPreview?.category || null;
 const activeTariffScaglioni = Array.isArray(activeTariffCategory?.scaglioni)
   ? [...activeTariffCategory.scaglioni].sort(
       (a: any, b: any) => Number(a?.ordine || 0) - Number(b?.ordine || 0)
@@ -4286,6 +4348,14 @@ const activeTariffQfTotal = Array.isArray(activeTariffCategory?.quote_fisse)
       0
     )
   : 0;
+const activeTariffProvider = displayedTariffPreview?.provider ||
+  providers.find((item) => String(item.id) === String(providerId)) ||
+  null;
+const isActiveTariffReady = Boolean(
+  activeTariffPreview?.category &&
+    Array.isArray(activeTariffPreview.category.scaglioni) &&
+    activeTariffPreview.category.scaglioni.length > 0
+);
 const activeSessionSummary = sessions.find(
   (item: any) => String(item?.id || "") === String(fatturaId || "")
 );
@@ -4395,7 +4465,8 @@ return (
 
               <button
                 onClick={() => calcola()}
-                disabled={loadingCalc}
+                disabled={loadingCalc || loadingTariffPreview || !isActiveTariffReady}
+                title={activeTariffError || "Calcola contabilita"}
                 className="inline-flex h-9 items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loadingCalc ? "Calcolo..." : "Calcola Contabilità"}
@@ -4411,8 +4482,11 @@ return (
               <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">
                 {normalizeTfCode(tfCode)}
               </span>
+              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 font-semibold text-cyan-800">
+                {activeTariffProvider?.codice || activeTariffProvider?.nome || "Provider -"}
+              </span>
               <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
-                {activeTariffPreview?.version?.anno || annoTariffa || "-"}
+                {displayedTariffPreview?.version?.anno || annoTariffa || "-"}
               </span>
               <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
                 {activeTariffCategory?.codice || "Categoria -"}
@@ -4425,6 +4499,11 @@ return (
             <div className="flex min-w-max items-center gap-1.5">
               {loadingTariffPreview ? (
                 <span className="text-slate-400">Caricamento tariffa...</span>
+              ) : activeTariffError ? (
+                <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-700">
+                  <AlertTriangle size={13} />
+                  {activeTariffError}
+                </span>
               ) : activeTariffScaglioni.length > 0 ? (
                 activeTariffScaglioni.slice(0, 5).map((scaglione: any) => (
                   <span

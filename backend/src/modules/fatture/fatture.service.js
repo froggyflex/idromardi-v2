@@ -12,6 +12,10 @@ const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
 const {
+  allocateTariffConsumption,
+  effectiveNucleus,
+} = require("./tariff-allocation");
+const {
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
   getPdfFromR2,
@@ -284,6 +288,7 @@ async function getImportedDocumentLinkedToSession(conn, session) {
       SELECT
         id,
         original_filename,
+        provider_id,
         numero_bolletta,
         data_inizio_periodo,
         data_fine_periodo,
@@ -303,6 +308,7 @@ async function getImportedDocumentLinkedToSession(conn, session) {
     SELECT
       id,
       original_filename,
+      provider_id,
       numero_bolletta,
       data_inizio_periodo,
       data_fine_periodo,
@@ -2408,74 +2414,19 @@ function planCreditConsumption(credits, euroLimit, mcLimit, legacyEuroOnly = fal
 }
 
 function allocateAcquedotto({ consumo, scaglioni, nucleo, nuae, giorniRef, yearDays, key}) {
-  let remaining = Math.max(0, n2(consumo));
-  let total = 0;
-
-  const N = Math.max(1, n2(nucleo));
-  const A = Math.max(1, n2(nuae));
-  const days = Math.max(0, n2(giorniRef));
-
-  // Sort by ordine or mc_da_base ascending (defensive)
-  const ordered = [...scaglioni].sort((a, b) => n2(a.ordine) - n2(b.ordine));
-  
-  const tiers = [];
-  for (const s of ordered) {
-    if (remaining <= 0) break;
-
-    const baseFrom = n2(s.mc_da_base);
-    const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
-  
-    // annual span for this tier in base mc/year
-    const spanBase = (baseTo === null) ? Infinity : Math.max(0, baseTo - baseFrom);
-     
-    // multiplier rule
-    const multN = 3; 
- 
-    // prorated tier capacity
-    const capacity =
-      spanBase === Infinity
-        ? Infinity
-        : (spanBase * multN  / yearDays) * days;
-
-    const take = capacity === Infinity ? remaining: Math.min(remaining, capacity);
-    
-    const mcAllocati = round2(take);
-    const price = n2(s.prezzo_acquedotto);
-    const importo = round2(mcAllocati * price);
-
-      
-    total += take * price;
-    remaining -= take;
-
-      tiers.push({
-        ordine: n2(s.ordine),
-        label:
-          s.label ??
-          s.nome ??
-          s.descrizione ??
-          `Scaglione ${s.ordine ?? tiers.length + 1}`,
-        mc_allocati: mcAllocati,
-        price,
-        importo,
-        mc_da_base: baseFrom,
-        mc_a_base: baseTo,
-        key,
-        capacity: capacity === Infinity ? null : round2(capacity),
-      });
-     
-      
-  }
-  
- 
-  return {
-    total: round2(total),
-    tiers,
-    
-  };
+  return allocateTariffConsumption({
+    consumption: consumo,
+    tiers: scaglioni,
+    nucleus: nucleo,
+    units: nuae,
+    referenceDays: giorniRef,
+    yearDays,
+    key,
+  });
 }
 
 /* ---------------- Load tariffs for the session provider ---------------- */
-async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice }) {
+async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice, referenceDate = null }) {
   assertUUID(providerId, "providerId tariffa");
 
   const [verRows] = await conn.query(
@@ -2488,10 +2439,17 @@ async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice }) 
     JOIN casa_idrica p ON p.id = t.id_casa_idrica
     WHERE t.id_casa_idrica = ?
       AND t.anno = ?
+      AND (
+        ? IS NULL
+        OR (
+          t.valid_from <= ?
+          AND (t.valid_to IS NULL OR t.valid_to >= ?)
+        )
+      )
     ORDER BY t.valid_from DESC
     LIMIT 1
     `,
-    [providerId, anno]
+    [providerId, anno, referenceDate, referenceDate, referenceDate]
   );
   if (verRows.length === 0) {
     const [[provider]] = await conn.query(
@@ -2499,7 +2457,9 @@ async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice }) 
       [providerId]
     );
     const providerLabel = provider?.codice || provider?.nome || providerId;
-    throw new Error(`Nessuna tariffa ${providerLabel} configurata per l'anno ${anno}`);
+    throw new Error(
+      `Nessuna tariffa ${providerLabel} configurata per ${referenceDate || `l'anno ${anno}`}`
+    );
   }
   const version = verRows[0];
 
@@ -2529,6 +2489,12 @@ async function loadTariffeProvider(conn, { providerId, anno, categoriaCodice }) 
     `,
     [categoria.id]
   );
+
+  if (!scaglioni.length) {
+    throw new Error(
+      `Nessuno scaglione acquedotto configurato per ${version.provider_codice || version.provider_nome} ${anno}, categoria ${categoriaCodice}`
+    );
+  }
 
   const [comp] = await conn.query(
     `
@@ -2733,7 +2699,6 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     // Month bounds in UTC
     const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
     const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-
     const [utenze] = await conn.query(
       `
       SELECT *
@@ -3240,6 +3205,7 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
     session,
     righe: righeRows, 
     generale: generaleResult?.generale || null,
+    appliedTariff: generaleResult?.meta?.appliedTariff || context.appliedTariff || null,
     calculationWarnings,
     accountingChecks,
      
@@ -3322,45 +3288,23 @@ function calcolaGeneraleLegacy({
   parsedQF = null,
   
 }) {
- 
-  let remaining = Math.max(0, n2(consumo));
-  let total = 0;
- 
   const A = Math.max(1, n2(numNuae));
-  const days = Math.max(0, n2(giorniInterni));
- 
-  for (const s of imposteG) {
-     
-    
-    if (remaining <= 0) break;
-
-    const baseFrom = n2(s.mc_da_base);
-    const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
-   
-    // annual span for this tier in base mc/year
-    const spanBase = (baseTo === null) ? Infinity : Math.max(0, baseTo - baseFrom);
-
-    // multiplier rule
-    const multN = 3; //n2(s.moltiplica_per_nucleo) ? N : 1;
- 
-    // prorated tier capacity
-    const capacity =
-      spanBase === Infinity
-        ? Infinity
-        : (spanBase * multN * A / yearDays) * days;
-
-    const take = capacity === Infinity ? remaining : Math.min(remaining, capacity);
-
-    const price = n2(s.prezzo_acquedotto);
-    total += take * price;
-  
-    remaining -= take;
- 
-  }
+  const acquedottoAllocation = allocateTariffConsumption({
+    consumption: consumo,
+    tiers: imposteG,
+    // totNuc is already the sum of the effective household sizes. Passing it
+    // as one unit applies condominium capacity once, without multiplying NUAe
+    // a second time.
+    nucleus: Math.max(1, n2(totNuc)),
+    units: 1,
+    referenceDays: giorniInterni,
+    yearDays,
+    key: "CONTATORE_GENERALE",
+  });
   const daysQFv = Math.max(0, n2(giorniQF));
   const yd = Math.max(365, n2(yearDays));
  
-  const impAcquedotto = round2(total);
+  const impAcquedotto = round2(acquedottoAllocation.total);
   const impFognatura = consumo * n2(prezzoFognatura);
   const impDepurazione = consumo * n2(prezzoDepurazione);
   const depFog = impFognatura + impDepurazione;
@@ -3390,64 +3334,37 @@ function calcolaGeneraleLegacy({
     qfTot: round2(qfTot),
     iva: round2(iva),
     totale: round2(totale),
+    dettaglioAcquedotto: acquedottoAllocation.tiers,
   };
   
 }
 
 function calcolaStornoSoloAcquedotto({
   consumo,
+  totNuc,
   numNuae,
   giorniInterni,
   yearDays,
   imposteG,
 }) {
-  let remaining = Math.abs(n2(consumo));
-                    
-  let total = 0;
-
-  const A =   n2(numNuae);
-  const days = n2(giorniInterni);
-
-  const righe = [];
-
-  for (const s of imposteG) {
-
-    if (remaining <= 0) break;
-
-    const baseFrom = n2(s.mc_da_base);
-    const baseTo = s.mc_a_base === null ? null : n2(s.mc_a_base);
-
-    const spanBase =
-      baseTo === null ? Infinity : Math.max(0, baseTo - baseFrom);
-
-    // Must match legacy exactly
-    const multN = 3;
-
-    const capacity =
-      spanBase === Infinity
-        ? Infinity
-        : (spanBase * multN * A / yearDays) * days;
-
-    const take =
-      capacity === Infinity ? remaining : Math.min(remaining, capacity);
-
-    const price = n2(s.prezzo_acquedotto);
-    const importo = round2(take * price);
-
-    total += take * price;
-    remaining -= take;
-
-    righe.push({
-      ordine: s.ordine,
-      quantita: (take),
-      tariffa: (price),
-      importo,
-    });
-  }
+  const allocation = allocateTariffConsumption({
+    consumption: Math.abs(n2(consumo)),
+    tiers: imposteG,
+    nucleus: Math.max(1, n2(totNuc)),
+    units: 1,
+    referenceDays: giorniInterni,
+    yearDays,
+    key: "STORNO_CONTATORE_GENERALE",
+  });
 
   return {
-    impAcquedottoStorno: round2(total),
-    righe,
+    impAcquedottoStorno: round2(allocation.total),
+    righe: allocation.tiers.map((tier) => ({
+      ordine: tier.ordine,
+      quantita: tier.mc_allocati,
+      tariffa: tier.price,
+      importo: tier.importo,
+    })),
   };
 }
 
@@ -3456,7 +3373,6 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
 
   const n2 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-  try {
     const [[session]] = await conn.query(
       `SELECT * FROM fatture_sessioni WHERE id = ? LIMIT 1`,
       [sessionId]
@@ -3480,6 +3396,8 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     const m = Number(pa.period_month || 1);
     const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
     const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    const tariffReferenceDate =
+      pa.data_lettura_operatore || pa.data_lettura_casa_idrica || end;
 
     // -----------------------------
     // GENERAL CONSUMPTION
@@ -3508,7 +3426,7 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
     );
 
     const totNuc = utenze.reduce(
-      (s, u) => s + Math.max(1, n2(u.nucleo)),
+      (sum, utenza) => sum + effectiveNucleus(utenza.nucleo),
       0
     );
 
@@ -3526,6 +3444,7 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
       providerId: session.id_casa_idrica,
       anno,
       categoriaCodice: "RESIDENTE",
+      referenceDate: tariffReferenceDate,
     });
 
     const imposteG = [...(tariff.scaglioni || [])].sort(
@@ -3607,6 +3526,7 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
    
     const stornoCalc = calcolaStornoSoloAcquedotto({
       consumo: mcStorno,
+      totNuc,
       numNuae,
       giorniInterni: session.giorni_consumi,
       yearDays: yd,
@@ -3630,6 +3550,25 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
         consumoTot,
         mcStorno,
         stornoEuro,
+        appliedTariff: {
+          provider: tariff.provider,
+          version: {
+            id: tariff.tariffVersion.id,
+            anno: tariff.tariffVersion.anno,
+            valid_from: tariff.tariffVersion.valid_from,
+            valid_to: tariff.tariffVersion.valid_to,
+          },
+          reference_date: tariffReferenceDate,
+          category: {
+            id: tariff.categoria.id,
+            codice: tariff.categoria.codice,
+            nome: tariff.categoria.nome,
+          },
+          scaglioni: tariff.scaglioni,
+          quote_fisse: tariff.quoteFisse,
+          componenti_mc: tariff.componentiMc,
+          qf_annua: tariff.qfAnnua,
+        },
       },
       generale: {
         ...withAcc,
@@ -3648,9 +3587,6 @@ async function calculateGenerale(conn, sessionId, annoAtt = null, annoPrec = nul
         totDaPagare: totaleFinale,
       },
     };
-  } finally {
-    conn.release();
-  }
 }
 async function calculateInterni(
   conn,
@@ -3817,6 +3753,26 @@ async function calculateInterni(
     const m = Number(periodoAttuale.period_month);
     const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
     const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    const tariffReferenceDate =
+      periodoAttuale.data_lettura_operatore ||
+      periodoAttuale.data_lettura_casa_idrica ||
+      end;
+    const tariffCache = new Map();
+    const getTariffForCategory = async (categoriaCodice) => {
+      const code = upper(categoriaCodice, "RESIDENTE");
+      if (!tariffCache.has(code)) {
+        tariffCache.set(
+          code,
+          await loadTariffeProvider(conn, {
+            providerId: session.id_casa_idrica,
+            anno,
+            categoriaCodice: code,
+            referenceDate: tariffReferenceDate,
+          })
+        );
+      }
+      return tariffCache.get(code);
+    };
 
     // ---------- Active utenze ----------
     const [utenzeRaw] = await conn.query(
@@ -4082,13 +4038,9 @@ async function calculateInterni(
       const consumoTot = consumoNorm;
 
       const categoriaCodice = upper(first.categoria_tariffa, "RESIDENTE");
-      const tariff = await loadTariffeProvider(conn, {
-        providerId: session.id_casa_idrica,
-        anno,
-        categoriaCodice,
-      });
+      const tariff = await getTariffForCategory(categoriaCodice);
 
-      const nucleo = Math.max(1, n2(first.nucleo));
+      const nucleo = effectiveNucleus(first.nucleo);
       const nuaeU = Math.max(1, n2(first.nuae));
 
       //qui potremmo aggiornare consumoNorm e assegnare una percentuale (60 con tariffe 2024, 40 con tariffe 2025) da addebitare a cavallo di due periodi.
@@ -5068,7 +5020,10 @@ exports.calculateSession = async function ({
       effectiveTfCode,
     });
     const resolvedImportedDocumentId =
-      importedDocumentId ?? calculationContext?.importedDocumentId ?? null;
+      importedDocumentId ??
+      calculationContext?.importedDocumentId ??
+      session.imported_document_id ??
+      null;
     let resolvedAbcDocumentTotal = n2(
       calculationContext?.totaleDocumento ?? totaleParsedWithOneri
     );
@@ -5113,6 +5068,29 @@ exports.calculateSession = async function ({
         [resolvedImportedDocumentId]
       );
       const importedDoc = docRows[0] ? enrichImportedDocumentWithStoredTxtSummary(docRows[0]) : null;
+      if (!importedDoc) {
+        const error = new Error("Documento associato alla sessione non trovato");
+        error.statusCode = 404;
+        throw error;
+      }
+      if (
+        importedDoc.provider_id &&
+        String(importedDoc.provider_id) !== String(session.id_casa_idrica)
+      ) {
+        const [[sessionProvider]] = await conn.query(
+          `SELECT codice, nome FROM casa_idrica WHERE id = ? LIMIT 1`,
+          [session.id_casa_idrica]
+        );
+        const [[documentProvider]] = await conn.query(
+          `SELECT codice, nome FROM casa_idrica WHERE id = ? LIMIT 1`,
+          [importedDoc.provider_id]
+        );
+        const error = new Error(
+          `Provider non coerente: il documento e ${documentProvider?.codice || documentProvider?.nome || importedDoc.provider_id}, mentre la sessione usa ${sessionProvider?.codice || sessionProvider?.nome || session.id_casa_idrica}. Riassocia il documento prima del calcolo.`
+        );
+        error.statusCode = 409;
+        throw error;
+      }
       if (
         importedDoc?.importo_totale_da_pagare !== null &&
         importedDoc?.importo_totale_da_pagare !== undefined &&
@@ -5217,6 +5195,17 @@ exports.calculateSession = async function ({
         reconciliationResidual: interniTotals.reconciliationResidual,
         accountingChecks: interniTotals.accountingChecks,
         calculationWarnings: interniTotals.calculationWarnings,
+        appliedTariff: generaleResult.meta.appliedTariff,
+      });
+    } else {
+      calculationContextJson = JSON.stringify({
+        tfCode: effectiveTfCode,
+        importedDocumentId: resolvedImportedDocumentId,
+        totaleDocumento: resolvedAbcDocumentTotal,
+        appliedTariff: generaleResult.meta.appliedTariff,
+        accountingChecks: interniTotals.accountingChecks,
+        calculationWarnings: interniTotals.calculationWarnings,
+        savedAt: new Date().toISOString(),
       });
     }
     
@@ -5866,7 +5855,7 @@ exports.linkImportedDocumentToSession = async function (id, sessionId) {
   await ensureFattureSessionContextColumns();
 
   const [existingRows] = await db.query(
-    `SELECT id FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+    `SELECT id, provider_id FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
     [id]
   );
 
@@ -5890,10 +5879,12 @@ exports.linkImportedDocumentToSession = async function (id, sessionId) {
   const [sessionUpdate] = await db.query(
     `
     UPDATE fatture_sessioni
-    SET imported_document_id = ?
+    SET
+      imported_document_id = ?,
+      id_casa_idrica = COALESCE(?, id_casa_idrica)
     WHERE id = ?
     `,
-    [id, sessionId]
+    [id, existingRows[0].provider_id || null, sessionId]
   );
 
   if (!sessionUpdate.affectedRows) {
