@@ -11,6 +11,7 @@ const { launchBrowser } = require("../../utils/puppeteer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
+const { buildAccontoAccountingCheck } = require("./acconto-accounting");
 const {
   addUtcDays,
   allocateTariffConsumption,
@@ -4525,9 +4526,12 @@ async function calculateInterni(
       }
     }
 
+    const accontoAcquedottoTarget = round2(
+      totImpConsAcc > 0 ? totImpConsAcc : totAccEuro
+    );
     const accEuroShares = allocateByWeight(totAccEuro, primaries, mcWeightFn, 2);
     const impConsAccShares = allocateByWeight(
-      totImpConsAcc > 0 ? totImpConsAcc : totAccEuro,
+      accontoAcquedottoTarget,
       primaries,
       mcWeightFn,
       2
@@ -4933,6 +4937,12 @@ async function calculateInterni(
       Math.max(0, legacyCreditsApplied - legacyCreditsAvailable) +
         Math.max(0, platformCreditsApplied - platformCreditsAvailable)
     );
+    const accontoAccounting = buildAccontoAccountingCheck({
+      rows,
+      expectedTotal: totAccEuro,
+      expectedAcquedotto: accontoAcquedottoTarget,
+      expectedDepFog: totDepFogAcc,
+    });
     const accountingChecks = {
       controlTarget: targetInterniTotal,
       expectedControlTarget: round2(resolvedAbcTotal + totConfiguredOneri),
@@ -4951,11 +4961,13 @@ async function calculateInterni(
       creditOveruseResidual,
       rowFormulaErrors,
       minimumErrors,
+      acconto: accontoAccounting,
       passed:
         Math.abs(txtStornoConservationResidual) <= 0.01 &&
         creditOveruseResidual <= 0.01 &&
         rowFormulaErrors.length === 0 &&
-        minimumErrors.length === 0,
+        minimumErrors.length === 0 &&
+        accontoAccounting.passed,
     };
 
     if (!accountingChecks.passed) {
@@ -4992,7 +5004,7 @@ async function calculateInterni(
                 tf1UnexplainedDifference
               ).toFixed(
                 2
-              )} dal totale di controllo (ABC + oneri condominio). Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
+              )} dal totale di controllo (documento provider + oneri condominio). Puoi mantenere TF1 oppure valutare TF2/TF3 per riconciliare il totale.`,
             },
           ]
         : [];

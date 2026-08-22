@@ -128,6 +128,13 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
   const stato = r?.riga?.stato_attuale ?? r?.attuale?.stato_lettura ?? "-";
   const consumoTot = intVal(r?.riga?.consumo_totale);
   const consumoAcconto = euro(r?.riga?.consumo_acconto);
+  const accontoOther = Number(
+    (
+      n(r?.riga?.acconto) -
+      n(r?.riga?.imp_acconto) -
+      n(r?.riga?.depfog_acconto)
+    ).toFixed(2)
+  );
   const stornoTotale = Number(r?.riga?.storno_acconto || 0);
   const stornoTxt = Number(r?.riga?.storno_txt_aggiuntivo || 0);
   const stornoLegacy = Number(r?.riga?.storno_legacy || 0);
@@ -232,6 +239,7 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
                   ${moneyRow("IVA", r?.riga?.imp_iva)}
                   ${qtyMoneyRow("Acconto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto)}
                   ${moneyRow("Acconto dep./fog.", r?.riga?.depfog_acconto)}
+                  ${Math.abs(accontoOther) > 0.004 ? moneyRow("Acconto QF/IVA/perequazione/altri", accontoOther) : ""}
                   ${
                     hasStornoBreakdown
                       ? `${Math.abs(stornoTxt) > 0.004 ? moneyRow("Storno da documento TXT", stornoTxt) : ""}

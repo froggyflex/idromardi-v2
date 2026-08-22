@@ -3192,7 +3192,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             ? Number(parsedAccontoForCalc?.oneri ?? oneriPerequazioneAcconto ?? 0)
             : null,
           // The backend adds condominium-configured oneri separately.
-          // This value must remain the untouched ABC document total.
+          // This value must remain the untouched provider document total.
           totaleParsedWithOneri: parsedDocumentTotalForCalc,
           importedDocumentId: calculationDocument?.id || null,
           calculationContext: {
@@ -3874,6 +3874,16 @@ const quotaFissa = quotaFissaSession > 0 ? quotaFissaSession : parsedQuotaFissaF
 const quotaFissaAccontoValue = Number(
   selectedParsedPayload?.manual_overrides?.acconto?.quota_fissa ?? 0
 );
+const accontoKnownComponentsTotal =
+  Number(eurAcconto || 0) +
+  Number(depfogAcconto || 0) +
+  quotaFissaAccontoValue +
+  Number(ivaAcconto || 0) +
+  Number(oneriPerequazioneAcconto || 0);
+const accontoOtherValue =
+  Math.round(
+    (Number(totaleAcconto || 0) - accontoKnownComponentsTotal + Number.EPSILON) * 100
+  ) / 100;
 const quotaFissaStornoValue = Number(
   selectedParsedPayload?.manual_overrides?.storno?.quota_fissa ?? 0
 );
@@ -3898,11 +3908,8 @@ const totaleFornituraAGiro =
     : 0;
 const ivaBase = impConsumo + depFogValue + quotaFissa + oneriAGiro;
 const manualIvaAGiro = manualNumber(selectedParsedPayload?.manual_overrides?.main?.iva);
-const ivaAGiro = manualIvaAGiro ?? (
-  isAsisBillingDocument(activeImportedDocument, session)
-    ? 0
-    : Math.round((ivaBase * 0.1 + Number.EPSILON) * 100) / 100
-);
+const ivaAGiro =
+  manualIvaAGiro ?? Math.round((ivaBase * 0.1 + Number.EPSILON) * 100) / 100;
 const varieValue = Number(varie || 0);
 const totaleLetturaAGiroCalcolato =
   Math.round(
@@ -5436,7 +5443,9 @@ return (
                           € {Number(ivaAGiro ?? 0).toFixed(2)}
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
-                          {manualIvaAGiro !== null ? "Valore inserito manualmente" : activeBillingProviderCode === "ASIS" ? "Da inserire manualmente" : "Calcolo IVA corrente"}
+                          {manualIvaAGiro !== null
+                            ? "Valore inserito manualmente"
+                            : "Calcolo IVA corrente"}
                         </div>
                       </article>
 
@@ -5534,14 +5543,28 @@ return (
                           </div>
                         </article>
 
-                        <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                         <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                             Oneri perequazione acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
                             € {Number(oneriPerequazioneAcconto ?? 0).toFixed(2)}
-                          </div>
-                        </article>
+                           </div>
+                         </article>
+
+                         {Math.abs(accontoOtherValue) > 0.004 && (
+                           <article className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+                             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+                               Altri importi acconto
+                             </div>
+                             <div className="mt-2 text-xl font-bold text-slate-900">
+                               EUR {accontoOtherValue.toFixed(2)}
+                             </div>
+                             <div className="mt-1 text-xs text-amber-800">
+                               Differenza inclusa nel totale acconto del documento.
+                             </div>
+                           </article>
+                         )}
 
                         <article className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
@@ -6142,7 +6165,12 @@ return (
                                     <th className="p-2">IVA</th>
                                      <th className="p-2">Acconto<br></br>MC/EUR</th>
                                      <th className="p-2">Acconto<br></br>Dep/Fog</th>
-                                     <th className="p-2">Acconto<br></br>IVA/Oneri</th>
+                                     <th
+                                       className="p-2"
+                                       title="Totale acconto meno acquedotto e depurazione/fognatura: comprende QF, IVA, perequazione ed eventuali altri importi"
+                                     >
+                                       Acconto<br></br>Altri
+                                     </th>
                                      <th className="p-2">Storno<br></br>MC/EUR</th>
                                     <th className="p-2">Arr</th>
                                     <th className="p-2 font-semibold">Totale</th>
@@ -6481,7 +6509,7 @@ return (
                                           </div>
                                         </div>
                                         <div className="mt-1 border-t border-slate-200 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                          IVA/Oneri {totals.accontoExtra.toFixed(2)}
+                                          Altri acconto {totals.accontoExtra.toFixed(2)}
                                         </div>
                                       </div>
                                     </td>
