@@ -4228,6 +4228,15 @@ const isRecuperoReadingRow = (row: any) => {
 const roundMoney = (value: number) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const getRowAccontoExtra = (row: any) => {
+  const r = row?.riga || {};
+  return roundMoney(
+    Number(r.acconto || 0) -
+      Number(r.imp_acconto || 0) -
+      Number(r.depfog_acconto || 0)
+  );
+};
+
 const getExpectedRowTotal = (row: any) => {
   const r = row?.riga || {};
 
@@ -6110,7 +6119,7 @@ return (
                       </div>
                     </div>
                       <div className="max-h-[68vh] overflow-auto rounded-lg border border-slate-200 bg-white">
-                          <table className="w-full min-w-[1900px] text-xs">
+                          <table className="w-full min-w-[2000px] text-xs">
                                 <thead className="sticky top-0 z-30 bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600 shadow-sm">
                                   <tr>
                                     <th className="sticky left-0 z-40 w-14 min-w-14 bg-slate-100 p-2">ID</th>
@@ -6131,9 +6140,10 @@ return (
                                     <th className="p-2">Oneri</th>
                                     <th className="p-2">Oneri <br></br>Pereq.</th>
                                     <th className="p-2">IVA</th>
-                                    <th className="p-2">Acconto<br></br>MC/EUR</th>
-                                    <th className="p-2">Acconto<br></br>Dep/Fog</th>
-                                    <th className="p-2">Storno<br></br>MC/EUR</th>
+                                     <th className="p-2">Acconto<br></br>MC/EUR</th>
+                                     <th className="p-2">Acconto<br></br>Dep/Fog</th>
+                                     <th className="p-2">Acconto<br></br>IVA/Oneri</th>
+                                     <th className="p-2">Storno<br></br>MC/EUR</th>
                                     <th className="p-2">Arr</th>
                                     <th className="p-2 font-semibold">Totale</th>
                                   </tr>
@@ -6142,7 +6152,7 @@ return (
                                 <tbody>
                                   {righe.length === 0 && (
                                     <tr>
-                                      <td colSpan={22} className="p-4 text-center text-slate-400">
+                                      <td colSpan={23} className="p-4 text-center text-slate-400">
                                         Nessun dato disponibile
                                       </td>
                                     </tr>
@@ -6272,10 +6282,13 @@ return (
                                             <br />
                                             {Number(r.riga?.imp_acconto ?? 0).toFixed(2)}
                                           </td>
-                                          <td className="p-2 text-center">
-                                            {Number(r.riga?.depfog_acconto ?? 0).toFixed(2)}
-                                          </td>
-                                          <td className="p-2 text-center">
+                                           <td className="p-2 text-center">
+                                             {Number(r.riga?.depfog_acconto ?? 0).toFixed(2)}
+                                           </td>
+                                           <td className="p-2 text-center">
+                                             {getRowAccontoExtra(r).toFixed(2)}
+                                           </td>
+                                           <td className="p-2 text-center">
                                             {getRowStornoMc(r).toFixed(2)}mc
                                             <br />
                                             <span className="font-bold">{Number(r.riga?.storno_acconto ?? 0).toFixed(2)}</span>
@@ -6304,7 +6317,7 @@ return (
 
                                         {isExpanded && (
                                           <tr className="border-t bg-sky-50">
-                                            <td colSpan={22} className="p-4">
+                                             <td colSpan={23} className="p-4">
                                               <div className="grid grid-cols-1 gap-4 md:grid-cols-1">
                                                 <div className="rounded-lg border border-slate-200 bg-white p-3">
                                                   <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -6445,7 +6458,7 @@ return (
                                     <td className="p-2 text-center">{totaleOneriVisibile.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totaleOneriPereqVisibile.toFixed(2)}</td>
                                     <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
-                                    <td colSpan={2} className="p-2 text-center align-middle">
+                                    <td colSpan={3} className="p-2 text-center align-middle">
                                       <div className="mx-auto max-w-[230px] rounded-md border border-slate-300 bg-white/70 px-2 py-1.5 shadow-sm">
                                         <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                                           Tot. acconto
