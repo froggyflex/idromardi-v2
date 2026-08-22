@@ -86,17 +86,20 @@ type ImportedDocumentEditForm = {
   depFog: string;
   quotaFissa: string;
   oneri: string;
+  iva: string;
   totaleLettura: string;
   giorniAcconto: string;
   mcAcconto: string;
   acquedottoAcconto: string;
   depFogAcconto: string;
+  quotaFissaAcconto: string;
   oneriAcconto: string;
   ivaAcconto: string;
   totaleAcconto: string;
   mcStorno: string;
   acquedottoStorno: string;
   depFogStorno: string;
+  quotaFissaStorno: string;
   oneriStorno: string;
   ivaStorno: string;
   totaleStorno: string;
@@ -700,6 +703,42 @@ export default function CondominioFatturePage() {
     return from || to || "Periodo TXT non disponibile";
   }
 
+  function getBillingProviderCode(
+    doc?: ImportedInvoiceDocument | null,
+    sessionRow?: any
+  ): string {
+    const hydricProviderId =
+      doc?.provider_id || sessionRow?.id_casa_idrica || sessionRow?.provider_id || "";
+    const provider = providers.find(
+      (item) => String(item.id) === String(hydricProviderId)
+    );
+    const providerText = [
+      provider?.codice,
+      provider?.nome,
+      doc?.fornitore_servizi,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toUpperCase();
+
+    if (/\bASIS\b|SALERNITAN|SALERNITA|IMPIANTI\s+E\s+RETI/.test(providerText)) {
+      return "ASIS";
+    }
+    if (/\bABC\b|ACQUA\s+BENE\s+COMUNE/.test(providerText)) {
+      return "ABC";
+    }
+
+    const configuredCode = String(provider?.codice || "").trim().toUpperCase();
+    return configuredCode && configuredCode.length <= 12 ? configuredCode : "ABC";
+  }
+
+  function isAsisBillingDocument(
+    doc?: ImportedInvoiceDocument | null,
+    sessionRow?: any
+  ): boolean {
+    return getBillingProviderCode(doc, sessionRow) === "ASIS";
+  }
+
   function findSessionById(sessionId?: string | null) {
     if (!sessionId) return null;
 
@@ -888,22 +927,25 @@ export default function CondominioFatturePage() {
       Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
     const manual = payload?.manual_overrides?.storno;
     if (manual && Object.values(manual).some((value) => manualNumber(value) !== null)) {
-      const acquedotto = manualNumber(manual.acquedotto) ?? 0;
-      const depFog = manualNumber(manual.dep_fog) ?? 0;
-      const oneri = manualNumber(manual.oneri) ?? 0;
-      const iva = manualNumber(manual.iva) ?? money((acquedotto + depFog + oneri) * 0.1);
-      const totale = manualNumber(manual.totale) ?? money(acquedotto + depFog + oneri + iva);
+      const positiveMagnitude = (value: any) => Math.abs(manualNumber(value) ?? 0);
+      const acquedotto = positiveMagnitude(manual.acquedotto);
+      const depFog = positiveMagnitude(manual.dep_fog);
+      const quotaFissa = positiveMagnitude(manual.quota_fissa);
+      const oneri = positiveMagnitude(manual.oneri);
+      const iva = positiveMagnitude(manual.iva);
+      const totale = manualNumber(manual.totale) ?? money(acquedotto + depFog + quotaFissa + oneri + iva);
       return {
-        mc: manualNumber(manual.mc) ?? 0,
+        mc: positiveMagnitude(manual.mc),
         acquedotto,
         depurazione: 0,
         fognatura: 0,
         depFog,
+        quotaFissa,
         oneri,
         iva,
-        totale,
-        euro: totale,
-        source: "manual_override",
+        totale: Math.abs(totale),
+        euro: Math.abs(totale),
+        source: "manual_positive_override",
       };
     }
     const sumNegativeRows = (key: string, predicate?: (row: any) => boolean) => {
@@ -936,11 +978,13 @@ export default function CondominioFatturePage() {
     const depurazioneRows = sumNegativeRows("componente_tariffa_depurazione");
     const fognaturaRows = sumNegativeRows("componente_tariffa_fognatura");
     const oneriRows = sumNegativeRows("oneri_perequazione");
+    const quotaFissaRows = sumNegativeRows("componente_quota_tariffa_acqua");
     const hasComponentRows =
       acquedottoRows.rows.length > 0 ||
       depurazioneRows.rows.length > 0 ||
       fognaturaRows.rows.length > 0 ||
-      oneriRows.rows.length > 0;
+      oneriRows.rows.length > 0 ||
+      quotaFissaRows.rows.length > 0;
 
     const summaryAcquedotto =
       Number(summary.importoStorno || 0) || Number(summary.importoNeg || 0);
@@ -966,8 +1010,9 @@ export default function CondominioFatturePage() {
     const fognatura = money(fognaturaRows.importo);
     const depFog = money(depurazione + fognatura);
     const oneri = money(oneriRows.importo);
-    const iva = money((acquedotto + depFog + oneri) * 0.1);
-    const totale = money(acquedotto + depFog + oneri + iva);
+    const quotaFissa = money(quotaFissaRows.importo);
+    const iva = money((acquedotto + depFog + quotaFissa + oneri) * 0.1);
+    const totale = money(acquedotto + depFog + quotaFissa + oneri + iva);
 
     return {
       mc,
@@ -975,6 +1020,7 @@ export default function CondominioFatturePage() {
       depurazione,
       fognatura,
       depFog,
+      quotaFissa,
       oneri,
       iva,
       totale,
@@ -2049,17 +2095,56 @@ function getParsedBuckets(payload: any, parsedSummary: any[] | undefined) {
   };
 }
 
-function getParsedQuotaFissaFromPayload(payload: any) {
-  const manualQuotaFissa = manualNumber(payload?.manual_overrides?.main?.quota_fissa);
-  if (manualQuotaFissa !== null) return manualQuotaFissa;
-
+function getParsedQuotaFissaRowsTotal(payload: any) {
   const rows = Array.isArray(payload?.componente_quota_tariffa_acqua)
     ? payload.componente_quota_tariffa_acqua
     : [];
 
   return rows
-    .filter((row: any) => Number(row?.importo || 0) > 0)
+    .filter((row: any) => Number(row?.importo || 0) !== 0)
     .reduce((sum: number, row: any) => sum + Number(row?.importo || 0), 0);
+}
+
+function getParsedQuotaFissaFromPayload(payload: any) {
+  const manual = payload?.manual_overrides || {};
+  const mainQf = manualNumber(manual?.main?.quota_fissa);
+  const accontoQf = manualNumber(manual?.acconto?.quota_fissa);
+  const stornoQf = manualNumber(manual?.storno?.quota_fissa);
+  const sectionValues = [mainQf, accontoQf, stornoQf];
+  const hasSectionQf = sectionValues.some((value) => value !== null);
+
+  if (hasSectionQf) {
+    return (
+      Math.abs(Number(mainQf || 0)) +
+      Math.abs(Number(accontoQf || 0)) -
+      Math.abs(Number(stornoQf || 0))
+    );
+  }
+
+  return getParsedQuotaFissaRowsTotal(payload);
+}
+
+function getStornoValuesForCalculation(payload: any) {
+  const displayed = getStornoValuesFromPayload(payload);
+  const deduction = (value: any) => {
+    const parsed = manualNumber(value);
+    return parsed === null || parsed === 0 ? 0 : -Math.abs(parsed);
+  };
+
+  return {
+    ...displayed,
+    mc: deduction(displayed.mc),
+    acquedotto: deduction(displayed.acquedotto),
+    depurazione: deduction(displayed.depurazione),
+    fognatura: deduction(displayed.fognatura),
+    depFog: deduction(displayed.depFog),
+    quotaFissa: deduction(displayed.quotaFissa),
+    oneri: deduction(displayed.oneri),
+    iva: deduction(displayed.iva),
+    totale: deduction(displayed.totale),
+    euro: deduction(displayed.euro),
+    source: displayed.source === "none" ? "none" : `${displayed.source}_deduction`,
+  };
 }
 
 function getFornituraSummaryByType(payload: any, tipo: "a_giro" | "media") {
@@ -2130,16 +2215,18 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     if (manual && Object.values(manual).some((value) => manualNumber(value) !== null)) {
       const acquedotto = manualNumber(manual.acquedotto) ?? 0;
       const depFog = manualNumber(manual.dep_fog) ?? 0;
+      const quotaFissa = manualNumber(manual.quota_fissa) ?? 0;
       const oneri = manualNumber(manual.oneri) ?? 0;
-      const iva = manualNumber(manual.iva) ?? (acquedotto + depFog + oneri) * 0.1;
+      const iva = manualNumber(manual.iva) ?? 0;
       return {
         giorni: manualNumber(manual.giorni) ?? 0,
         mc: manualNumber(manual.mc) ?? 0,
         acquedotto,
         depFog,
+        quotaFissa,
         oneri,
         iva,
-        totale: manualNumber(manual.totale) ?? acquedotto + depFog + oneri + iva,
+        totale: manualNumber(manual.totale) ?? acquedotto + depFog + quotaFissa + oneri + iva,
       };
     }
     const summary = parsedSummary ?? summarizePeriodiAndTariffe(payload || null);
@@ -2160,6 +2247,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       mc: Number(resolvedAcconto.consumo ?? 0),
       acquedotto,
       depFog,
+      quotaFissa: 0,
       oneri,
       iva,
       totale: acquedotto + depFog + oneri + iva,
@@ -2287,6 +2375,18 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     const storno = getStornoValuesFromPayload(payload);
     const params = getParsedCalculationParams(payloadJson || undefined, summary);
     const anagrafica = payload?.anagrafica || {};
+    const mainQuotaFissa =
+      manualNumber(main.quota_fissa) ?? getParsedQuotaFissaRowsTotal(payload);
+    const mainIva = manualNumber(main.iva);
+    const parsedMainSupply = getFornituraSummaryByType(payload, "a_giro");
+    const mainSupplyTotal =
+      manualNumber(main.totale) ??
+      (parsedMainSupply ? Number(parsedMainSupply.totale_fornitura || 0) : null);
+    const hasStornoValues = storno?.source && storno.source !== "none";
+    const positiveStornoEditValue = (value: any) => {
+      const parsed = manualNumber(value);
+      return editValue(parsed === null ? null : Math.abs(parsed));
+    };
 
     return {
       providerId: editValue(document.provider_id),
@@ -2309,24 +2409,25 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       giorniConsumi: editValue(manualNumber(manual.giorni_consumi) ?? params?.giorniConsumi),
       acquedotto: editValue(manualNumber(main.acquedotto) ?? buckets.aGiro.acquedotto),
       depFog: editValue(manualNumber(main.dep_fog) ?? buckets.aGiro.depFog),
-      quotaFissa: editValue(manualNumber(main.quota_fissa) ?? getParsedQuotaFissaFromPayload(payload)),
+      quotaFissa: editValue(mainQuotaFissa),
       oneri: editValue(manualNumber(main.oneri) ?? buckets.aGiro.oneri),
-      totaleLettura: editValue(
-        manualNumber(main.totale) ?? Number(getFornituraSummaryByType(payload, "a_giro")?.totale_fornitura || 0)
-      ),
+      iva: editValue(mainIva),
+      totaleLettura: editValue(mainSupplyTotal),
       giorniAcconto: editValue(acconto?.giorni),
       mcAcconto: editValue(acconto?.mc),
       acquedottoAcconto: editValue(acconto?.acquedotto),
       depFogAcconto: editValue(acconto?.depFog),
+      quotaFissaAcconto: editValue(manualNumber(manual?.acconto?.quota_fissa) ?? acconto?.quotaFissa),
       oneriAcconto: editValue(acconto?.oneri),
-      ivaAcconto: editValue(acconto?.iva),
+      ivaAcconto: editValue(manualNumber(manual?.acconto?.iva)),
       totaleAcconto: editValue(acconto?.totale),
-      mcStorno: editValue(storno?.mc),
-      acquedottoStorno: editValue(storno?.acquedotto),
-      depFogStorno: editValue(storno?.depFog),
-      oneriStorno: editValue(storno?.oneri),
-      ivaStorno: editValue(storno?.iva),
-      totaleStorno: editValue(storno?.totale),
+      mcStorno: positiveStornoEditValue(hasStornoValues ? storno?.mc : null),
+      acquedottoStorno: positiveStornoEditValue(hasStornoValues ? storno?.acquedotto : null),
+      depFogStorno: positiveStornoEditValue(hasStornoValues ? storno?.depFog : null),
+      quotaFissaStorno: positiveStornoEditValue(hasStornoValues ? storno?.quotaFissa : null),
+      oneriStorno: positiveStornoEditValue(hasStornoValues ? storno?.oneri : null),
+      ivaStorno: positiveStornoEditValue(manual?.storno?.iva),
+      totaleStorno: positiveStornoEditValue(hasStornoValues ? storno?.totale : null),
     };
   }
 
@@ -2343,11 +2444,11 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
   async function saveImportedDocumentManualEdit() {
     if (!selectedImportedDoc?.id || !importedDocEdit) return;
 
-    const optionalNumber = (value: string, label: string, allowNegative = false) => {
+    const optionalNumber = (value: string, label: string) => {
       if (value.trim() === "") return null;
       const parsed = Number(value.replace(",", "."));
-      if (!Number.isFinite(parsed) || (!allowNegative && parsed < 0)) {
-        throw new Error(`${label}: inserisci un numero valido${allowNegative ? "" : " non negativo"}.`);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error(`${label}: inserisci un numero valido non negativo.`);
       }
       return parsed;
     };
@@ -2373,6 +2474,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       }
 
       const manualOverrides = {
+        schema_version: 2,
         edited_at: new Date().toISOString(),
         giorni_qf: optionalNumber(form.giorniQF, "Giorni QF"),
         giorni_consumi: optionalNumber(form.giorniConsumi, "Giorni consumi"),
@@ -2384,6 +2486,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           dep_fog: optionalNumber(form.depFog, "Depurazione e fognatura"),
           quota_fissa: optionalNumber(form.quotaFissa, "Quota fissa"),
           oneri: optionalNumber(form.oneri, "Oneri"),
+          iva: optionalNumber(form.iva, "IVA lettura a giro"),
           totale: optionalNumber(form.totaleLettura, "Totale lettura"),
         },
         acconto: {
@@ -2391,17 +2494,19 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           mc: optionalNumber(form.mcAcconto, "Consumo acconto"),
           acquedotto: optionalNumber(form.acquedottoAcconto, "Acquedotto acconto"),
           dep_fog: optionalNumber(form.depFogAcconto, "Depurazione e fognatura acconto"),
+          quota_fissa: optionalNumber(form.quotaFissaAcconto, "Quota fissa acconto"),
           oneri: optionalNumber(form.oneriAcconto, "Oneri acconto"),
           iva: optionalNumber(form.ivaAcconto, "IVA acconto"),
           totale: optionalNumber(form.totaleAcconto, "Totale acconto"),
         },
         storno: {
-          mc: optionalNumber(form.mcStorno, "Consumo storno", true),
-          acquedotto: optionalNumber(form.acquedottoStorno, "Acquedotto storno", true),
-          dep_fog: optionalNumber(form.depFogStorno, "Depurazione e fognatura storno", true),
-          oneri: optionalNumber(form.oneriStorno, "Oneri storno", true),
-          iva: optionalNumber(form.ivaStorno, "IVA storno", true),
-          totale: optionalNumber(form.totaleStorno, "Totale storno", true),
+          mc: optionalNumber(form.mcStorno, "Consumo storno"),
+          acquedotto: optionalNumber(form.acquedottoStorno, "Acquedotto storno"),
+          dep_fog: optionalNumber(form.depFogStorno, "Depurazione e fognatura storno"),
+          quota_fissa: optionalNumber(form.quotaFissaStorno, "Quota fissa storno"),
+          oneri: optionalNumber(form.oneriStorno, "Oneri storno"),
+          iva: optionalNumber(form.ivaStorno, "IVA storno"),
+          totale: optionalNumber(form.totaleStorno, "Totale storno"),
         },
       };
       const parsedPayload = {
@@ -2983,7 +3088,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         const parsedBucketsForCalc = parsedPayloadObject
           ? getParsedBuckets(parsedPayloadObject, parsedSummaryForCalc)
           : null;
-        const parsedStornoForCalc = getStornoValuesFromPayload(parsedPayloadObject);
+        const parsedStornoForCalc = getStornoValuesForCalculation(parsedPayloadObject);
         const parsedDocumentTotalForCalc = Number(
           calculationDocument?.importo_totale_da_pagare ??
             totaleDocumento ??
@@ -3004,6 +3109,18 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         const parsedQuotaFissaForCalc = parsedPayloadObject
           ? getParsedQuotaFissaFromPayload(parsedPayloadObject)
           : 0;
+        const manualQfSectionsForCalc = [
+          manualNumber(parsedPayloadObject?.manual_overrides?.main?.quota_fissa),
+          manualNumber(parsedPayloadObject?.manual_overrides?.acconto?.quota_fissa),
+          manualNumber(parsedPayloadObject?.manual_overrides?.storno?.quota_fissa),
+        ];
+        const isAsisDocumentForCalc = isAsisBillingDocument(
+          calculationDocument,
+          findSessionById(targetSessionId)
+        );
+        const useParsedQuotaFissaForCalc =
+          isAsisDocumentForCalc ||
+          manualQfSectionsForCalc.some((value) => value !== null);
         const parsedOneriNormaleForCalc =
           parsedMainBucketForCalc?.oneri ?? Number(oneriPerequazione || 0);
         const parsedParamsForCalc = getParsedCalculationParams(parsedPayloadForCalc);
@@ -3040,6 +3157,15 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           parsedPayloadForCalc
         );
         const calcMcAcconto = parsedAccontoForCalc?.mc ?? Number(mcAcconto || 0);
+        const hasParsedAccontoForCalc = Boolean(
+          parsedAccontoForCalc &&
+          (
+            Number(calcMcAcconto || 0) !== 0 ||
+            Number(parsedAccontoForCalc.totale || 0) !== 0 ||
+            Number(parsedAccontoForCalc.quotaFissa || 0) !== 0 ||
+            Number(parsedAccontoForCalc.iva || 0) !== 0
+          )
+        );
   
         const res = await api.post(`/fatture/sessioni/${targetSessionId}/calcola`, {
           tfCode: selectedTfCode,
@@ -3049,14 +3175,14 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             : eurStorno
             ? Number(eurStorno)
             : null,
-          parsedQF: null,
-          parsedAccontoImporto: calcMcAcconto > 0
+          parsedQF: useParsedQuotaFissaForCalc ? parsedQuotaFissaForCalc : null,
+          parsedAccontoImporto: hasParsedAccontoForCalc
             ? Number(parsedAccontoForCalc?.acquedotto ?? eurAcconto ?? 0)
             : null,
-          parsedAccontoDepFog: calcMcAcconto > 0
+          parsedAccontoDepFog: hasParsedAccontoForCalc
             ? Number(parsedAccontoForCalc?.depFog ?? depfogAcconto ?? 0)
             : null,
-          parsedAccontoTotale: calcMcAcconto > 0
+          parsedAccontoTotale: hasParsedAccontoForCalc
             ? Number(parsedAccontoForCalc?.totale ?? totaleAcconto ?? 0)
             : null,
           parsedOneriPerequazione: parsedHasOneri ? Number(parsedOneriNormaleForCalc || 0) : null,
@@ -3085,6 +3211,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
               : Number(eurStorno || 0),
             parsedStornoAcquedotto: parsedStornoForCalc.acquedotto ?? Number(acquedottoStorno || 0),
             parsedStornoDepFog: parsedStornoForCalc.depFog ?? Number(depfogStorno || 0),
+            parsedStornoQuotaFissa: parsedStornoForCalc.quotaFissa ?? 0,
             parsedStornoIva: parsedStornoForCalc.iva ?? Number(ivaStorno || 0),
             parsedOneriPerequazioneStorno:
               parsedStornoForCalc.oneri ?? Number(oneriPerequazioneStorno || 0),
@@ -3097,6 +3224,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
               depurazione: parsedStornoForCalc.depurazione ?? 0,
               fognatura: parsedStornoForCalc.fognatura ?? 0,
               depFog: parsedStornoForCalc.depFog ?? Number(depfogStorno || 0),
+              quotaFissa: parsedStornoForCalc.quotaFissa ?? 0,
               iva: parsedStornoForCalc.iva ?? Number(ivaStorno || 0),
               oneri: parsedStornoForCalc.oneri ?? Number(oneriPerequazioneStorno || 0),
               totale: parsedStornoForCalc.totale ?? Number(totaleStorno || eurStorno || 0),
@@ -3105,13 +3233,18 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
             parsedConsumoNormale: parsedMainBucketForCalc?.consumoMc ?? null,
             parsedAcquedottoNormale: parsedMainBucketForCalc?.acquedotto ?? null,
             parsedDepFogNormale: parsedMainBucketForCalc?.depFog ?? null,
-            parsedQuotaFissa: parsedQuotaFissaForCalc || null,
+            parsedQuotaFissa: useParsedQuotaFissaForCalc ? parsedQuotaFissaForCalc : null,
+            parsedIvaNormale:
+              manualNumber(parsedPayloadObject?.manual_overrides?.main?.iva) ??
+              (isAsisDocumentForCalc ? 0 : null),
             parsedVarie: Number(varie || 0),
             parsedTotaleLetturaAGiro: Number.isFinite(parsedTotaleLetturaAGiroForCalc)
               ? parsedTotaleLetturaAGiroForCalc
               : null,
             parsedAccontoImporto: parsedAccontoForCalc?.acquedotto ?? null,
             parsedAccontoDepFog: parsedAccontoForCalc?.depFog ?? null,
+            parsedAccontoQuotaFissa: parsedAccontoForCalc?.quotaFissa ?? null,
+            parsedAccontoIva: parsedAccontoForCalc?.iva ?? null,
             parsedAccontoTotale: parsedAccontoForCalc?.totale ?? null,
             parsedOneriPerequazione: parsedHasOneri ? Number(parsedOneriNormaleForCalc || 0) : null,
             parsedOneriPerequazioneAcconto: parsedHasOneri
@@ -3658,6 +3791,7 @@ const dettaglio = generale?.dettaglio ?? [];
 const activeImportedDocument = fatturaId
   ? resolveSelectedImportedDocumentForSession(String(fatturaId))
   : selectedImportedDoc;
+const activeBillingProviderCode = getBillingProviderCode(activeImportedDocument, session);
 
 const selectedParsedPayload = useMemo(() => {
   if (!activeImportedDocument?.parsed_payload_json) return null;
@@ -3678,6 +3812,12 @@ const depFogValue = Number(depfog ?? 0);
 const parsedQuotaFissaFromPayload = getParsedQuotaFissaFromPayload(selectedParsedPayload);
 const quotaFissaSession = Number(session?.tot_qf ?? 0);
 const quotaFissa = quotaFissaSession > 0 ? quotaFissaSession : parsedQuotaFissaFromPayload;
+const quotaFissaAccontoValue = Number(
+  selectedParsedPayload?.manual_overrides?.acconto?.quota_fissa ?? 0
+);
+const quotaFissaStornoValue = Number(
+  selectedParsedPayload?.manual_overrides?.storno?.quota_fissa ?? 0
+);
 const oneriAGiro = Number(oneriPerequazione || 0);
 const fornituraAGiro = getFornituraSummaryByType(selectedParsedPayload, "a_giro");
 const totaleFornituraAGiroDaTxt = Number(fornituraAGiro?.totale_fornitura || 0);
@@ -3698,7 +3838,12 @@ const totaleFornituraAGiro =
     ? totaleFornituraAGiroDaDifferenza
     : 0;
 const ivaBase = impConsumo + depFogValue + quotaFissa + oneriAGiro;
-const ivaAGiro = Math.round((ivaBase * 0.1 + Number.EPSILON) * 100) / 100;
+const manualIvaAGiro = manualNumber(selectedParsedPayload?.manual_overrides?.main?.iva);
+const ivaAGiro = manualIvaAGiro ?? (
+  isAsisBillingDocument(activeImportedDocument, session)
+    ? 0
+    : Math.round((ivaBase * 0.1 + Number.EPSILON) * 100) / 100
+);
 const varieValue = Number(varie || 0);
 const totaleLetturaAGiroCalcolato =
   Math.round(
@@ -4220,7 +4365,7 @@ return (
                 <h1 className="text-base font-bold text-slate-900">Fatturazione</h1>
                 {activeSessionPeriod && (
                   <span className="truncate text-xs font-medium text-slate-500">
-                    Periodo ABC {activeSessionPeriod}
+                    Periodo {activeBillingProviderCode} {activeSessionPeriod}
                   </span>
                 )}
                 <span className="text-sm font-bold text-slate-900">
@@ -4383,7 +4528,7 @@ return (
 
                       <span className="min-w-0 flex-1">
                         <span className="block text-sm font-semibold text-slate-800">
-                          Periodo ABC: {linkedDocPeriod}
+                          Periodo {getBillingProviderCode(linkedDoc, s)}: {linkedDocPeriod}
                         </span>
                         <span
                             className={`mt-0.5 block break-words text-[11px] leading-4 ${
@@ -5002,6 +5147,7 @@ return (
                   <input
                     type={type}
                     step={type === "number" ? "0.01" : undefined}
+                    min={type === "number" ? "0" : undefined}
                     value={importedDocEdit[field]}
                     onChange={(event) => updateImportedDocumentEdit(field, event.target.value)}
                     className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
@@ -5018,7 +5164,8 @@ return (
                 ["letturaPrecedente", "Lettura precedente"], ["letturaAttuale", "Lettura attuale"],
                 ["giorniQF", "Giorni QF"], ["giorniConsumi", "Giorni consumi"],
                 ["acquedotto", "Acquedotto (€)"], ["depFog", "Depurazione + fognatura (€)"],
-                ["quotaFissa", "Quota fissa (€)"], ["oneri", "Oneri (€)"], ["totaleLettura", "Totale lettura (€)"],
+                ["quotaFissa", "Quota fissa (€)"], ["oneri", "Oneri (€)"],
+                ["iva", "IVA (€)"], ["totaleLettura", "Totale lettura (€)"],
               ],
             },
             {
@@ -5026,14 +5173,16 @@ return (
               fields: [
                 ["giorniAcconto", "Giorni"], ["mcAcconto", "Consumo (mc)"],
                 ["acquedottoAcconto", "Acquedotto (€)"], ["depFogAcconto", "Depurazione + fognatura (€)"],
-                ["oneriAcconto", "Oneri (€)"], ["ivaAcconto", "IVA (€)"], ["totaleAcconto", "Totale (€)"],
+                ["quotaFissaAcconto", "Quota fissa (€)"], ["oneriAcconto", "Oneri perequazione (€)"],
+                ["ivaAcconto", "IVA (€)"], ["totaleAcconto", "Totale (€)"],
               ],
             },
             {
               title: "Storno",
               fields: [
                 ["mcStorno", "Consumo (mc)"], ["acquedottoStorno", "Acquedotto (€)"],
-                ["depFogStorno", "Depurazione + fognatura (€)"], ["oneriStorno", "Oneri (€)"],
+                ["depFogStorno", "Depurazione + fognatura (€)"], ["quotaFissaStorno", "Quota fissa (€)"],
+                ["oneriStorno", "Oneri perequazione (€)"],
                 ["ivaStorno", "IVA (€)"], ["totaleStorno", "Totale (€)"],
               ],
             },
@@ -5047,6 +5196,7 @@ return (
                     <input
                       type="number"
                       step="0.01"
+                      min="0"
                       value={importedDocEdit[field]}
                       onChange={(event) => updateImportedDocumentEdit(field, event.target.value)}
                       className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
@@ -5158,6 +5308,18 @@ return (
 
                       <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          IVA lettura a giro
+                        </div>
+                        <div className="mt-2 text-2xl font-bold text-slate-900">
+                          € {Number(ivaAGiro ?? 0).toFixed(2)}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {manualIvaAGiro !== null ? "Valore inserito manualmente" : activeBillingProviderCode === "ASIS" ? "Da inserire manualmente" : "Calcolo IVA corrente"}
+                        </div>
+                      </article>
+
+                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                           Varie
                         </div>
                         <div className="mt-3">
@@ -5194,7 +5356,7 @@ return (
                 </section>
 
                 {/* ACCONTO */}
-                {mcAcconto > 0 && (
+                {(Number(mcAcconto || 0) !== 0 || Number(totaleAcconto || 0) !== 0 || quotaFissaAccontoValue !== 0) && (
                   <section className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
                     <div className="border-b border-amber-100 bg-gradient-to-r from-amber-50 to-white px-5 py-4 sm:px-6">
                       <h4 className="text-sm font-semibold text-slate-900">Acconto rilevato</h4>
@@ -5229,6 +5391,15 @@ return (
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
                             € {Number(depfogAcconto ?? 0).toFixed(2)}
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Quota fissa acconto
+                          </div>
+                          <div className="mt-2 text-xl font-bold text-slate-900">
+                            € {quotaFissaAccontoValue.toFixed(2)}
                           </div>
                         </article>
 
@@ -5304,6 +5475,15 @@ return (
 
                         <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                            Quota fissa storno
+                          </div>
+                          <div className="mt-2 text-xl font-bold text-slate-900">
+                            € {quotaFissaStornoValue.toFixed(2)}
+                          </div>
+                        </article>
+
+                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                             IVA storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
@@ -5347,7 +5527,7 @@ return (
                   <div className="space-y-4 p-5">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
-                        Totale documento ABC
+                        Totale documento {activeBillingProviderCode}
                       </div>
                       <div className="mt-2 text-2xl font-bold text-slate-900">
                         € {totaleDocumento.toFixed(2)}
@@ -5359,7 +5539,7 @@ return (
                         Dovuto incasso
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        ABC € {totaleDocumento.toFixed(2)} + oneri condominio € {totaleOneri.toFixed(2)}
+                        {activeBillingProviderCode} € {totaleDocumento.toFixed(2)} + oneri condominio € {totaleOneri.toFixed(2)}
                       </div>
                       <div className="mt-2 text-2xl font-bold text-slate-900">
                         € {totaleDocumentoConOneri.toFixed(2)}

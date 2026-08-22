@@ -545,10 +545,51 @@ function getStornoValuesFromParsedPayload(payload) {
       depurazione: 0,
       fognatura: 0,
       depFog: 0,
+      quotaFissa: 0,
       oneri: 0,
       iva: 0,
       totale: 0,
       source: "none",
+    };
+  }
+
+  const manual = payload?.manual_overrides?.storno;
+  if (
+    manual &&
+    Object.values(manual).some(
+      (value) => value !== null && value !== undefined && value !== ""
+    )
+  ) {
+    const deduction = (value) => {
+      const magnitude = Math.abs(n2(value));
+      return magnitude === 0 ? 0 : -round2(magnitude);
+    };
+    const acquedotto = deduction(manual.acquedotto);
+    const depFog = deduction(manual.dep_fog);
+    const quotaFissa = deduction(manual.quota_fissa);
+    const oneri = deduction(manual.oneri);
+    const iva = deduction(manual.iva);
+    const explicitTotal =
+      manual.totale !== null &&
+      manual.totale !== undefined &&
+      manual.totale !== "" &&
+      Number.isFinite(Number(manual.totale));
+    const totale = explicitTotal
+      ? deduction(manual.totale)
+      : round2(acquedotto + depFog + quotaFissa + oneri + iva);
+
+    return {
+      euro: totale,
+      mc: n2(manual.mc) === 0 ? 0 : -round3(Math.abs(n2(manual.mc))),
+      acquedotto,
+      depurazione: 0,
+      fognatura: 0,
+      depFog,
+      quotaFissa,
+      oneri,
+      iva,
+      totale,
+      source: "manual_positive_override_deduction",
     };
   }
 
@@ -575,6 +616,7 @@ function getStornoValuesFromParsedPayload(payload) {
   const depurazioneRows = sumNegativeRows("componente_tariffa_depurazione");
   const fognaturaRows = sumNegativeRows("componente_tariffa_fognatura");
   const oneriRows = sumNegativeRows("oneri_perequazione");
+  const quotaFissaRows = sumNegativeRows("componente_quota_tariffa_acqua");
 
   const summary = payload?.summaryTariffeAcquedotto || {};
   const summaryAcquedotto = n2(summary.importoStorno) || n2(summary.importoNeg);
@@ -597,18 +639,21 @@ function getStornoValuesFromParsedPayload(payload) {
   const fognatura = round2(fognaturaRows.importo);
   const depFog = round2(depurazione + fognatura);
   const oneri = round2(oneriRows.importo);
-  const iva = round2((acquedotto + depFog + oneri) * 0.1);
-  const totale = round2(acquedotto + depFog + oneri + iva);
+  const quotaFissa = round2(quotaFissaRows.importo);
+  const iva = round2((acquedotto + depFog + quotaFissa + oneri) * 0.1);
+  const totale = round2(acquedotto + depFog + quotaFissa + oneri + iva);
   const hasComponentRows =
     acquedottoRows.rows.length > 0 ||
     depurazioneRows.rows.length > 0 ||
     fognaturaRows.rows.length > 0 ||
-    oneriRows.rows.length > 0;
+    oneriRows.rows.length > 0 ||
+    quotaFissaRows.rows.length > 0;
   const hasExplicitRows =
     acquedottoRows.explicit ||
     depurazioneRows.explicit ||
     fognaturaRows.explicit ||
-    oneriRows.explicit;
+    oneriRows.explicit ||
+    quotaFissaRows.explicit;
 
   return {
     // euro remains the compatibility field consumed by the allocation engine.
@@ -618,6 +663,7 @@ function getStornoValuesFromParsedPayload(payload) {
     depurazione,
     fognatura,
     depFog,
+    quotaFissa,
     oneri,
     iva,
     totale,
@@ -3292,7 +3338,14 @@ function calcolaGeneraleLegacy({
   const impDepurazione = consumo * n2(prezzoDepurazione);
   const depFog = impFognatura + impDepurazione;
 
-  const qfTot = Number(parsedQF) || (n2(qfAnnua) / yd) * A * daysQFv;
+  const hasParsedQF =
+    parsedQF !== null &&
+    parsedQF !== undefined &&
+    parsedQF !== "" &&
+    Number.isFinite(Number(parsedQF));
+  const qfTot = hasParsedQF
+    ? Number(parsedQF)
+    : (n2(qfAnnua) / yd) * A * daysQFv;
 
    
  
@@ -3584,7 +3637,8 @@ async function calculateInterni(
   parsedOneriPerequazioneAcconto = null,
   parsedAccontoImporto = null,
   parsedAccontoDepFog = null,
-  parsedAccontoTotale = null
+  parsedAccontoTotale = null,
+  parsedIvaNormale = null
 ) {
   await ensureFattureRigheRecuperoColumns();
   await ensureFattureAccontiTransitionColumns();
@@ -4214,6 +4268,32 @@ async function calculateInterni(
     const moneyWeightFn = (r) => Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
     const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
     const consumptionWeightFn = (r) => Math.max(0, n2(r.consumo_totale));
+
+    const hasParsedIvaNormale =
+      parsedIvaNormale !== null &&
+      parsedIvaNormale !== undefined &&
+      parsedIvaNormale !== "" &&
+      Number.isFinite(Number(parsedIvaNormale));
+    if (hasParsedIvaNormale) {
+      const manualIvaTotal = round2(Number(parsedIvaNormale));
+      const ivaShares = allocateByWeight(
+        manualIvaTotal,
+        primaries,
+        moneyWeightFn,
+        2
+      );
+
+      for (let i = 0; i < primaries.length; i++) {
+        const row = primaries[i];
+        const previousIva = round2(n2(row.imp_iva));
+        const manualIvaShare = round2(ivaShares[i] || 0);
+        row.imp_iva = manualIvaShare;
+        row.base_totale = round2(
+          n2(row.base_totale) - previousIva + manualIvaShare
+        );
+      }
+      generale.iva = manualIvaTotal;
+    }
 
     if (hasParsedOneri) {
       const perequazioneRows = primaries.filter(
@@ -4975,6 +5055,10 @@ exports.calculateSession = async function ({
       ),
       depurazione: n2(calculationContext?.stornoBreakdown?.depurazione),
       fognatura: n2(calculationContext?.stornoBreakdown?.fognatura),
+      quotaFissa: n2(
+        calculationContext?.stornoBreakdown?.quotaFissa ??
+          calculationContext?.parsedStornoQuotaFissa
+      ),
       iva: n2(
         calculationContext?.stornoBreakdown?.iva ??
           calculationContext?.parsedStornoIva
@@ -5029,6 +5113,7 @@ exports.calculateSession = async function ({
           depurazione: stornoFromDoc.depurazione,
           fognatura: stornoFromDoc.fognatura,
           depFog: stornoFromDoc.depFog,
+          quotaFissa: stornoFromDoc.quotaFissa,
           iva: stornoFromDoc.iva,
           oneri: stornoFromDoc.oneri,
           totale: stornoFromDoc.totale,
@@ -5057,6 +5142,7 @@ exports.calculateSession = async function ({
           stornoSource: resolvedStornoSource,
           parsedStornoAcquedotto: resolvedStornoBreakdown.acquedotto,
           parsedStornoDepFog: resolvedStornoBreakdown.depFog,
+          parsedStornoQuotaFissa: resolvedStornoBreakdown.quotaFissa,
           parsedStornoIva: resolvedStornoBreakdown.iva,
           parsedOneriPerequazioneStorno: resolvedStornoBreakdown.oneri,
           parsedStornoTotale: resolvedStornoBreakdown.totale,
@@ -5085,7 +5171,8 @@ exports.calculateSession = async function ({
       parsedOneriPerequazioneAcconto,
       parsedAccontoImporto,
       parsedAccontoDepFog,
-      parsedAccontoTotale
+      parsedAccontoTotale,
+      calculationContext?.parsedIvaNormale ?? null
     );
 
     if (calculationContextJson) {
