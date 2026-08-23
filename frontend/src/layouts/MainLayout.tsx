@@ -1,6 +1,7 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode, SVGProps } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Menu, X } from "lucide-react";
 import { clearAuthSession, getAuthUser } from "../auth";
 
 type Props = {
@@ -256,6 +257,22 @@ export default function MainLayout({ children }: Props) {
   const user = getAuthUser();
   const mainRef = useRef<HTMLElement | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileNavOpen]);
 
   function handleLogout() {
     clearAuthSession();
@@ -263,16 +280,40 @@ export default function MainLayout({ children }: Props) {
   }
 
   return (
-    <div className="flex h-screen bg-slate-50">
-      <aside className="w-72 bg-slate-50 border-r border-slate-200 flex flex-col navbarside">
+    <div className="relative flex h-screen h-dvh overflow-hidden bg-slate-50">
+      {mobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Chiudi menu di navigazione"
+          className="fixed inset-0 z-50 bg-slate-950/35 backdrop-blur-[1px] lg:hidden"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
+
+      <aside
+        id="main-navigation"
+        className={`navbarside fixed inset-y-0 left-0 z-[60] flex w-72 flex-col border-r border-slate-200 bg-slate-50 shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:shadow-none ${
+          mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         {/* Logo */}
-        <div className="px-6 py-6 border-b border-slate-200">
-          <h1 className="text-lg font-semibold text-slate-800 tracking-tight">
-            IDROMARDI 2.0
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Sistema Gestione Contabilità
-          </p>
+        <div className="flex items-start justify-between border-b border-slate-200 px-6 py-6">
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight text-slate-800">
+              IDROMARDI 2.0
+            </h1>
+            <p className="mt-1 text-xs text-slate-500">
+              Sistema Gestione Contabilità
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Chiudi menu"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 lg:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         {/* Navigation */}
@@ -367,8 +408,26 @@ export default function MainLayout({ children }: Props) {
       <main
         ref={mainRef}
         onScroll={(event) => setShowScrollTop(event.currentTarget.scrollTop > 500)}
-        className="flex-1 p-6 overflow-auto"
+        className="min-w-0 flex-1 overflow-auto p-3 sm:p-4 lg:p-6"
       >
+        <div className="sticky top-0 z-50 -mx-3 -mt-3 mb-3 flex h-14 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:-mx-4 sm:-mt-4 sm:px-4 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Apri menu"
+            aria-controls="main-navigation"
+            aria-expanded={mobileNavOpen}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-100"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-bold text-slate-900">IDROMARDI 2.0</div>
+            <div className="truncate text-xs text-slate-500">
+              {condominioId ? "Gestione condominio" : "Pannello operativo"}
+            </div>
+          </div>
+        </div>
         {children}
       </main>
 

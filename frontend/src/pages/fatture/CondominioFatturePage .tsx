@@ -4325,9 +4325,14 @@ const totalAudit = useMemo(() => {
   const displayedRowsTotal = roundMoney(
     righe.reduce((sum: number, row: any) => sum + getDisplayedRowTotal(row), 0)
   );
-  const reconciledOk =
-    totaleDocumentoConOneri <= 0 ||
-    Math.abs(displayedRowsTotal - totaleDocumentoConOneri) <= 0.01;
+  const hasControlTarget = totaleDocumentoConOneri > 0;
+  const controlDifference = roundMoney(
+    displayedRowsTotal - totaleDocumentoConOneri
+  );
+  const formulasOk = Math.abs(expectedRowsTotal - storedRowsTotal) <= 0.01;
+  const displayedTotalOk =
+    Math.abs(displayedRowsTotal - totaleInterniVisibile) <= 0.01;
+  const reconciledOk = hasControlTarget && Math.abs(controlDifference) <= 0.01;
 
   return {
     rowErrors,
@@ -4335,11 +4340,13 @@ const totalAudit = useMemo(() => {
     storedRowsTotal,
     displayedRowsTotal,
     rowsOk: rowErrors.length === 0,
+    formulasOk,
+    displayedTotalOk,
+    hasControlTarget,
+    controlTarget: roundMoney(totaleDocumentoConOneri),
+    controlDifference,
     reconciledOk,
-    totalsOk:
-      Math.abs(expectedRowsTotal - storedRowsTotal) <= 0.01 &&
-      Math.abs(displayedRowsTotal - totaleInterniVisibile) <= 0.01 &&
-      reconciledOk,
+    totalsOk: formulasOk && displayedTotalOk && reconciledOk,
   };
 }, [
   righe,
@@ -6127,18 +6134,31 @@ return (
                       <h3 className="font-semibold">Situazione Contatori Interni</h3>
 
                       <div
+                        title={
+                          totalAudit.hasControlTarget
+                            ? `Totale righe: EUR ${totalAudit.displayedRowsTotal.toFixed(2)} | Totale atteso (ABC + oneri): EUR ${totalAudit.controlTarget.toFixed(2)} | Differenza: EUR ${totalAudit.controlDifference.toFixed(2)}`
+                            : "Totale atteso non disponibile: impossibile verificare la riconciliazione."
+                        }
                         className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
                           totalAudit.rowsOk && totalAudit.totalsOk
                             ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-amber-200 bg-amber-50 text-amber-700"
+                            : "border-red-200 bg-red-50 text-red-700"
                         }`}
                       >
                         Righe:{" "}
                         {totalAudit.rowsOk
-                          ? `OK (${righe.filter((row: any) => row?.riga).length}/${righe.filter((row: any) => row?.riga).length})`
-                          : `${totalAudit.rowErrors.length} da verificare`}{" "}
-                        · Totali:{" "}
-                        {totalAudit.totalsOk ? "OK" : "Da verificare"}
+                          ? `CORRETTE (${righe.filter((row: any) => row?.riga).length}/${righe.filter((row: any) => row?.riga).length})`
+                          : `NON CORRETTE (${totalAudit.rowErrors.length})`}{" "}
+                        | Totale:{" "}
+                        {totalAudit.totalsOk
+                          ? "CORRETTO"
+                          : !totalAudit.hasControlTarget
+                            ? "NON CORRETTO (totale atteso mancante)"
+                            : !totalAudit.formulasOk
+                              ? "NON CORRETTO (somma righe discordante)"
+                              : !totalAudit.displayedTotalOk
+                                ? "NON CORRETTO (totale visualizzato discordante)"
+                                : `NON CORRETTO (delta EUR ${totalAudit.controlDifference.toFixed(2)})`}
                       </div>
                     </div>
                       <div className="max-h-[68vh] overflow-auto rounded-lg border border-slate-200 bg-white">
