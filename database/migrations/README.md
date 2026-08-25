@@ -21,3 +21,14 @@ mysql -h $env:DB_HOST -u $env:DB_USER -p $env:DB_NAME `
 
 `002_storno_transition.sql` is idempotent and records the per-user TXT request,
 legacy replacement, absorbed shortage, deferred residual, and transition status.
+
+For the unified Meta Business CRM foundation, apply:
+
+```powershell
+cd backend
+npm run migrate:meta
+```
+
+`003_meta_crm_foundation.sql` creates the integration, channel, lead, contact,
+conversation, message, webhook inbox, outbound queue, and audit tables. Access
+tokens are encrypted by the application; the migration never stores secrets.

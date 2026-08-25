@@ -370,6 +370,7 @@ export default function MainLayout({ children }: Props) {
             <div className="space-y-1">
               <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
               <NavItem to="/admin/mobile-readings" label="Verifica letture mobili" />
+              <NavItem to="/admin/meta-business" label="Meta Business" />
               <NavItem to="/admin/contabilita" label="Contabilità" />
             </div>
 

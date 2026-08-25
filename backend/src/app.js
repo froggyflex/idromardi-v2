@@ -14,6 +14,7 @@ const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 const adminRoutes = require("./modules/admin/admin.routes");
 const authRoutes = require("./modules/auth/auth.routes");
 const mobileReadingsRoutes = require("./modules/mobileReadings/mobileReadings.routes");
+const metaRoutes = require("./modules/meta/meta.routes");
 const { requireAuth } = require("./modules/auth/auth.middleware");
 
 const app = express();
@@ -41,13 +42,22 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Photo-Sha256"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Photo-Sha256", "X-Hub-Signature-256"],
 };
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 
-app.use(express.json());
+app.use(
+  express.json({
+    verify(req, res, buffer) {
+      // Meta signs the exact bytes sent. Preserve them before JSON parsing.
+      if (req.originalUrl.startsWith("/api/meta/webhook")) {
+        req.rawBody = Buffer.from(buffer);
+      }
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 
 app.get("/", (req, res) => {
@@ -70,6 +80,9 @@ app.use("/uploads/mobile-readings", (req, res) => res.status(404).end());
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api/auth", authRoutes);
+// Public only for Meta's challenge and signed webhook delivery. The controller
+// rejects unsigned POST requests before any payload is persisted.
+app.use("/api/meta", metaRoutes.publicRouter);
 app.use("/api", requireAuth);
 
 app.use("/api/condomini", condominiRoutes);
@@ -83,6 +96,7 @@ app.use("/api", billingGroupsRoutes);
 app.use("/api", prospettoRoutes);
 app.use("/api/fatture", fattureRoutes);
 app.use("/api/financial-summary", financialSummaryRoutes);
+app.use("/api/meta", metaRoutes.protectedRouter);
 app.use("/images", express.static(path.join(__dirname, "../public/images")));
 // 404 handler
 app.use((req, res) => {
