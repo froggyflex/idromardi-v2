@@ -1,7 +1,27 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { ReactNode, SVGProps } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  BookUser,
+  Building2,
+  ChevronRight,
+  ClipboardCheck,
+  Droplets,
+  Gauge,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  MapPinned,
+  Menu,
+  MessagesSquare,
+  ReceiptText,
+  Tags,
+  UserRound,
+  UsersRound,
+  WalletCards,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { clearAuthSession, getAuthUser } from "../auth";
 
 type Props = {
@@ -11,6 +31,7 @@ type Props = {
 type NavItemProps = {
   to: string;
   label: string;
+  icon: LucideIcon;
   end?: boolean;
 };
 
@@ -21,28 +42,41 @@ const PIPELINE_HEALTH_URL =
 
 const STALE_AFTER_MS = 1000 * 60 * 15; // 15 min
 
-function NavItem({ to, label, end = false }: NavItemProps) {
+function NavItem({ to, label, icon: Icon, end = false }: NavItemProps) {
   return (
     <NavLink
       to={to}
       end={end}
       className={({ isActive }) =>
         `
-        flex items-center
-        px-3 py-2
-        rounded-md
-        text-sm font-medium
-        transition-colors
+        group flex min-h-10 items-center gap-3
+        rounded-xl px-3 py-2
+        text-sm font-semibold
+        transition-all duration-150
         ${
           isActive
-            ? "bg-blue-600 text-white shadow-sm"
-            : "text-slate-600 hover:bg-slate-100 hover:text-slate-800"
+            ? "bg-blue-50 text-blue-700 shadow-sm ring-1 ring-inset ring-blue-100"
+            : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
         }
         `
       }
     >
-      {label}
+      <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <ChevronRight
+        className="h-3.5 w-3.5 shrink-0 text-current opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-40"
+        aria-hidden="true"
+      />
     </NavLink>
+  );
+}
+
+function NavSectionTitle({ children }: { children: ReactNode }) {
+  return (
+    <div className="mb-2 flex items-center gap-2 px-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+      <span>{children}</span>
+      <span className="h-px flex-1 bg-slate-200/80" />
+    </div>
   );
 }
 
@@ -100,10 +134,7 @@ function PipelineStatusPanel() {
   const [lastReadyAt, setLastReadyAt] = useState<Date | null>(null);
   const [message, setMessage] = useState("Pipeline non ancora verificata.");
 
-  const isStale = useMemo(() => {
-    if (!lastReadyAt) return true;
-    return Date.now() - lastReadyAt.getTime() > STALE_AFTER_MS;
-  }, [lastReadyAt]);
+  const isStale = !lastReadyAt || status === "sleeping";
 
   const handlePing = useCallback(async () => {
     try {
@@ -124,7 +155,8 @@ function PipelineStatusPanel() {
   }, []);
 
   useEffect(() => {
-    handlePing();
+    const timeout = window.setTimeout(() => void handlePing(), 0);
+    return () => window.clearTimeout(timeout);
   }, [handlePing]);
 
   useEffect(() => {
@@ -199,12 +231,8 @@ function PipelineStatusPanel() {
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-slate-900">
-               
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                 
-              </div>
+              <div className="text-sm font-semibold text-slate-900">Pipeline documentale</div>
+              <div className="mt-1 text-xs text-slate-500">Importazione fatture</div>
             </div>
 
             <span
@@ -260,10 +288,6 @@ export default function MainLayout({ children }: Props) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
-    setMobileNavOpen(false);
-  }, [location.pathname]);
-
-  useEffect(() => {
     if (!mobileNavOpen) return;
 
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -292,19 +316,24 @@ export default function MainLayout({ children }: Props) {
 
       <aside
         id="main-navigation"
-        className={`navbarside fixed inset-y-0 left-0 z-[60] flex w-72 flex-col border-r border-slate-200 bg-slate-50 shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:shadow-none ${
+        className={`navbarside fixed inset-y-0 left-0 z-[60] flex w-72 flex-col border-r border-slate-200 bg-white shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:shadow-none ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         {/* Logo */}
-        <div className="flex items-start justify-between border-b border-slate-200 px-6 py-6">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-slate-800">
-              IDROMARDI 2.0
-            </h1>
-            <p className="mt-1 text-xs text-slate-500">
-              Sistema Gestione Contabilità
-            </p>
+        <div className="flex items-center justify-between border-b border-slate-200/80 px-5 py-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-white shadow-md shadow-blue-200/60">
+              <Droplets className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-[15px] font-bold tracking-tight text-slate-900">
+                IDROMARDI 2.0
+              </h1>
+              <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                Gestione operativa
+              </p>
+            </div>
           </div>
           <button
             type="button"
@@ -317,90 +346,113 @@ export default function MainLayout({ children }: Props) {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-4 py-6 space-y-6 overflow-y-auto">
-          <div className="space-y-1">
-            <NavItem to="/" label="Dashboard" />
-            <NavItem to="/condomini" label="Condomini" />
+        <nav
+          className="flex-1 space-y-6 overflow-y-auto px-4 py-5 scrollbar-thin"
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest("a")) setMobileNavOpen(false);
+          }}
+        >
+          <div>
+            <NavSectionTitle>Principale</NavSectionTitle>
+            <div className="space-y-1">
+              <NavItem to="/" label="Dashboard" icon={LayoutDashboard} />
+              <NavItem to="/condomini" label="Condomini" icon={Building2} />
+            </div>
           </div>
 
           {condominioId && (
-            <>
-              <div className="space-y-1">
-                <div className="px-3 text-xs text-slate-400 uppercase tracking-wider pb-2">
-                  Condominio
-                </div>
-
+            <div>
+              <NavSectionTitle>Condominio attivo</NavSectionTitle>
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-1.5">
                 <NavItem
                   to={`/condomini/${condominioId}`}
                   label="Dettagli"
+                  icon={Building2}
                   end
                 />
                 <NavItem
                   to={`/condomini/${condominioId}/utenze`}
                   label="Utenze"
+                  icon={UsersRound}
                 />
                 <NavItem
                   to={`/condomini/${condominioId}/contatti`}
                   label="Contatti"
+                  icon={BookUser}
                 />
-              </div>
-
-              <div className="space-y-1 pt-4">
-                <div className="px-3 text-xs text-slate-400 uppercase tracking-wider pb-2">
-                  Gestione Letture
-                </div>
-
+                <div className="mx-3 my-1.5 h-px bg-slate-200" />
                 <NavItem
                   to={`/condomini/${condominioId}/letture`}
                   label="Gestione Letture"
+                  icon={Gauge}
                 />
                 <NavItem
                   to={`/condomini/${condominioId}/fatture`}
                   label="Fatturazione"
+                  icon={ReceiptText}
                 />
               </div>
-            </>
+            </div>
           )}
 
-          <div className="border-t border-slate-200 pt-6">
-            <div className="px-3 text-xs text-slate-400 uppercase tracking-wider pb-2">
-              Amministrazione
-            </div>
-
+          <div>
+            <NavSectionTitle>Amministrazione</NavSectionTitle>
             <div className="space-y-1">
-              <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" />
-              <NavItem to="/admin/mobile-readings" label="Verifica letture mobili" />
-              <NavItem to="/admin/meta-business" label="Meta Business" />
-              <NavItem to="/admin/contabilita" label="Contabilità" />
+              <NavItem to="/admin/tariffe" label="Tariffe Casa Idrica" icon={Tags} />
+              <NavItem
+                to="/admin/mobile-readings"
+                label="Verifica letture mobili"
+                icon={ClipboardCheck}
+              />
+              <NavItem
+                to="/admin/meta-business"
+                label="Meta Business"
+                icon={MessagesSquare}
+              />
+              <NavItem to="/admin/contabilita" label="Contabilità" icon={WalletCards} />
             </div>
+          </div>
 
-            <div className="mt-5 px-3 text-xs text-slate-400 uppercase tracking-wider pb-2">
-              Impostazioni
-            </div>
-
+          <div>
+            <NavSectionTitle>Impostazioni</NavSectionTitle>
             <div className="space-y-1">
               <NavItem
                 to="/admin/tools"
                 label="Geolocalizzazione Condomini"
+                icon={MapPinned}
               />
-              <NavItem to="/admin/password" label="Password" />
+              <NavItem to="/admin/password" label="Password" icon={KeyRound} />
             </div>
+          </div>
 
-            <div className="mt-5 px-1">
+          <div>
+            <NavSectionTitle>Servizi</NavSectionTitle>
+            <div className="px-1">
               <PipelineStatusPanel />
             </div>
           </div>
         </nav>
 
-        <div className="border-t border-slate-200 px-4 py-4">
-          <div className="mb-2 text-xs text-slate-500">
-            Operatore: <span className="font-semibold text-slate-700">{user?.username || "admin"}</span>
+        <div className="border-t border-slate-200/80 bg-slate-50/70 p-4">
+          <div className="mb-3 flex items-center gap-3 px-1">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm">
+              <UserRound className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold text-slate-800">
+                {user?.username || "admin"}
+              </div>
+              <div className="truncate text-[10px] font-medium uppercase tracking-wider text-slate-400">
+                {user?.role || "Operatore"}
+              </div>
+            </div>
           </div>
           <button
             type="button"
             onClick={handleLogout}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
           >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
             Esci
           </button>
         </div>
