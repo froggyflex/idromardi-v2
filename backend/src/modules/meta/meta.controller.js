@@ -43,6 +43,15 @@ exports.saveIntegration = async (req, res) => {
   }
 };
 
+exports.replayUnmatchedEvents = async (req, res) => {
+  try {
+    const replay = await service.replayUnmatchedEvents({ limit: req.body?.limit });
+    res.json({ replay, overview: await service.getOverview() });
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
 exports.setAiMode = async (req, res) => {
   try {
     res.json(await service.setAiMode(req.params.id, req.body?.mode, req.user));

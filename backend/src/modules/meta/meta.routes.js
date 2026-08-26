@@ -22,6 +22,11 @@ protectedRouter.post(
   requireRole("ADMIN"),
   controller.saveIntegration
 );
+protectedRouter.post(
+  "/webhooks/replay",
+  requireRole("ADMIN"),
+  controller.replayUnmatchedEvents
+);
 protectedRouter.patch(
   "/integrations/:id/ai-mode",
   requireRole("ADMIN"),

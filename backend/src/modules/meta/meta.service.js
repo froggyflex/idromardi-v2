@@ -56,7 +56,7 @@ async function audit(conn, { integrationId, actorId, actorKind, action, entityTy
 }
 
 async function getOverview() {
-  const [[counts], [integrations], [channels]] = await Promise.all([
+  const [[counts], [integrations], [channels], [webhookStats], [recentWebhookEvents]] = await Promise.all([
     db.query(`SELECT
       (SELECT COUNT(*) FROM meta_leads WHERE status IN ('NEW', 'CONTACTED', 'QUALIFIED')) AS active_leads,
       (SELECT COUNT(*) FROM meta_conversations WHERE status IN ('OPEN', 'PENDING')) AS open_conversations,
@@ -69,11 +69,26 @@ async function getOverview() {
     db.query(`SELECT id, integration_id, channel_type, external_account_id, display_name, status,
                      created_at, updated_at
               FROM meta_channels ORDER BY channel_type, display_name`),
+    db.query(`SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(processing_status = 'PROCESSED'), 0) AS processed,
+      COALESCE(SUM(processing_status = 'UNMATCHED'), 0) AS unmatched,
+      COALESCE(SUM(processing_status = 'FAILED'), 0) AS failed,
+      MAX(received_at) AS last_received_at,
+      MAX(IF(processing_status = 'PROCESSED', processed_at, NULL)) AS last_processed_at
+      FROM meta_webhook_events`),
+    db.query(`SELECT id, object_type, processing_status, attempt_count, error_message,
+                     received_at, processed_at
+              FROM meta_webhook_events ORDER BY received_at DESC LIMIT 10`),
   ]);
   return {
     counts: counts[0] || {},
     integrations,
     channels,
+    webhookDiagnostics: {
+      ...(webhookStats[0] || {}),
+      recentEvents: recentWebhookEvents,
+    },
     webhookConfigured: Boolean(
       process.env.META_WEBHOOK_VERIFY_TOKEN && process.env.META_APP_SECRET
     ),
@@ -186,6 +201,13 @@ async function saveIntegration(input, actor) {
       details: { channels: channels.length, tokenUpdated: Boolean(token) },
     });
     await conn.commit();
+    if (channels.length) {
+      try {
+        await replayUnmatchedEvents();
+      } catch (replayError) {
+        console.error("Unable to replay unmatched Meta webhooks after saving a channel", replayError);
+      }
+    }
     return getOverview();
   } catch (error) {
     await conn.rollback();
@@ -254,12 +276,11 @@ async function upsertInboundMessage(conn, channel, event) {
     `INSERT INTO meta_conversations
        (id, integration_id, channel_id, contact_id, last_message_at, last_inbound_at,
         reply_window_expires_at, unread_count)
-     VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(?, INTERVAL 24 HOUR), 1)
+     VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(?, INTERVAL 24 HOUR), 0)
      ON DUPLICATE KEY UPDATE
        last_message_at = GREATEST(COALESCE(last_message_at, VALUES(last_message_at)), VALUES(last_message_at)),
        last_inbound_at = GREATEST(COALESCE(last_inbound_at, VALUES(last_inbound_at)), VALUES(last_inbound_at)),
        reply_window_expires_at = DATE_ADD(VALUES(last_inbound_at), INTERVAL 24 HOUR),
-       unread_count = unread_count + 1,
        status = IF(status = 'SPAM', status, 'OPEN')`,
     [
       conversationId,
@@ -275,7 +296,7 @@ async function upsertInboundMessage(conn, channel, event) {
     `SELECT id FROM meta_conversations WHERE channel_id = ? AND contact_id = ? LIMIT 1`,
     [channel.id, contact.id]
   );
-  await conn.query(
+  const [messageInsert] = await conn.query(
     `INSERT IGNORE INTO meta_messages
        (id, conversation_id, channel_id, external_message_id, direction, sender_kind,
         message_type, body_text, payload_json, status, occurred_at)
@@ -291,6 +312,25 @@ async function upsertInboundMessage(conn, channel, event) {
       mysqlDateTime(event.occurredAt),
     ]
   );
+  if (messageInsert.affectedRows) {
+    await conn.query(
+      `UPDATE meta_conversations SET
+         last_message_at = GREATEST(COALESCE(last_message_at, ?), ?),
+         last_inbound_at = GREATEST(COALESCE(last_inbound_at, ?), ?),
+         reply_window_expires_at = DATE_ADD(?, INTERVAL 24 HOUR),
+         unread_count = unread_count + 1,
+         status = IF(status = 'SPAM', status, 'OPEN')
+       WHERE id = ?`,
+      [
+        mysqlDateTime(event.occurredAt),
+        mysqlDateTime(event.occurredAt),
+        mysqlDateTime(event.occurredAt),
+        mysqlDateTime(event.occurredAt),
+        mysqlDateTime(event.occurredAt),
+        conversation.id,
+      ]
+    );
+  }
 }
 
 async function upsertLead(conn, channel, event) {
@@ -332,6 +372,67 @@ async function applyStatus(conn, channel, event) {
   );
 }
 
+async function processWebhookPayload(conn, payload) {
+  let matched = 0;
+  let unmatched = 0;
+  const events = webhook.normalizeWebhook(payload);
+  for (const event of events) {
+    const channel = await findChannel(conn, event.channelType, event.accountId);
+    if (!channel) {
+      unmatched += 1;
+      continue;
+    }
+    matched += 1;
+    if (event.kind === "MESSAGE") await upsertInboundMessage(conn, channel, event);
+    if (event.kind === "LEAD") await upsertLead(conn, channel, event);
+    if (event.kind === "STATUS") await applyStatus(conn, channel, event);
+  }
+  return { events: events.length, matched, unmatched };
+}
+
+async function replayUnmatchedEvents({ limit = 100 } = {}) {
+  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
+  const [rows] = await db.query(
+    `SELECT id, payload_json, attempt_count
+     FROM meta_webhook_events
+     WHERE processing_status = 'UNMATCHED'
+     ORDER BY received_at ASC LIMIT ?`,
+    [safeLimit]
+  );
+  let processed = 0;
+  let stillUnmatched = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const result = await processWebhookPayload(conn, parseJson(row.payload_json) || {});
+      const status = result.unmatched ? "UNMATCHED" : "PROCESSED";
+      await conn.query(
+        `UPDATE meta_webhook_events SET processing_status = ?, attempt_count = ?,
+         error_message = NULL, processed_at = IF(? = 'PROCESSED', CURRENT_TIMESTAMP(3), processed_at)
+         WHERE id = ?`,
+        [status, Number(row.attempt_count || 0) + 1, status, row.id]
+      );
+      await conn.commit();
+      if (status === "PROCESSED") processed += 1;
+      else stillUnmatched += 1;
+    } catch (error) {
+      await conn.rollback();
+      failed += 1;
+      await db.query(
+        `UPDATE meta_webhook_events SET processing_status = 'FAILED', attempt_count = ?,
+         error_message = ? WHERE id = ?`,
+        [Number(row.attempt_count || 0) + 1, String(error.message || error).slice(0, 1000), row.id]
+      );
+    } finally {
+      conn.release();
+    }
+  }
+  return { examined: rows.length, processed, stillUnmatched, failed };
+}
+
 async function ingestWebhook(rawBody, payload) {
   const key = webhook.eventKey(rawBody);
   const webhookId = crypto.randomUUID();
@@ -343,27 +444,16 @@ async function ingestWebhook(rawBody, payload) {
   if (!insert.affectedRows) return { accepted: true, duplicate: true };
 
   const conn = await db.getConnection();
-  let unmatched = 0;
   try {
     await conn.beginTransaction();
-    const events = webhook.normalizeWebhook(payload);
-    for (const event of events) {
-      const channel = await findChannel(conn, event.channelType, event.accountId);
-      if (!channel) {
-        unmatched += 1;
-        continue;
-      }
-      if (event.kind === "MESSAGE") await upsertInboundMessage(conn, channel, event);
-      if (event.kind === "LEAD") await upsertLead(conn, channel, event);
-      if (event.kind === "STATUS") await applyStatus(conn, channel, event);
-    }
+    const result = await processWebhookPayload(conn, payload);
     await conn.query(
       `UPDATE meta_webhook_events SET processing_status = ?, attempt_count = 1,
        processed_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-      [unmatched ? "UNMATCHED" : "PROCESSED", webhookId]
+      [result.unmatched ? "UNMATCHED" : "PROCESSED", webhookId]
     );
     await conn.commit();
-    return { accepted: true, duplicate: false, unmatched };
+    return { accepted: true, duplicate: false, ...result };
   } catch (error) {
     await conn.rollback();
     await db.query(
@@ -817,6 +907,7 @@ module.exports = {
   processNextOutbound,
   processNextLead,
   queueMessage,
+  replayUnmatchedEvents,
   saveIntegration,
   setAiMode,
   updateConversation,

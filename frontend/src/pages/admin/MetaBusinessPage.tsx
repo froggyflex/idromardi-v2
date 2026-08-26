@@ -25,6 +25,29 @@ type Integration = {
   graph_api_version?: string | null;
   has_access_token: number;
   last_error?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type MetaChannel = {
+  id: string;
+  integration_id: string;
+  channel_type: string;
+  external_account_id: string;
+  display_name?: string | null;
+  status: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type WebhookEventSummary = {
+  id: string;
+  object_type?: string | null;
+  processing_status: "RECEIVED" | "PROCESSED" | "UNMATCHED" | "FAILED";
+  attempt_count: number;
+  error_message?: string | null;
+  received_at: string;
+  processed_at?: string | null;
 };
 
 type Overview = {
@@ -35,13 +58,16 @@ type Overview = {
     awaiting_approval?: number;
   };
   integrations: Integration[];
-  channels: Array<{
-    id: string;
-    integration_id: string;
-    channel_type: string;
-    display_name?: string;
-    status: string;
-  }>;
+  channels: MetaChannel[];
+  webhookDiagnostics: {
+    total?: number;
+    processed?: number;
+    unmatched?: number;
+    failed?: number;
+    last_received_at?: string | null;
+    last_processed_at?: string | null;
+    recentEvents: WebhookEventSummary[];
+  };
   webhookConfigured: boolean;
   encryptionConfigured: boolean;
 };
@@ -86,9 +112,27 @@ const EMPTY_OVERVIEW: Overview = {
   counts: {},
   integrations: [],
   channels: [],
+  webhookDiagnostics: { recentEvents: [] },
   webhookConfigured: false,
   encryptionConfigured: false,
 };
+
+function formFromOverview(overview: Overview) {
+  const integration = overview.integrations[0];
+  const channel = integration
+    ? overview.channels.find((item) => item.integration_id === integration.id)
+    : undefined;
+  return {
+    name: integration?.name || "Meta Business",
+    businessAccountId: integration?.business_account_id || "",
+    appId: integration?.app_id || "",
+    graphApiVersion: integration?.graph_api_version || "",
+    accessToken: "",
+    channelType: channel?.channel_type || "WHATSAPP",
+    externalAccountId: channel?.external_account_id || "",
+    displayName: channel?.display_name || "",
+  };
+}
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
@@ -135,6 +179,7 @@ export default function MetaBusinessPage() {
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [replaying, setReplaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -152,6 +197,10 @@ export default function MetaBusinessPage() {
     () => conversations.find((item) => item.id === selectedId) || null,
     [conversations, selectedId]
   );
+  const savedIntegration = overview.integrations[0] || null;
+  const savedChannel = savedIntegration
+    ? overview.channels.find((item) => item.integration_id === savedIntegration.id) || null
+    : null;
   const connected = overview.integrations.some((item) => item.status === "CONNECTED");
 
   const loadAll = useCallback(async () => {
@@ -164,6 +213,7 @@ export default function MetaBusinessPage() {
         api.get<{ leads: Lead[] }>("/meta/leads?status=ALL"),
       ]);
       setOverview(overviewResponse.data);
+      setForm(formFromOverview(overviewResponse.data));
       setConversations(conversationsResponse.data.conversations || []);
       setLeads(leadsResponse.data.leads || []);
       setSelectedId((current) =>
@@ -241,10 +291,42 @@ export default function MetaBusinessPage() {
       };
       const response = await api.post<Overview>("/meta/integrations", payload);
       setOverview(response.data);
-      setForm((current) => ({ ...current, accessToken: "" }));
+      setForm(formFromOverview(response.data));
       setNotice("Configurazione salvata. Il token non verrà mai mostrato nuovamente.");
     } catch (requestError: unknown) {
       setError(requestErrorMessage(requestError, "Configurazione non salvata."));
+    }
+  }
+
+  async function replayWebhooks() {
+    setReplaying(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await api.post<{
+        replay: { examined: number; processed: number; stillUnmatched: number; failed: number };
+        overview: Overview;
+      }>("/meta/webhooks/replay", { limit: 100 });
+      setOverview(response.data.overview);
+      setForm(formFromOverview(response.data.overview));
+      const result = response.data.replay;
+      setNotice(
+        `Webhook controllati: ${result.examined}. Recuperati: ${result.processed}. ` +
+          `Non abbinati: ${result.stillUnmatched}. Errori: ${result.failed}.`
+      );
+      const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
+        "/meta/conversations?status=ALL"
+      );
+      setConversations(conversationsResponse.data.conversations || []);
+      setSelectedId((current) =>
+        current && conversationsResponse.data.conversations.some((item) => item.id === current)
+          ? current
+          : conversationsResponse.data.conversations[0]?.id || null
+      );
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, "Riprocessamento webhook non riuscito."));
+    } finally {
+      setReplaying(false);
     }
   }
 
@@ -538,6 +620,58 @@ export default function MetaBusinessPage() {
         <div className="grid gap-5 xl:grid-cols-[1fr_1.15fr]">
           <div className="space-y-5">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-bold text-slate-900">Configurazione salvata</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Questi sono i valori effettivamente letti dal database.
+                  </p>
+                </div>
+                {savedIntegration && (
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                      savedIntegration.status === "CONNECTED"
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-amber-100 text-amber-800"
+                    }`}
+                  >
+                    {savedIntegration.status}
+                  </span>
+                )}
+              </div>
+              {!savedIntegration ? (
+                <p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
+                  Nessuna connessione salvata.
+                </p>
+              ) : (
+                <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {[
+                    ["Nome", savedIntegration.name],
+                    ["Business / WABA ID", savedIntegration.business_account_id || "—"],
+                    ["Meta App ID", savedIntegration.app_id || "—"],
+                    ["Graph API", savedIntegration.graph_api_version || "—"],
+                    ["Tipo canale", savedChannel?.channel_type || "—"],
+                    ["Phone Number / Page ID", savedChannel?.external_account_id || "—"],
+                    ["Nome canale", savedChannel?.display_name || "—"],
+                    ["Stato canale", savedChannel?.status || "—"],
+                    [
+                      "Access token",
+                      savedIntegration.has_access_token ? "Salvato e cifrato" : "Non presente",
+                    ],
+                    ["Ultimo salvataggio", formatDate(savedIntegration.updated_at)],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="rounded-xl bg-slate-50 px-3 py-2.5">
+                      <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                        {label}
+                      </dt>
+                      <dd className="mt-1 break-all text-sm font-semibold text-slate-800">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="font-bold text-slate-900">Stato sicurezza</h2>
               <div className="mt-4 space-y-3">
                 {[
@@ -553,6 +687,69 @@ export default function MetaBusinessPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-bold text-slate-900">Attività webhook</h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Conferma se Meta sta realmente consegnando gli eventi alla piattaforma.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void replayWebhooks()}
+                  disabled={!isAdmin || replaying || !Number(overview.webhookDiagnostics.unmatched || 0)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${replaying ? "animate-spin" : ""}`} />
+                  Riprocessa
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2">
+                {[
+                  ["Elaborati", overview.webhookDiagnostics.processed || 0, "text-emerald-700"],
+                  ["Non abbinati", overview.webhookDiagnostics.unmatched || 0, "text-amber-700"],
+                  ["Errori", overview.webhookDiagnostics.failed || 0, "text-rose-700"],
+                ].map(([label, value, color]) => (
+                  <div key={String(label)} className="rounded-xl bg-slate-50 p-3 text-center">
+                    <div className={`text-xl font-black ${color}`}>{String(value)}</div>
+                    <div className="mt-1 text-[10px] font-semibold text-slate-500">{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-2">
+                {overview.webhookDiagnostics.recentEvents.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">
+                    Nessun webhook ricevuto. Se hai appena risposto su WhatsApp, controlla App Secret e sottoscrizione messages.
+                  </div>
+                ) : (
+                  overview.webhookDiagnostics.recentEvents.slice(0, 5).map((event) => (
+                    <div key={event.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-bold text-slate-700">
+                          {event.object_type || "Evento Meta"}
+                        </div>
+                        <div className="text-[10px] text-slate-500">{formatDate(event.received_at)}</div>
+                        {event.error_message && (
+                          <div className="mt-1 truncate text-[10px] text-rose-700">{event.error_message}</div>
+                        )}
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${
+                          event.processing_status === "PROCESSED"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : event.processing_status === "UNMATCHED"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-rose-100 text-rose-800"
+                        }`}
+                      >
+                        {event.processing_status}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
             <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
@@ -572,7 +769,7 @@ export default function MetaBusinessPage() {
           <form onSubmit={saveIntegration} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="font-bold text-slate-900">Collega un canale Meta</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Disponibile all’amministratore quando l’accesso al Business sarà approvato.
+              I campi mostrano la configurazione salvata. Modificali e salva per aggiornarla.
             </p>
             <fieldset disabled={!isAdmin} className="mt-5 grid gap-4 sm:grid-cols-2 disabled:opacity-60">
               {[
@@ -598,9 +795,16 @@ export default function MetaBusinessPage() {
                   autoComplete="new-password"
                   value={form.accessToken}
                   onChange={(event) => setForm((current) => ({ ...current, accessToken: event.target.value }))}
-                  placeholder="Token di sistema o Page access token"
+                  placeholder={
+                    savedIntegration?.has_access_token
+                      ? "Token già salvato — compila solo per sostituirlo"
+                      : "Token di sistema o Page access token"
+                  }
                   className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 />
+                <span className="mt-1 block text-[10px] text-slate-500">
+                  Per sicurezza il valore non viene mai restituito dal server.
+                </span>
               </label>
               <label className="block">
                 <span className="text-xs font-semibold text-slate-600">Canale</span>
