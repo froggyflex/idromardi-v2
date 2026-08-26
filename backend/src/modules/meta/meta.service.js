@@ -332,7 +332,8 @@ async function upsertInboundMessage(conn, channel, event) {
        last_message_at = GREATEST(COALESCE(last_message_at, VALUES(last_message_at)), VALUES(last_message_at)),
        last_inbound_at = GREATEST(COALESCE(last_inbound_at, VALUES(last_inbound_at)), VALUES(last_inbound_at)),
        reply_window_expires_at = DATE_ADD(VALUES(last_inbound_at), INTERVAL 24 HOUR),
-       status = IF(status = 'SPAM', status, 'OPEN')`,
+       status = IF(status = 'SPAM', status, 'OPEN'),
+       archived_at = IF(status = 'SPAM', archived_at, NULL)`,
     [
       conversationId,
       channel.integration_id,
@@ -370,7 +371,8 @@ async function upsertInboundMessage(conn, channel, event) {
          last_inbound_at = GREATEST(COALESCE(last_inbound_at, ?), ?),
          reply_window_expires_at = DATE_ADD(?, INTERVAL 24 HOUR),
          unread_count = unread_count + 1,
-         status = IF(status = 'SPAM', status, 'OPEN')
+         status = IF(status = 'SPAM', status, 'OPEN'),
+         archived_at = IF(status = 'SPAM', archived_at, NULL)
        WHERE id = ?`,
       [
         mysqlDateTime(event.occurredAt),
@@ -747,19 +749,23 @@ async function ingestWebhook(rawBody, payload) {
   }
 }
 
-async function listConversations({ status = "OPEN", limit = 100 } = {}) {
+async function listConversations({ status = "ACTIVE", limit = 100 } = {}) {
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
+  const normalizedStatus = String(status).toUpperCase();
   const params = [];
   let statusClause = "";
-  if (status !== "ALL") {
+  if (normalizedStatus === "ACTIVE") {
+    statusClause = "WHERE cv.status <> 'ARCHIVED'";
+  } else if (normalizedStatus !== "ALL") {
     statusClause = "WHERE cv.status = ?";
-    params.push(String(status).toUpperCase());
+    params.push(normalizedStatus);
   }
   params.push(safeLimit);
   const [rows] = await db.query(
     `SELECT cv.*, c.display_name, c.external_contact_id, c.phone, c.email,
             ch.channel_type, ch.display_name AS channel_name,
             last_message.body_text AS last_message_text,
+            last_message.deleted_at AS last_message_deleted_at,
             last_message.sender_kind AS last_message_sender
      FROM meta_conversations cv
      JOIN meta_contacts c ON c.id = cv.contact_id
@@ -831,11 +837,13 @@ async function updateConversation(conversationId, input, actor) {
   const params = [];
   if (input.status !== undefined) {
     const status = String(input.status).toUpperCase();
-    if (!new Set(["OPEN", "PENDING", "CLOSED", "SPAM"]).has(status)) {
+    if (!new Set(["OPEN", "PENDING", "CLOSED", "SPAM", "ARCHIVED"]).has(status)) {
       throw httpError(400, "Stato conversazione non valido", "META_CONVERSATION_STATUS_INVALID");
     }
     updates.push("status = ?");
     params.push(status);
+    updates.push(status === "ARCHIVED" ? "archived_at = CURRENT_TIMESTAMP(3)" : "archived_at = NULL");
+    if (status === "ARCHIVED") updates.push("unread_count = 0");
   }
   if (input.aiPaused !== undefined) {
     updates.push("ai_paused = ?");
@@ -865,6 +873,51 @@ async function updateConversation(conversationId, input, actor) {
   return { ok: true };
 }
 
+async function deleteMessage(conversationId, messageId, actor) {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[message]] = await conn.query(
+      `SELECT m.id, m.direction, m.status, m.deleted_at, cv.integration_id
+       FROM meta_messages m
+       JOIN meta_conversations cv ON cv.id = m.conversation_id
+       WHERE m.id = ? AND m.conversation_id = ? LIMIT 1 FOR UPDATE`,
+      [messageId, conversationId]
+    );
+    if (!message) throw httpError(404, "Messaggio non trovato", "META_MESSAGE_NOT_FOUND");
+    if (message.deleted_at) {
+      await conn.commit();
+      return { ok: true, alreadyDeleted: true };
+    }
+    await conn.query(
+      `UPDATE meta_outbound_jobs SET state = 'CANCELLED', last_error = 'Messaggio eliminato dall’operatore'
+       WHERE message_id = ? AND state IN ('WAITING_APPROVAL', 'READY', 'RETRY')`,
+      [messageId]
+    );
+    await conn.query(
+      `UPDATE meta_messages SET body_text = NULL, payload_json = NULL, error_message = NULL,
+       deleted_at = CURRENT_TIMESTAMP(3), deleted_by = ? WHERE id = ?`,
+      [actor.sub, messageId]
+    );
+    await audit(conn, {
+      integrationId: message.integration_id,
+      actorId: actor.sub,
+      actorKind: "HUMAN",
+      action: "MESSAGE_CONTENT_DELETED",
+      entityType: "MESSAGE",
+      entityId: messageId,
+      details: { conversationId, direction: message.direction, previousStatus: message.status },
+    });
+    await conn.commit();
+    return { ok: true, alreadyDeleted: false };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
 async function queueMessage(conversationId, input, actor) {
   const text = String(input.text || "").trim();
   const senderKind = String(input.senderKind || "HUMAN").toUpperCase();
@@ -885,6 +938,9 @@ async function queueMessage(conversationId, input, actor) {
     [conversationId]
   );
   if (!conversation) throw httpError(404, "Conversazione non trovata", "META_CONVERSATION_NOT_FOUND");
+  if (conversation.status === "ARCHIVED") {
+    throw httpError(409, "Ripristina la conversazione prima di rispondere", "META_CONVERSATION_ARCHIVED");
+  }
   if (conversation.integration_status !== "CONNECTED" || conversation.channel_status !== "ACTIVE") {
     throw httpError(409, "Canale Meta non connesso", "META_CHANNEL_NOT_CONNECTED");
   }
@@ -1242,6 +1298,7 @@ async function processNextLead() {
 
 module.exports = {
   approveJob,
+  deleteMessage,
   getOverview,
   ingestWebhook,
   listConversations,

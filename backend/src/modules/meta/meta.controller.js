@@ -84,6 +84,14 @@ exports.listMessages = async (req, res) => {
   }
 };
 
+exports.deleteMessage = async (req, res) => {
+  try {
+    res.json(await service.deleteMessage(req.params.id, req.params.messageId, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
 exports.listLeads = async (req, res) => {
   try {
     res.json(await service.listLeads(req.query || {}));

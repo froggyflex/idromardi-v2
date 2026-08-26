@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   Bot,
   CheckCircle2,
   CircleAlert,
@@ -10,6 +12,7 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  Trash2,
   Users,
 } from "lucide-react";
 import api from "../../api/client";
@@ -85,6 +88,8 @@ type Conversation = {
   last_message_at?: string | null;
   last_message_text?: string | null;
   reply_window_expires_at?: string | null;
+  archived_at?: string | null;
+  last_message_deleted_at?: string | null;
 };
 
 type Message = {
@@ -94,6 +99,8 @@ type Message = {
   body_text?: string | null;
   status: string;
   occurred_at: string;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
 };
 
 type Lead = {
@@ -109,6 +116,7 @@ type Lead = {
 };
 
 type Tab = "INBOX" | "LEADS" | "SETTINGS";
+type ConversationView = "ACTIVE" | "ARCHIVED";
 
 const EMPTY_OVERVIEW: Overview = {
   counts: {},
@@ -174,6 +182,8 @@ export default function MetaBusinessPage() {
   const user = getAuthUser();
   const isAdmin = String(user?.role || "").toUpperCase() === "ADMIN";
   const [tab, setTab] = useState<Tab>("INBOX");
+  const [conversationView, setConversationView] = useState<ConversationView>("ACTIVE");
+  const liveRefreshInFlight = useRef(false);
   const [overview, setOverview] = useState<Overview>(EMPTY_OVERVIEW);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -214,7 +224,9 @@ export default function MetaBusinessPage() {
     try {
       const [overviewResponse, conversationsResponse, leadsResponse] = await Promise.all([
         api.get<Overview>("/meta/overview"),
-        api.get<{ conversations: Conversation[] }>("/meta/conversations?status=ALL"),
+        api.get<{ conversations: Conversation[] }>(
+          `/meta/conversations?status=${conversationView}`
+        ),
         api.get<{ leads: Lead[] }>("/meta/leads?status=ALL"),
       ]);
       setOverview(overviewResponse.data);
@@ -231,7 +243,7 @@ export default function MetaBusinessPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [conversationView]);
 
   useEffect(() => {
     void loadAll();
@@ -249,6 +261,63 @@ export default function MetaBusinessPage() {
         setError(requestError?.response?.data?.error || "Impossibile caricare i messaggi.")
       );
   }, [selectedId]);
+
+  const refreshLiveData = useCallback(async () => {
+    if (document.visibilityState !== "visible" || liveRefreshInFlight.current) return;
+    liveRefreshInFlight.current = true;
+    try {
+      const [overviewResponse, conversationsResponse, messagesResponse, leadsResponse] =
+        await Promise.all([
+          api.get<Overview>("/meta/overview"),
+          api.get<{ conversations: Conversation[] }>(
+            `/meta/conversations?status=${conversationView}`
+          ),
+          selectedId
+            ? api.get<{ messages: Message[] }>(`/meta/conversations/${selectedId}/messages`)
+            : Promise.resolve(null),
+          tab === "LEADS"
+            ? api.get<{ leads: Lead[] }>("/meta/leads?status=ALL")
+            : Promise.resolve(null),
+        ]);
+      const nextConversations = conversationsResponse.data.conversations || [];
+      setOverview(overviewResponse.data);
+      setConversations(nextConversations);
+      if (messagesResponse) setMessages(messagesResponse.data.messages || []);
+      if (leadsResponse) setLeads(leadsResponse.data.leads || []);
+      setSelectedId((current) =>
+        current && nextConversations.some((item) => item.id === current)
+          ? current
+          : nextConversations[0]?.id || null
+      );
+    } catch {
+      // Keep the current UI stable; manual refresh surfaces persistent errors.
+    } finally {
+      liveRefreshInFlight.current = false;
+    }
+  }, [conversationView, selectedId, tab]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refreshLiveData();
+        if (!cancelled) schedule();
+      }, 4000);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshLiveData();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
+    };
+  }, [refreshLiveData]);
 
   async function sendMessage() {
     if (!selected || !draft.trim()) return;
@@ -394,7 +463,7 @@ export default function MetaBusinessPage() {
           `Non abbinati: ${result.stillUnmatched}. Errori: ${result.failed}.`
       );
       const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
-        "/meta/conversations?status=ALL"
+        `/meta/conversations?status=${conversationView}`
       );
       setConversations(conversationsResponse.data.conversations || []);
       setSelectedId((current) =>
@@ -436,7 +505,7 @@ export default function MetaBusinessPage() {
           : "Verifica completata, ma il Phone Number ID salvato non corrisponde ai numeri del WABA."
       );
       const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
-        "/meta/conversations?status=ALL"
+        `/meta/conversations?status=${conversationView}`
       );
       setConversations(conversationsResponse.data.conversations || []);
     } catch (requestError: unknown) {
@@ -478,6 +547,47 @@ export default function MetaBusinessPage() {
       );
     } catch (requestError: unknown) {
       setError(requestErrorMessage(requestError, "Conversazione non aggiornata."));
+    }
+  }
+
+  async function toggleConversationArchive() {
+    if (!selected) return;
+    const restoring = selected.status === "ARCHIVED";
+    setError(null);
+    try {
+      await api.patch(`/meta/conversations/${selected.id}`, {
+        status: restoring ? "OPEN" : "ARCHIVED",
+      });
+      setConversations((current) => current.filter((item) => item.id !== selected.id));
+      setSelectedId(null);
+      setMessages([]);
+      setNotice(restoring ? "Conversazione ripristinata nell’inbox." : "Conversazione archiviata.");
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, "Archivio conversazione non aggiornato."));
+    }
+  }
+
+  async function deleteMessage(message: Message) {
+    if (!selected || message.deleted_at) return;
+    const confirmed = window.confirm(
+      "Eliminare il contenuto di questo messaggio dalla piattaforma? L’operazione viene registrata nell’audit e non elimina eventuali copie già consegnate su WhatsApp."
+    );
+    if (!confirmed) return;
+    setError(null);
+    try {
+      await api.delete(`/meta/conversations/${selected.id}/messages/${message.id}`);
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === message.id
+            ? { ...item, body_text: null, deleted_at: new Date().toISOString() }
+            : item
+        )
+      );
+      setNotice("Contenuto del messaggio eliminato dalla piattaforma.");
+      const overviewResponse = await api.get<Overview>("/meta/overview");
+      setOverview(overviewResponse.data);
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, "Eliminazione del messaggio non riuscita."));
     }
   }
 
@@ -598,13 +708,37 @@ export default function MetaBusinessPage() {
       {tab === "INBOX" && (
         <div className="grid min-h-[560px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[360px_1fr]">
           <div className="border-b border-slate-200 lg:border-b-0 lg:border-r">
-            <div className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-900">
-              Inbox unificata
+            <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
+              <div className="text-sm font-bold text-slate-900">
+                {conversationView === "ACTIVE" ? "Inbox unificata" : "Archivio"}
+              </div>
+              <div className="flex rounded-lg bg-slate-100 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setConversationView("ACTIVE")}
+                  className={`rounded-md px-2.5 py-1 text-[10px] font-bold ${
+                    conversationView === "ACTIVE" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                  }`}
+                >
+                  Inbox
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConversationView("ARCHIVED")}
+                  className={`rounded-md px-2.5 py-1 text-[10px] font-bold ${
+                    conversationView === "ARCHIVED" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                  }`}
+                >
+                  Archivio
+                </button>
+              </div>
             </div>
             <div className="max-h-[560px] overflow-auto">
               {!conversations.length && (
                 <div className="p-8 text-center text-sm text-slate-500">
-                  Le conversazioni compariranno dopo il collegamento e il primo webhook.
+                  {conversationView === "ARCHIVED"
+                    ? "Nessuna conversazione archiviata."
+                    : "Le conversazioni compariranno dopo il collegamento e il primo webhook."}
                 </div>
               )}
               {conversations.map((conversation) => (
@@ -633,7 +767,9 @@ export default function MetaBusinessPage() {
                     </span>
                   </div>
                   <p className="mt-2 truncate text-sm text-slate-500">
-                    {conversation.last_message_text || "Nessuna anteprima"}
+                    {conversation.last_message_deleted_at
+                      ? "Messaggio eliminato"
+                      : conversation.last_message_text || "Nessuna anteprima"}
                   </p>
                 </button>
               ))}
@@ -659,13 +795,30 @@ export default function MetaBusinessPage() {
                       </span>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void toggleConversationStatus()}
-                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                  >
-                    {selected.status === "CLOSED" ? "Riapri" : "Chiudi"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {selected.status !== "ARCHIVED" && (
+                      <button
+                        type="button"
+                        onClick={() => void toggleConversationStatus()}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                      >
+                        {selected.status === "CLOSED" ? "Riapri" : "Chiudi"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void toggleConversationArchive()}
+                      title={selected.status === "ARCHIVED" ? "Ripristina conversazione" : "Archivia conversazione"}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      {selected.status === "ARCHIVED" ? (
+                        <ArchiveRestore className="h-3.5 w-3.5" />
+                      ) : (
+                        <Archive className="h-3.5 w-3.5" />
+                      )}
+                      {selected.status === "ARCHIVED" ? "Ripristina" : "Archivia"}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex-1 space-y-3 overflow-auto bg-slate-50 p-5">
                   {messages.map((message) => (
@@ -673,40 +826,72 @@ export default function MetaBusinessPage() {
                       key={message.id}
                       className={`flex ${message.direction === "OUTBOUND" ? "justify-end" : "justify-start"}`}
                     >
-                      <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
-                          message.direction === "OUTBOUND"
-                            ? "bg-blue-600 text-white"
-                            : "border border-slate-200 bg-white text-slate-800"
-                        }`}
-                      >
-                        <div className="whitespace-pre-wrap">{message.body_text || "Contenuto multimediale"}</div>
-                        <div className={`mt-1 text-[10px] ${message.direction === "OUTBOUND" ? "text-blue-100" : "text-slate-400"}`}>
-                          {message.sender_kind} · {message.status} · {formatDate(message.occurred_at)}
+                      <div className={`group flex max-w-[85%] items-center gap-2 ${
+                        message.direction === "OUTBOUND" ? "flex-row-reverse" : ""
+                      }`}>
+                        <div
+                          className={`rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                            message.deleted_at
+                              ? "border border-slate-200 bg-slate-100 text-slate-500"
+                              : message.direction === "OUTBOUND"
+                                ? "bg-blue-600 text-white"
+                                : "border border-slate-200 bg-white text-slate-800"
+                          }`}
+                        >
+                          <div className={`whitespace-pre-wrap ${message.deleted_at ? "italic" : ""}`}>
+                            {message.deleted_at
+                              ? "Messaggio eliminato"
+                              : message.body_text || "Contenuto multimediale"}
+                          </div>
+                          <div className={`mt-1 text-[10px] ${
+                            message.deleted_at
+                              ? "text-slate-400"
+                              : message.direction === "OUTBOUND"
+                                ? "text-blue-100"
+                                : "text-slate-400"
+                          }`}>
+                            {message.sender_kind} · {message.status} · {formatDate(message.occurred_at)}
+                          </div>
                         </div>
+                        {!message.deleted_at && (
+                          <button
+                            type="button"
+                            onClick={() => void deleteMessage(message)}
+                            title="Elimina contenuto dalla piattaforma"
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="border-t border-slate-200 p-4">
-                  <div className="flex gap-2">
-                    <textarea
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      placeholder="Scrivi una risposta..."
-                      rows={2}
-                      className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void sendMessage()}
-                      disabled={sending || !draft.trim() || !connected}
-                      className="inline-flex w-12 items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {sending ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                    </button>
+                {selected.status === "ARCHIVED" ? (
+                  <div className="border-t border-slate-200 bg-slate-50 p-4 text-center text-xs text-slate-500">
+                    Ripristina la conversazione per inviare una risposta.
                   </div>
-                </div>
+                ) : (
+                  <div className="border-t border-slate-200 p-4">
+                    <div className="flex gap-2">
+                      <textarea
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder="Scrivi una risposta..."
+                        rows={2}
+                        className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void sendMessage()}
+                        disabled={sending || !draft.trim() || !connected}
+                        className="inline-flex w-12 items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {sending ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>

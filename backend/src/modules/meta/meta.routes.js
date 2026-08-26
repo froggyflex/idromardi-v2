@@ -52,6 +52,11 @@ protectedRouter.get(
   requireRole("ADMIN", "REVIEWER"),
   controller.listMessages
 );
+protectedRouter.delete(
+  "/conversations/:id/messages/:messageId",
+  requireRole("ADMIN", "REVIEWER"),
+  controller.deleteMessage
+);
 protectedRouter.post(
   "/conversations/:id/messages",
   requireRole("ADMIN", "REVIEWER"),

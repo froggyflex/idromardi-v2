@@ -20,6 +20,35 @@ async function runMetaMigration() {
       "../../database/migrations/003_meta_crm_foundation.sql"
     );
     await connection.query(fs.readFileSync(migrationPath, "utf8"));
+    await connection.query(`CREATE TABLE IF NOT EXISTS meta_schema_migrations (
+      migration_name VARCHAR(191) NOT NULL,
+      applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (migration_name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci`);
+    const migrations = ["004_meta_archive_and_message_deletion.sql"];
+    for (const migrationName of migrations) {
+      const [applied] = await connection.execute(
+        `SELECT migration_name FROM meta_schema_migrations WHERE migration_name = ? LIMIT 1`,
+        [migrationName]
+      );
+      if (applied.length) continue;
+      const nextMigrationPath = path.resolve(
+        __dirname,
+        `../../database/migrations/${migrationName}`
+      );
+      await connection.beginTransaction();
+      try {
+        await connection.query(fs.readFileSync(nextMigrationPath, "utf8"));
+        await connection.execute(
+          `INSERT INTO meta_schema_migrations (migration_name) VALUES (?)`,
+          [migrationName]
+        );
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      }
+    }
     const [rows] = await connection.execute(
       `SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'meta\\_%'`
