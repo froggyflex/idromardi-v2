@@ -484,6 +484,64 @@ async function replayUnmatchedEvents({ limit = 100 } = {}) {
   return { examined: rows.length, processed, stillUnmatched, failed };
 }
 
+async function synchronizeVerifiedChannelCredentials(conn, sourceIntegrationId, externalAccountIds) {
+  const accountIds = [...new Set((externalAccountIds || []).map(String).filter(Boolean))];
+  if (!accountIds.length) return { integrationsUpdated: 0, jobsRecovered: 0 };
+  const [[source]] = await conn.query(
+    `SELECT business_account_id, app_id, graph_api_version, encrypted_access_token,
+            token_iv, token_auth_tag, token_expires_at
+     FROM meta_integrations WHERE id = ? LIMIT 1`,
+    [sourceIntegrationId]
+  );
+  if (!source?.encrypted_access_token) {
+    throw httpError(400, "Credenziale verificata non disponibile", "META_VERIFIED_TOKEN_MISSING");
+  }
+  const placeholders = accountIds.map(() => "?").join(", ");
+  const [integrationUpdate] = await conn.query(
+    `UPDATE meta_integrations i
+     JOIN meta_channels ch ON ch.integration_id = i.id
+     SET i.business_account_id = ?, i.app_id = ?, i.graph_api_version = ?,
+         i.encrypted_access_token = ?, i.token_iv = ?, i.token_auth_tag = ?,
+         i.token_expires_at = ?, i.status = 'CONNECTED', i.last_error = NULL
+     WHERE ch.channel_type = 'WHATSAPP'
+       AND ch.external_account_id IN (${placeholders})`,
+    [
+      source.business_account_id,
+      source.app_id,
+      source.graph_api_version,
+      source.encrypted_access_token,
+      source.token_iv,
+      source.token_auth_tag,
+      source.token_expires_at,
+      ...accountIds,
+    ]
+  );
+  await conn.query(
+    `UPDATE meta_channels SET status = 'ACTIVE'
+     WHERE channel_type = 'WHATSAPP' AND external_account_id IN (${placeholders})`,
+    accountIds
+  );
+  const [jobRecovery] = await conn.query(
+    `UPDATE meta_outbound_jobs j
+     JOIN meta_messages m ON m.id = j.message_id
+     JOIN meta_channels ch ON ch.id = m.channel_id
+     SET j.state = 'READY', j.attempt_count = 0, j.next_attempt_at = NULL,
+         j.locked_at = NULL, j.last_error = NULL,
+         m.status = 'QUEUED', m.error_message = NULL
+     WHERE ch.channel_type = 'WHATSAPP'
+       AND ch.external_account_id IN (${placeholders})
+       AND j.state IN ('RETRY', 'FAILED')
+       AND (j.last_error LIKE '%Authentication Error%'
+         OR j.last_error LIKE '%code 190%'
+         OR j.last_error LIKE '%OAuthException%')`,
+    accountIds
+  );
+  return {
+    integrationsUpdated: Number(integrationUpdate.affectedRows || 0),
+    jobsRecovered: Number(jobRecovery.affectedRows || 0),
+  };
+}
+
 async function verifyWhatsAppIntegration(integrationId, actor) {
   const [[integration]] = await db.query(
     `SELECT id, business_account_id, app_id, graph_api_version,
@@ -583,6 +641,7 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
           : null;
 
     const conn = await db.getConnection();
+    let credentialSync = { integrationsUpdated: 0, jobsRecovered: 0 };
     try {
       await conn.beginTransaction();
       await conn.query(
@@ -594,6 +653,13 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
           phoneIds.has(String(channel.external_account_id)) ? "ACTIVE" : "ERROR",
           channel.id,
         ]);
+      }
+      if (fullyConnected) {
+        credentialSync = await synchronizeVerifiedChannelCredentials(
+          conn,
+          integrationId,
+          channels.map((channel) => channel.external_account_id)
+        );
       }
       await audit(conn, {
         integrationId,
@@ -607,6 +673,7 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
           configuredChannels: channels.length,
           matchedChannels: matchedChannelIds.length,
           phoneIds: phones.map((phone) => phone.id),
+          credentialSync,
         },
       });
       await conn.commit();
@@ -632,6 +699,7 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
       configuredChannels: channels.length,
       matchedChannels: matchedChannelIds.length,
       fullyConnected,
+      credentialSync,
       replay,
       overview: await getOverview(),
     };

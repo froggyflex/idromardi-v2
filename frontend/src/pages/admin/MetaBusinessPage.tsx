@@ -420,6 +420,7 @@ export default function MetaBusinessPage() {
         phones: Array<{ id: string; displayPhoneNumber?: string | null }>;
         matchedChannels: number;
         fullyConnected: boolean;
+        credentialSync?: { integrationsUpdated: number; jobsRecovered: number };
         overview: Overview;
       }>(`/meta/integrations/${savedIntegration.id}/verify-whatsapp`);
       setOverview(response.data.overview);
@@ -429,7 +430,9 @@ export default function MetaBusinessPage() {
         .join(", ");
       setNotice(
         response.data.fullyConnected
-          ? `WhatsApp verificato e sottoscritto correttamente${phoneSummary ? `: ${phoneSummary}` : "."}`
+          ? `WhatsApp verificato e sottoscritto correttamente${phoneSummary ? `: ${phoneSummary}.` : "."} ` +
+            `Connessioni sincronizzate: ${response.data.credentialSync?.integrationsUpdated || 0}. ` +
+            `Messaggi recuperati: ${response.data.credentialSync?.jobsRecovered || 0}.`
           : "Verifica completata, ma il Phone Number ID salvato non corrisponde ai numeri del WABA."
       );
       const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
