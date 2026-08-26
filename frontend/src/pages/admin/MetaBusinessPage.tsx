@@ -268,11 +268,14 @@ export default function MetaBusinessPage() {
           processed: boolean;
           sent?: boolean;
           error?: string;
-        }>("/meta/outbox/process", { jobId: queued.data.jobId });
+          detail?: string;
+        }>("/meta/outbox/process", { jobId: queued.data.jobId, force: true });
         if (delivery.data.sent) {
           setNotice("Messaggio inviato correttamente tramite WhatsApp.");
         } else if (delivery.data.processed && delivery.data.error) {
           setError(`Messaggio mantenuto in coda: ${delivery.data.error}`);
+        } else if (delivery.data.detail) {
+          setError(`Messaggio in coda: ${delivery.data.detail}`);
         } else {
           setNotice("Messaggio in elaborazione nella coda sicura.");
         }
@@ -305,13 +308,18 @@ export default function MetaBusinessPage() {
       const initialCount = Math.min(20, Number(overview.counts.queued_messages || 1));
       let sent = 0;
       let lastError: string | null = null;
+      let lastDetail: string | null = null;
       for (let index = 0; index < initialCount; index += 1) {
         const response = await api.post<{
           processed: boolean;
           sent?: boolean;
           error?: string;
-        }>("/meta/outbox/process", {});
-        if (!response.data.processed) break;
+          detail?: string;
+        }>("/meta/outbox/process", { force: true });
+        if (!response.data.processed) {
+          lastDetail = response.data.detail || null;
+          break;
+        }
         if (response.data.sent) sent += 1;
         if (response.data.error) lastError = response.data.error;
       }
@@ -324,7 +332,13 @@ export default function MetaBusinessPage() {
       setOverview(overviewResponse.data);
       if (messagesResponse) setMessages(messagesResponse.data.messages || []);
       if (lastError) setError(`Coda elaborata parzialmente: ${lastError}`);
-      else setNotice(`Messaggi inviati dalla coda: ${sent}.`);
+      else if (sent > 0) setNotice(`Messaggi inviati dalla coda: ${sent}.`);
+      else if (lastDetail) setError(`Coda non elaborata: ${lastDetail}`);
+      else if (!Number(overviewResponse.data.counts.queued_messages || 0)) {
+        setNotice("La coda è già stata elaborata dal worker automatico.");
+      } else {
+        setError("Nessun messaggio inviato: controlla lo stato della connessione e del canale.");
+      }
     } catch (requestError: unknown) {
       setError(requestErrorMessage(requestError, "Elaborazione della coda non riuscita."));
     } finally {

@@ -126,7 +126,12 @@ exports.reviewJob = async (req, res) => {
 
 exports.processOutbox = async (req, res) => {
   try {
-    res.json(await service.processNextOutbound({ jobId: req.body?.jobId }));
+    res.json(
+      await service.processNextOutbound({
+        jobId: req.body?.jobId,
+        force: req.body?.force === true,
+      })
+    );
   } catch (error) {
     sendError(res, error);
   }

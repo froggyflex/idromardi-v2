@@ -844,11 +844,26 @@ async function approveJob(jobId, approved, actor) {
   }
 }
 
-async function processNextOutbound({ jobId = null } = {}) {
+async function processNextOutbound({ jobId = null, force = false } = {}) {
   const conn = await db.getConnection();
   let job;
   try {
     await conn.beginTransaction();
+    await conn.query(
+      `UPDATE meta_outbound_jobs SET state = 'RETRY', locked_at = NULL,
+       next_attempt_at = NULL,
+       last_error = COALESCE(last_error, 'Invio interrotto: recuperato automaticamente')
+       WHERE state = 'PROCESSING'
+         AND locked_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 2 MINUTE)`
+    );
+    if (force) {
+      const forceClause = jobId ? "AND id = ?" : "";
+      await conn.query(
+        `UPDATE meta_outbound_jobs SET next_attempt_at = NULL
+         WHERE state = 'RETRY' ${forceClause}`,
+        jobId ? [String(jobId)] : []
+      );
+    }
     const jobClause = jobId ? "AND j.id = ?" : "";
     const params = jobId ? [String(jobId)] : [];
     const [rows] = await conn.query(
@@ -870,8 +885,52 @@ async function processNextOutbound({ jobId = null } = {}) {
     );
     job = rows[0];
     if (!job) {
+      const diagnosticClause = jobId ? "AND j.id = ?" : "";
+      const [diagnosticRows] = await conn.query(
+        `SELECT j.id, j.state, j.next_attempt_at, j.locked_at, j.last_error,
+                i.status AS integration_status, i.last_error AS integration_error,
+                ch.status AS channel_status, m.status AS message_status
+         FROM meta_outbound_jobs j
+         JOIN meta_messages m ON m.id = j.message_id
+         JOIN meta_conversations cv ON cv.id = m.conversation_id
+         JOIN meta_channels ch ON ch.id = m.channel_id
+         JOIN meta_integrations i ON i.id = j.integration_id
+         WHERE j.state IN ('READY', 'PROCESSING', 'RETRY') ${diagnosticClause}
+         ORDER BY j.created_at LIMIT 1`,
+        jobId ? [String(jobId)] : []
+      );
+      const candidate = diagnosticRows[0] || null;
       await conn.commit();
-      return { processed: false };
+      if (!candidate) return { processed: false, reason: "NO_PENDING_JOB" };
+      if (candidate.integration_status !== "CONNECTED") {
+        return {
+          processed: false,
+          reason: "INTEGRATION_NOT_CONNECTED",
+          detail: candidate.integration_error || `Stato integrazione: ${candidate.integration_status}`,
+        };
+      }
+      if (candidate.channel_status !== "ACTIVE") {
+        return {
+          processed: false,
+          reason: "CHANNEL_NOT_ACTIVE",
+          detail: `Stato canale: ${candidate.channel_status}`,
+        };
+      }
+      if (candidate.state === "PROCESSING") {
+        return {
+          processed: false,
+          reason: "ALREADY_PROCESSING",
+          detail: "Il messaggio è già in elaborazione. Riprova tra due minuti se lo stato non cambia.",
+        };
+      }
+      if (candidate.state === "RETRY") {
+        return {
+          processed: false,
+          reason: "RETRY_SCHEDULED",
+          detail: candidate.last_error || "Messaggio in attesa del prossimo tentativo.",
+        };
+      }
+      return { processed: false, reason: "NOT_ELIGIBLE", detail: candidate.last_error || null };
     }
     await conn.query(
       `UPDATE meta_outbound_jobs SET state = 'PROCESSING', locked_at = CURRENT_TIMESTAMP(3),
