@@ -69,7 +69,7 @@ protectedRouter.post(
 );
 protectedRouter.post(
   "/outbox/process",
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "REVIEWER"),
   controller.processOutbox
 );
 

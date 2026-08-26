@@ -61,7 +61,8 @@ async function getOverview() {
       (SELECT COUNT(*) FROM meta_leads WHERE status IN ('NEW', 'CONTACTED', 'QUALIFIED')) AS active_leads,
       (SELECT COUNT(*) FROM meta_conversations WHERE status IN ('OPEN', 'PENDING')) AS open_conversations,
       (SELECT COALESCE(SUM(unread_count), 0) FROM meta_conversations) AS unread_messages,
-      (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state = 'WAITING_APPROVAL') AS awaiting_approval`),
+      (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state = 'WAITING_APPROVAL') AS awaiting_approval,
+      (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state IN ('READY', 'PROCESSING', 'RETRY')) AS queued_messages`),
     db.query(`SELECT id, name, business_account_id, app_id, graph_api_version, token_expires_at,
                      status, ai_mode, last_error, created_at, updated_at,
                      encrypted_access_token IS NOT NULL AS has_access_token
@@ -93,6 +94,8 @@ async function getOverview() {
       process.env.META_WEBHOOK_VERIFY_TOKEN && process.env.META_APP_SECRET
     ),
     encryptionConfigured: Boolean(process.env.META_CREDENTIALS_ENCRYPTION_KEY),
+    outboxWorkerEnabled:
+      String(process.env.META_OUTBOX_WORKER_ENABLED || "false").toLowerCase() === "true",
   };
 }
 
@@ -841,11 +844,13 @@ async function approveJob(jobId, approved, actor) {
   }
 }
 
-async function processNextOutbound() {
+async function processNextOutbound({ jobId = null } = {}) {
   const conn = await db.getConnection();
   let job;
   try {
     await conn.beginTransaction();
+    const jobClause = jobId ? "AND j.id = ?" : "";
+    const params = jobId ? [String(jobId)] : [];
     const [rows] = await conn.query(
       `SELECT j.*, m.body_text, m.conversation_id, cv.contact_id,
               c.external_contact_id, ch.channel_type, ch.external_account_id,
@@ -859,7 +864,9 @@ async function processNextOutbound() {
        WHERE j.state IN ('READY', 'RETRY')
          AND (j.next_attempt_at IS NULL OR j.next_attempt_at <= CURRENT_TIMESTAMP(3))
          AND i.status = 'CONNECTED' AND ch.status = 'ACTIVE'
-       ORDER BY j.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`
+         ${jobClause}
+       ORDER BY j.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      params
     );
     job = rows[0];
     if (!job) {

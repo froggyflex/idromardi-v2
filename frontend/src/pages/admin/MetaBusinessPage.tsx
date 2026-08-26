@@ -56,6 +56,7 @@ type Overview = {
     open_conversations?: number;
     unread_messages?: number;
     awaiting_approval?: number;
+    queued_messages?: number;
   };
   integrations: Integration[];
   channels: MetaChannel[];
@@ -70,6 +71,7 @@ type Overview = {
   };
   webhookConfigured: boolean;
   encryptionConfigured: boolean;
+  outboxWorkerEnabled: boolean;
 };
 
 type Conversation = {
@@ -115,6 +117,7 @@ const EMPTY_OVERVIEW: Overview = {
   webhookDiagnostics: { recentEvents: [] },
   webhookConfigured: false,
   encryptionConfigured: false,
+  outboxWorkerEnabled: false,
 };
 
 function formFromOverview(overview: Overview) {
@@ -181,6 +184,7 @@ export default function MetaBusinessPage() {
   const [sending, setSending] = useState(false);
   const [replaying, setReplaying] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [processingQueue, setProcessingQueue] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -251,20 +255,80 @@ export default function MetaBusinessPage() {
     setSending(true);
     setError(null);
     try {
-      await api.post(`/meta/conversations/${selected.id}/messages`, {
+      const queued = await api.post<{ messageId: string; jobId: string }>(
+        `/meta/conversations/${selected.id}/messages`,
+        {
         text: draft.trim(),
         senderKind: "HUMAN",
-      });
+        }
+      );
       setDraft("");
-      setNotice("Messaggio inserito nella coda di invio sicura.");
+      try {
+        const delivery = await api.post<{
+          processed: boolean;
+          sent?: boolean;
+          error?: string;
+        }>("/meta/outbox/process", { jobId: queued.data.jobId });
+        if (delivery.data.sent) {
+          setNotice("Messaggio inviato correttamente tramite WhatsApp.");
+        } else if (delivery.data.processed && delivery.data.error) {
+          setError(`Messaggio mantenuto in coda: ${delivery.data.error}`);
+        } else {
+          setNotice("Messaggio in elaborazione nella coda sicura.");
+        }
+      } catch (deliveryError: unknown) {
+        setError(
+          requestErrorMessage(
+            deliveryError,
+            "Messaggio salvato in coda, ma l'invio immediato non è riuscito."
+          )
+        );
+      }
       const response = await api.get<{ messages: Message[] }>(
         `/meta/conversations/${selected.id}/messages`
       );
       setMessages(response.data.messages || []);
+      const overviewResponse = await api.get<Overview>("/meta/overview");
+      setOverview(overviewResponse.data);
     } catch (requestError: unknown) {
       setError(requestErrorMessage(requestError, "Invio non riuscito."));
     } finally {
       setSending(false);
+    }
+  }
+
+  async function processPendingQueue() {
+    setProcessingQueue(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const initialCount = Math.min(20, Number(overview.counts.queued_messages || 1));
+      let sent = 0;
+      let lastError: string | null = null;
+      for (let index = 0; index < initialCount; index += 1) {
+        const response = await api.post<{
+          processed: boolean;
+          sent?: boolean;
+          error?: string;
+        }>("/meta/outbox/process", {});
+        if (!response.data.processed) break;
+        if (response.data.sent) sent += 1;
+        if (response.data.error) lastError = response.data.error;
+      }
+      const [overviewResponse, messagesResponse] = await Promise.all([
+        api.get<Overview>("/meta/overview"),
+        selectedId
+          ? api.get<{ messages: Message[] }>(`/meta/conversations/${selectedId}/messages`)
+          : Promise.resolve(null),
+      ]);
+      setOverview(overviewResponse.data);
+      if (messagesResponse) setMessages(messagesResponse.data.messages || []);
+      if (lastError) setError(`Coda elaborata parzialmente: ${lastError}`);
+      else setNotice(`Messaggi inviati dalla coda: ${sent}.`);
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, "Elaborazione della coda non riuscita."));
+    } finally {
+      setProcessingQueue(false);
     }
   }
 
@@ -451,12 +515,37 @@ export default function MetaBusinessPage() {
         </div>
       )}
 
+      {!!Number(overview.counts.queued_messages || 0) && (
+        <div className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <CircleAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+            <div>
+              <div className="font-semibold text-amber-950">
+                {overview.counts.queued_messages} messaggi in attesa di invio
+              </div>
+              <p className="mt-1 text-xs text-amber-800">
+                Worker automatico {overview.outboxWorkerEnabled ? "attivo" : "disattivato"}.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void processPendingQueue()}
+            disabled={processingQueue}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-700 px-4 py-2 text-xs font-bold text-white hover:bg-amber-800 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${processingQueue ? "animate-spin" : ""}`} />
+            {processingQueue ? "Invio in corso…" : "Processa ora"}
+          </button>
+        </div>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
           ["Lead attivi", overview.counts.active_leads || 0, Users],
           ["Conversazioni aperte", overview.counts.open_conversations || 0, MessageCircle],
           ["Messaggi non letti", overview.counts.unread_messages || 0, Inbox],
-          ["Approvazioni AI", overview.counts.awaiting_approval || 0, Bot],
+          ["Messaggi in coda", overview.counts.queued_messages || 0, Send],
         ].map(([label, value, Icon]) => (
           <div key={String(label)} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
@@ -694,11 +783,12 @@ export default function MetaBusinessPage() {
                 {verifying ? "Verifica in corso…" : "Verifica e attiva WhatsApp"}
               </button>
             </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {[
                 ["Firma webhook", overview.webhookConfigured, "App Secret e verify token"],
                 ["Credenziali protette", overview.encryptionConfigured, "Token cifrato AES-256-GCM"],
                 ["Canale operativo", connected, "WABA, token e Phone Number ID"],
+                ["Invio automatico", overview.outboxWorkerEnabled, "Worker per invii e tentativi"],
               ].map(([label, ready, detail]) => (
                 <div key={String(label)} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-3">
                   {ready ? (

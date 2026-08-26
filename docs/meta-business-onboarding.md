@@ -71,7 +71,11 @@ encryption key requires re-encrypting stored tokens; do not replace it casually.
    Meta's test number/Page/test-lead tools, verify deduplication, and confirm that
    lead contact fields hydrate correctly.
 10. Test one operator-approved outbound reply, delivery/read updates, an expired
-    reply window, token failure, and retry behavior. Then enable the worker.
+    reply window, token failure, and retry behavior. Once inbound delivery is
+    confirmed, set `META_OUTBOX_WORKER_ENABLED=true` and restart the backend so
+    queued retries and future approved automation are processed continuously.
+    Human replies also request immediate processing from the platform; the
+    worker remains required for resilient retries.
 
 Meta App Review may also require a privacy policy URL, data-deletion instructions,
 a review screencast, and test credentials. Prepare these before requesting
