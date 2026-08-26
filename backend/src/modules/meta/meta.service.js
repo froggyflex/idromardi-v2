@@ -14,6 +14,53 @@ function httpError(statusCode, message, code) {
   return error;
 }
 
+function metaApiErrorMessage(error) {
+  const metaError = error?.response?.data?.error;
+  const baseMessage = String(
+    metaError?.error_user_msg || metaError?.message || error?.message || error
+  );
+  const codes = [
+    metaError?.code !== undefined ? `code ${metaError.code}` : null,
+    metaError?.error_subcode !== undefined ? `subcode ${metaError.error_subcode}` : null,
+    metaError?.type || null,
+  ].filter(Boolean);
+  return `${baseMessage}${codes.length ? ` (${codes.join(", ")})` : ""}`.slice(0, 1000);
+}
+
+function normalizeAccessToken(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\s+/g, "");
+}
+
+async function inspectMetaAccessToken({ token, appId, version }) {
+  const appSecret = String(process.env.META_APP_SECRET || "").trim();
+  if (!appSecret) {
+    throw httpError(500, "META_APP_SECRET non configurato", "META_APP_SECRET_MISSING");
+  }
+  const response = await axios.get(`https://graph.facebook.com/${version}/debug_token`, {
+    headers: { Authorization: `Bearer ${appId}|${appSecret}` },
+    params: { input_token: token },
+    timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
+  });
+  const data = response.data?.data || {};
+  const scopes = Array.isArray(data.scopes) ? data.scopes.map(String) : [];
+  const missingScopes = ["whatsapp_business_management", "whatsapp_business_messaging"].filter(
+    (scope) => !scopes.includes(scope)
+  );
+  return {
+    isValid: data.is_valid === true,
+    appId: data.app_id ? String(data.app_id) : null,
+    type: data.type || null,
+    expiresAt: Number(data.expires_at || 0) || null,
+    dataAccessExpiresAt: Number(data.data_access_expires_at || 0) || null,
+    scopes,
+    missingScopes,
+  };
+}
+
 function mysqlDateTime(value = new Date()) {
   return new Date(value).toISOString().slice(0, 23).replace("T", " ");
 }
@@ -118,7 +165,8 @@ async function saveIntegration(input, actor) {
     }
   }
 
-  const token = input.accessToken ? encryptSecret(String(input.accessToken).trim()) : null;
+  const normalizedToken = input.accessToken ? normalizeAccessToken(input.accessToken) : "";
+  const token = normalizedToken ? encryptSecret(normalizedToken) : null;
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -474,6 +522,24 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
   };
 
   try {
+    const tokenInspection = await inspectMetaAccessToken({ token, appId, version });
+    if (!tokenInspection.isValid) {
+      throw httpError(401, "Il token Meta risulta non valido o scaduto", "META_TOKEN_INVALID");
+    }
+    if (tokenInspection.appId && tokenInspection.appId !== appId) {
+      throw httpError(
+        401,
+        `Il token appartiene alla Meta App ${tokenInspection.appId}, non alla App ${appId}`,
+        "META_TOKEN_APP_MISMATCH"
+      );
+    }
+    if (tokenInspection.missingScopes.length) {
+      throw httpError(
+        403,
+        `Permessi token mancanti: ${tokenInspection.missingScopes.join(", ")}`,
+        "META_TOKEN_SCOPES_MISSING"
+      );
+    }
     const subscribeResponse = await axios.post(`${baseUrl}/subscribed_apps`, null, requestConfig);
     const [subscriptionsResponse, phonesResponse] = await Promise.all([
       axios.get(`${baseUrl}/subscribed_apps`, requestConfig),
@@ -556,6 +622,12 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
       subscribed,
       appId,
       wabaId,
+      tokenStatus: {
+        type: tokenInspection.type,
+        expiresAt: tokenInspection.expiresAt,
+        dataAccessExpiresAt: tokenInspection.dataAccessExpiresAt,
+        scopes: tokenInspection.scopes,
+      },
       phones,
       configuredChannels: channels.length,
       matchedChannels: matchedChannelIds.length,
@@ -564,7 +636,7 @@ async function verifyWhatsAppIntegration(integrationId, actor) {
       overview: await getOverview(),
     };
   } catch (error) {
-    const message = String(error.response?.data?.error?.message || error.message || error).slice(0, 1000);
+    const message = metaApiErrorMessage(error);
     await db.query(`UPDATE meta_integrations SET status = 'ERROR', last_error = ? WHERE id = ?`, [
       message,
       integrationId,
@@ -970,7 +1042,7 @@ async function processNextOutbound({ jobId = null, force = false } = {}) {
     await db.query(`UPDATE meta_outbound_jobs SET state = 'SENT', last_error = NULL WHERE id = ?`, [job.id]);
     return { processed: true, jobId: job.id, sent: true };
   } catch (error) {
-    const message = String(error.response?.data?.error?.message || error.message || error).slice(0, 1000);
+    const message = metaApiErrorMessage(error);
     const retry = Number(job.attempt_count || 0) + 1 < 5;
     const delayMinutes = Math.min(60, 2 ** Math.max(0, Number(job.attempt_count || 0)));
     await db.query(
@@ -1087,7 +1159,7 @@ async function processNextLead() {
     }
     return { processed: true, leadId: lead.id, hydrated: true };
   } catch (error) {
-    const message = String(error.response?.data?.error?.message || error.message || error).slice(0, 1000);
+    const message = metaApiErrorMessage(error);
     const retry = Number(lead.hydration_attempt_count || 0) + 1 < 5;
     const delayMinutes = Math.min(60, 2 ** Math.max(0, Number(lead.hydration_attempt_count || 0)));
     await db.query(
