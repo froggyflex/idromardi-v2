@@ -483,7 +483,11 @@ async function verifyChannel(channelId, actor) {
         token,
         appId,
         version,
-        requiredScopes: ["pages_messaging", "pages_manage_metadata"],
+        requiredScopes: [
+          "pages_messaging",
+          "pages_manage_metadata",
+          "pages_read_engagement",
+        ],
       });
       if (!inspection.isValid || inspection.missingScopes.length) {
         throw httpError(
