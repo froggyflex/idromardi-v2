@@ -180,6 +180,7 @@ export default function MetaBusinessPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [replaying, setReplaying] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -327,6 +328,47 @@ export default function MetaBusinessPage() {
       setError(requestErrorMessage(requestError, "Riprocessamento webhook non riuscito."));
     } finally {
       setReplaying(false);
+    }
+  }
+
+  async function verifyWhatsAppConnection() {
+    if (!savedIntegration) return;
+    setVerifying(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await api.post<{
+        subscribed: boolean;
+        phones: Array<{ id: string; displayPhoneNumber?: string | null }>;
+        matchedChannels: number;
+        fullyConnected: boolean;
+        overview: Overview;
+      }>(`/meta/integrations/${savedIntegration.id}/verify-whatsapp`);
+      setOverview(response.data.overview);
+      setForm(formFromOverview(response.data.overview));
+      const phoneSummary = response.data.phones
+        .map((phone) => phone.displayPhoneNumber || phone.id)
+        .join(", ");
+      setNotice(
+        response.data.fullyConnected
+          ? `WhatsApp verificato e sottoscritto correttamente${phoneSummary ? `: ${phoneSummary}` : "."}`
+          : "Verifica completata, ma il Phone Number ID salvato non corrisponde ai numeri del WABA."
+      );
+      const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
+        "/meta/conversations?status=ALL"
+      );
+      setConversations(conversationsResponse.data.conversations || []);
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, "Verifica della connessione WhatsApp non riuscita."));
+      try {
+        const overviewResponse = await api.get<Overview>("/meta/overview");
+        setOverview(overviewResponse.data);
+        setForm(formFromOverview(overviewResponse.data));
+      } catch {
+        // Preserve the verification error; the standard refresh remains available.
+      }
+    } finally {
+      setVerifying(false);
     }
   }
 
@@ -617,235 +659,272 @@ export default function MetaBusinessPage() {
       )}
 
       {tab === "SETTINGS" && (
-        <div className="grid gap-5 xl:grid-cols-[1fr_1.15fr]">
-          <div className="space-y-5">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
+        <div className="space-y-5">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-3">
+                <div className={`rounded-xl p-2.5 ${connected ? "bg-emerald-100" : "bg-amber-100"}`}>
+                  {connected ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-700" />
+                  ) : (
+                    <CircleAlert className="h-5 w-5 text-amber-700" />
+                  )}
+                </div>
                 <div>
-                  <h2 className="font-bold text-slate-900">Configurazione salvata</h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Questi sono i valori effettivamente letti dal database.
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="font-bold text-slate-900">Connessione Meta</h2>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${
+                      connected ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                    }`}>
+                      {savedIntegration?.status || "NON CONFIGURATA"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Salva i dati, poi verifica e attiva la sottoscrizione WhatsApp direttamente da qui.
                   </p>
                 </div>
-                {savedIntegration && (
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${
-                      savedIntegration.status === "CONNECTED"
-                        ? "bg-emerald-100 text-emerald-800"
-                        : "bg-amber-100 text-amber-800"
-                    }`}
-                  >
-                    {savedIntegration.status}
+              </div>
+              <button
+                type="button"
+                onClick={() => void verifyWhatsAppConnection()}
+                disabled={!isAdmin || !savedIntegration || verifying}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${verifying ? "animate-spin" : ""}`} />
+                {verifying ? "Verifica in corso…" : "Verifica e attiva WhatsApp"}
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              {[
+                ["Firma webhook", overview.webhookConfigured, "App Secret e verify token"],
+                ["Credenziali protette", overview.encryptionConfigured, "Token cifrato AES-256-GCM"],
+                ["Canale operativo", connected, "WABA, token e Phone Number ID"],
+              ].map(([label, ready, detail]) => (
+                <div key={String(label)} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-3">
+                  {ready ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                  ) : (
+                    <CircleAlert className="h-4 w-4 shrink-0 text-amber-600" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-800">{String(label)}</div>
+                    <div className="truncate text-[10px] text-slate-500">{String(detail)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {savedIntegration?.last_error && (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                {savedIntegration.last_error}
+              </div>
+            )}
+          </section>
+
+          <div className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+            <form onSubmit={saveIntegration} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-3">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-xs font-black text-white">1</span>
+                <div>
+                  <h2 className="font-bold text-slate-900">Configurazione</h2>
+                  <p className="text-xs text-slate-500">Modifica i dati di collegamento e salva.</p>
+                </div>
+              </div>
+              <fieldset disabled={!isAdmin} className="mt-5 space-y-5 disabled:opacity-60">
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-wide text-slate-400">Account Meta</h3>
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                    {[
+                      ["Nome connessione", "name", "Meta Business"],
+                      ["WABA ID", "businessAccountId", "WhatsApp Business Account ID"],
+                      ["Meta App ID", "appId", "App ID"],
+                      ["Versione Graph API", "graphApiVersion", "v26.0"],
+                    ].map(([label, key, placeholder]) => (
+                      <label key={key} className="block">
+                        <span className="text-xs font-semibold text-slate-600">{label}</span>
+                        <input
+                          value={form[key as keyof typeof form]}
+                          onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))}
+                          placeholder={placeholder}
+                          className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="border-t border-slate-100 pt-5">
+                  <h3 className="text-xs font-black uppercase tracking-wide text-slate-400">Canale operativo</h3>
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Canale</span>
+                      <select
+                        value={form.channelType}
+                        onChange={(event) => setForm((current) => ({ ...current, channelType: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
+                      >
+                        <option value="WHATSAPP">WhatsApp</option>
+                        <option value="MESSENGER">Messenger</option>
+                        <option value="INSTAGRAM">Instagram</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Phone Number / Page ID</span>
+                      <input
+                        value={form.externalAccountId}
+                        onChange={(event) => setForm((current) => ({ ...current, externalAccountId: event.target.value }))}
+                        placeholder="Phone Number ID o Page ID"
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
+                      />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="text-xs font-semibold text-slate-600">Nome visualizzato</span>
+                      <input
+                        value={form.displayName}
+                        onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
+                        placeholder="Assistenza clienti"
+                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
+                      />
+                    </label>
+                  </div>
+                </div>
+                <label className="block border-t border-slate-100 pt-5">
+                  <span className="text-xs font-semibold text-slate-600">Access token</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.accessToken}
+                    onChange={(event) => setForm((current) => ({ ...current, accessToken: event.target.value }))}
+                    placeholder={savedIntegration?.has_access_token
+                      ? "Token già salvato — compila solo per sostituirlo"
+                      : "Token di sistema o access token temporaneo"}
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                  <span className="mt-1 block text-[10px] text-slate-500">
+                    Il token salvato resta cifrato e non viene mai mostrato.
                   </span>
-                )}
+                </label>
+              </fieldset>
+              <button
+                type="submit"
+                disabled={!isAdmin}
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Salva configurazione
+              </button>
+            </form>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-3">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white">2</span>
+                <div>
+                  <h2 className="font-bold text-slate-900">Dati effettivamente salvati</h2>
+                  <p className="text-xs text-slate-500">Valori riletti dal database, non dalla form.</p>
+                </div>
               </div>
               {!savedIntegration ? (
-                <p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
-                  Nessuna connessione salvata.
-                </p>
+                <div className="mt-5 rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+                  Nessuna configurazione salvata.
+                </div>
               ) : (
-                <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                <dl className="mt-5 divide-y divide-slate-100">
                   {[
-                    ["Nome", savedIntegration.name],
-                    ["Business / WABA ID", savedIntegration.business_account_id || "—"],
+                    ["Connessione", savedIntegration.name],
+                    ["WABA ID", savedIntegration.business_account_id || "—"],
                     ["Meta App ID", savedIntegration.app_id || "—"],
                     ["Graph API", savedIntegration.graph_api_version || "—"],
-                    ["Tipo canale", savedChannel?.channel_type || "—"],
+                    ["Canale", savedChannel?.channel_type || "—"],
                     ["Phone Number / Page ID", savedChannel?.external_account_id || "—"],
-                    ["Nome canale", savedChannel?.display_name || "—"],
+                    ["Nome visualizzato", savedChannel?.display_name || "—"],
                     ["Stato canale", savedChannel?.status || "—"],
-                    [
-                      "Access token",
-                      savedIntegration.has_access_token ? "Salvato e cifrato" : "Non presente",
-                    ],
+                    ["Access token", savedIntegration.has_access_token ? "Salvato e cifrato" : "Non presente"],
                     ["Ultimo salvataggio", formatDate(savedIntegration.updated_at)],
                   ].map(([label, value]) => (
-                    <div key={String(label)} className="rounded-xl bg-slate-50 px-3 py-2.5">
-                      <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                        {label}
-                      </dt>
-                      <dd className="mt-1 break-all text-sm font-semibold text-slate-800">{value}</dd>
+                    <div key={String(label)} className="grid grid-cols-[140px_1fr] gap-3 py-3 first:pt-0 last:pb-0">
+                      <dt className="text-xs font-semibold text-slate-500">{label}</dt>
+                      <dd className="break-all text-right text-sm font-bold text-slate-800">{value}</dd>
                     </div>
                   ))}
                 </dl>
               )}
-            </div>
+            </section>
+          </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="font-bold text-slate-900">Stato sicurezza</h2>
-              <div className="mt-4 space-y-3">
-                {[
-                  ["Firma webhook", overview.webhookConfigured, "META_APP_SECRET + verify token"],
-                  ["Cifratura credenziali", overview.encryptionConfigured, "AES-256-GCM"],
-                  ["Connessione operativa", connected, "Access token e almeno un canale"],
-                ].map(([label, ready, detail]) => (
-                  <div key={String(label)} className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
-                    {ready ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <CircleAlert className="h-5 w-5 text-amber-600" />}
-                    <div>
-                      <div className="text-sm font-semibold text-slate-800">{String(label)}</div>
-                      <div className="text-xs text-slate-500">{String(detail)}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-600 text-xs font-black text-white">3</span>
                 <div>
-                  <h2 className="font-bold text-slate-900">Attività webhook</h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Conferma se Meta sta realmente consegnando gli eventi alla piattaforma.
-                  </p>
+                  <h2 className="font-bold text-slate-900">Monitoraggio webhook</h2>
+                  <p className="text-xs text-slate-500">Eventi consegnati da Meta e relativo esito.</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void replayWebhooks()}
-                  disabled={!isAdmin || replaying || !Number(overview.webhookDiagnostics.unmatched || 0)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${replaying ? "animate-spin" : ""}`} />
-                  Riprocessa
-                </button>
               </div>
-              <div className="mt-4 grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => void replayWebhooks()}
+                disabled={!isAdmin || replaying || !Number(overview.webhookDiagnostics.unmatched || 0)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${replaying ? "animate-spin" : ""}`} />
+                Riprocessa non abbinati
+              </button>
+            </div>
+            <div className="mt-5 grid gap-4 lg:grid-cols-[300px_1fr]">
+              <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
                 {[
-                  ["Elaborati", overview.webhookDiagnostics.processed || 0, "text-emerald-700"],
-                  ["Non abbinati", overview.webhookDiagnostics.unmatched || 0, "text-amber-700"],
-                  ["Errori", overview.webhookDiagnostics.failed || 0, "text-rose-700"],
-                ].map(([label, value, color]) => (
-                  <div key={String(label)} className="rounded-xl bg-slate-50 p-3 text-center">
-                    <div className={`text-xl font-black ${color}`}>{String(value)}</div>
-                    <div className="mt-1 text-[10px] font-semibold text-slate-500">{label}</div>
+                  ["Elaborati", overview.webhookDiagnostics.processed || 0, "bg-emerald-50 text-emerald-700"],
+                  ["Non abbinati", overview.webhookDiagnostics.unmatched || 0, "bg-amber-50 text-amber-700"],
+                  ["Errori", overview.webhookDiagnostics.failed || 0, "bg-rose-50 text-rose-700"],
+                ].map(([label, value, theme]) => (
+                  <div key={String(label)} className={`rounded-xl p-3 ${theme}`}>
+                    <div className="text-2xl font-black">{String(value)}</div>
+                    <div className="text-[10px] font-bold">{label}</div>
                   </div>
                 ))}
               </div>
-              <div className="mt-4 space-y-2">
+              <div className="overflow-hidden rounded-xl border border-slate-200">
                 {overview.webhookDiagnostics.recentEvents.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 p-3 text-sm text-slate-500">
-                    Nessun webhook ricevuto. Se hai appena risposto su WhatsApp, controlla App Secret e sottoscrizione messages.
+                  <div className="p-5 text-sm text-slate-500">
+                    Nessun webhook ricevuto. Usa “Verifica e attiva WhatsApp”, quindi invia un nuovo messaggio.
                   </div>
                 ) : (
-                  overview.webhookDiagnostics.recentEvents.slice(0, 5).map((event) => (
-                    <div key={event.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-bold text-slate-700">
-                          {event.object_type || "Evento Meta"}
+                  <div className="divide-y divide-slate-100">
+                    {overview.webhookDiagnostics.recentEvents.slice(0, 5).map((event) => (
+                      <div key={event.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-bold text-slate-800">
+                            {event.object_type || "Evento Meta"}
+                          </div>
+                          <div className="mt-0.5 text-[10px] text-slate-500">{formatDate(event.received_at)}</div>
+                          {event.error_message && (
+                            <div className="mt-1 truncate text-[10px] text-rose-700">{event.error_message}</div>
+                          )}
                         </div>
-                        <div className="text-[10px] text-slate-500">{formatDate(event.received_at)}</div>
-                        {event.error_message && (
-                          <div className="mt-1 truncate text-[10px] text-rose-700">{event.error_message}</div>
-                        )}
-                      </div>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${
+                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black ${
                           event.processing_status === "PROCESSED"
                             ? "bg-emerald-100 text-emerald-800"
                             : event.processing_status === "UNMATCHED"
                               ? "bg-amber-100 text-amber-800"
                               : "bg-rose-100 text-rose-800"
-                        }`}
-                      >
-                        {event.processing_status}
-                      </span>
-                    </div>
-                  ))
+                        }`}>
+                          {event.processing_status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
-            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-              <div className="flex gap-3">
-                <Bot className="h-5 w-5 shrink-0 text-blue-700" />
-                <div>
-                  <div className="font-bold text-blue-950">Assistente AI predisposto, non attivo</div>
-                  <p className="mt-1 text-sm leading-6 text-blue-900">
-                    I messaggi AI sono identificati separatamente e passano dalla stessa coda e dallo stesso audit.
-                    La modalità iniziale resta OFF; in modalità approvazione, un operatore deve autorizzare ogni invio.
-                  </p>
-                </div>
-              </div>
+          </section>
+
+          <div className="flex gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+            <Bot className="h-5 w-5 shrink-0 text-blue-700" />
+            <div>
+              <div className="text-sm font-bold text-blue-950">Assistente AI predisposto, non attivo</div>
+              <p className="mt-1 text-xs leading-5 text-blue-900">
+                La futura automazione userà la stessa inbox, coda di approvazione e audit. La modalità resta OFF.
+              </p>
             </div>
           </div>
-
-          <form onSubmit={saveIntegration} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="font-bold text-slate-900">Collega un canale Meta</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              I campi mostrano la configurazione salvata. Modificali e salva per aggiornarla.
-            </p>
-            <fieldset disabled={!isAdmin} className="mt-5 grid gap-4 sm:grid-cols-2 disabled:opacity-60">
-              {[
-                ["Nome connessione", "name", "Meta Business"],
-                ["Business Account ID", "businessAccountId", "123456789"],
-                ["Meta App ID", "appId", "123456789"],
-                ["Versione Graph API", "graphApiVersion", "vXX.X"],
-              ].map(([label, key, placeholder]) => (
-                <label key={key} className="block">
-                  <span className="text-xs font-semibold text-slate-600">{label}</span>
-                  <input
-                    value={form[key as keyof typeof form]}
-                    onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))}
-                    placeholder={placeholder}
-                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                </label>
-              ))}
-              <label className="block sm:col-span-2">
-                <span className="text-xs font-semibold text-slate-600">Access token</span>
-                <input
-                  type="password"
-                  autoComplete="new-password"
-                  value={form.accessToken}
-                  onChange={(event) => setForm((current) => ({ ...current, accessToken: event.target.value }))}
-                  placeholder={
-                    savedIntegration?.has_access_token
-                      ? "Token già salvato — compila solo per sostituirlo"
-                      : "Token di sistema o Page access token"
-                  }
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <span className="mt-1 block text-[10px] text-slate-500">
-                  Per sicurezza il valore non viene mai restituito dal server.
-                </span>
-              </label>
-              <label className="block">
-                <span className="text-xs font-semibold text-slate-600">Canale</span>
-                <select
-                  value={form.channelType}
-                  onChange={(event) => setForm((current) => ({ ...current, channelType: event.target.value }))}
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                >
-                  <option value="WHATSAPP">WhatsApp</option>
-                  <option value="MESSENGER">Messenger</option>
-                  <option value="INSTAGRAM">Instagram</option>
-                </select>
-              </label>
-              <label className="block">
-                <span className="text-xs font-semibold text-slate-600">ID canale</span>
-                <input
-                  value={form.externalAccountId}
-                  onChange={(event) => setForm((current) => ({ ...current, externalAccountId: event.target.value }))}
-                  placeholder="Phone Number ID o Page ID"
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="block sm:col-span-2">
-                <span className="text-xs font-semibold text-slate-600">Nome visualizzato</span>
-                <input
-                  value={form.displayName}
-                  onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
-                  placeholder="Assistenza clienti"
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                />
-              </label>
-            </fieldset>
-            <button
-              type="submit"
-              disabled={!isAdmin}
-              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <ShieldCheck className="h-4 w-4" />
-              Salva connessione cifrata
-            </button>
-          </form>
         </div>
       )}
     </div>

@@ -27,6 +27,11 @@ protectedRouter.post(
   requireRole("ADMIN"),
   controller.replayUnmatchedEvents
 );
+protectedRouter.post(
+  "/integrations/:id/verify-whatsapp",
+  requireRole("ADMIN"),
+  controller.verifyWhatsAppIntegration
+);
 protectedRouter.patch(
   "/integrations/:id/ai-mode",
   requireRole("ADMIN"),

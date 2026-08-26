@@ -52,6 +52,14 @@ exports.replayUnmatchedEvents = async (req, res) => {
   }
 };
 
+exports.verifyWhatsAppIntegration = async (req, res) => {
+  try {
+    res.json(await service.verifyWhatsAppIntegration(req.params.id, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
 exports.setAiMode = async (req, res) => {
   try {
     res.json(await service.setAiMode(req.params.id, req.body?.mode, req.user));

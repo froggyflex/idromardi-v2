@@ -433,6 +433,143 @@ async function replayUnmatchedEvents({ limit = 100 } = {}) {
   return { examined: rows.length, processed, stillUnmatched, failed };
 }
 
+async function verifyWhatsAppIntegration(integrationId, actor) {
+  const [[integration]] = await db.query(
+    `SELECT id, business_account_id, app_id, graph_api_version,
+            encrypted_access_token, token_iv, token_auth_tag
+     FROM meta_integrations WHERE id = ? LIMIT 1`,
+    [integrationId]
+  );
+  if (!integration) {
+    throw httpError(404, "Integrazione Meta non trovata", "META_INTEGRATION_NOT_FOUND");
+  }
+  const wabaId = String(integration.business_account_id || "").trim();
+  const appId = String(integration.app_id || "").trim();
+  const version = String(
+    integration.graph_api_version || process.env.META_GRAPH_API_VERSION || ""
+  ).trim();
+  if (!wabaId || !appId || !version) {
+    throw httpError(
+      400,
+      "WABA ID, Meta App ID e versione Graph API sono obbligatori",
+      "META_VERIFICATION_DATA_MISSING"
+    );
+  }
+  if (!integration.encrypted_access_token) {
+    throw httpError(400, "Access token Meta non presente", "META_ACCESS_TOKEN_MISSING");
+  }
+
+  const token = decryptSecret({
+    encrypted: integration.encrypted_access_token,
+    iv: integration.token_iv,
+    authTag: integration.token_auth_tag,
+  });
+  const baseUrl = `https://graph.facebook.com/${version}/${encodeURIComponent(wabaId)}`;
+  const requestConfig = {
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
+  };
+
+  try {
+    const subscribeResponse = await axios.post(`${baseUrl}/subscribed_apps`, null, requestConfig);
+    const [subscriptionsResponse, phonesResponse] = await Promise.all([
+      axios.get(`${baseUrl}/subscribed_apps`, requestConfig),
+      axios.get(`${baseUrl}/phone_numbers`, {
+        ...requestConfig,
+        params: { fields: "id,display_phone_number,verified_name,status,quality_rating" },
+      }),
+    ]);
+    const subscriptions = Array.isArray(subscriptionsResponse.data?.data)
+      ? subscriptionsResponse.data.data
+      : [];
+    const subscribedAppIds = subscriptions
+      .map((item) => String(item?.whatsapp_business_api_data?.id || item?.id || ""))
+      .filter(Boolean);
+    const subscribed = Boolean(subscribeResponse.data?.success) || subscribedAppIds.includes(appId);
+    const phones = (Array.isArray(phonesResponse.data?.data) ? phonesResponse.data.data : []).map(
+      (phone) => ({
+        id: String(phone.id || ""),
+        displayPhoneNumber: phone.display_phone_number || null,
+        verifiedName: phone.verified_name || null,
+        status: phone.status || null,
+        qualityRating: phone.quality_rating || null,
+      })
+    );
+    const phoneIds = new Set(phones.map((phone) => phone.id));
+    const [channels] = await db.query(
+      `SELECT id, external_account_id FROM meta_channels
+       WHERE integration_id = ? AND channel_type = 'WHATSAPP'`,
+      [integrationId]
+    );
+    const matchedChannelIds = channels
+      .filter((channel) => phoneIds.has(String(channel.external_account_id)))
+      .map((channel) => channel.id);
+    const fullyConnected = subscribed && channels.length > 0 && matchedChannelIds.length === channels.length;
+    const verificationError = !subscribed
+      ? "L'app non risulta sottoscritta al WABA"
+      : !channels.length
+        ? "Nessun canale WhatsApp configurato"
+        : matchedChannelIds.length !== channels.length
+          ? "Il Phone Number ID salvato non appartiene al WABA configurato"
+          : null;
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `UPDATE meta_integrations SET status = ?, last_error = ? WHERE id = ?`,
+        [fullyConnected ? "CONNECTED" : "ERROR", verificationError, integrationId]
+      );
+      for (const channel of channels) {
+        await conn.query(`UPDATE meta_channels SET status = ? WHERE id = ?`, [
+          phoneIds.has(String(channel.external_account_id)) ? "ACTIVE" : "ERROR",
+          channel.id,
+        ]);
+      }
+      await audit(conn, {
+        integrationId,
+        actorId: actor?.sub,
+        actorKind: "HUMAN",
+        action: "WHATSAPP_CONNECTION_VERIFIED",
+        entityType: "INTEGRATION",
+        entityId: integrationId,
+        details: {
+          subscribed,
+          configuredChannels: channels.length,
+          matchedChannels: matchedChannelIds.length,
+          phoneIds: phones.map((phone) => phone.id),
+        },
+      });
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+
+    const replay = fullyConnected ? await replayUnmatchedEvents() : null;
+    return {
+      subscribed,
+      appId,
+      wabaId,
+      phones,
+      configuredChannels: channels.length,
+      matchedChannels: matchedChannelIds.length,
+      fullyConnected,
+      replay,
+      overview: await getOverview(),
+    };
+  } catch (error) {
+    const message = String(error.response?.data?.error?.message || error.message || error).slice(0, 1000);
+    await db.query(`UPDATE meta_integrations SET status = 'ERROR', last_error = ? WHERE id = ?`, [
+      message,
+      integrationId,
+    ]);
+    throw httpError(502, `Verifica Meta non riuscita: ${message}`, "META_VERIFICATION_FAILED");
+  }
+}
+
 async function ingestWebhook(rawBody, payload) {
   const key = webhook.eventKey(rawBody);
   const webhookId = crypto.randomUUID();
@@ -912,4 +1049,5 @@ module.exports = {
   setAiMode,
   updateConversation,
   updateLead,
+  verifyWhatsAppIntegration,
 };
