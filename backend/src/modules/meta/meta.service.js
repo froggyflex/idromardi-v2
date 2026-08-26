@@ -2,6 +2,13 @@ const crypto = require("crypto");
 const axios = require("axios");
 const db = require("../../config/db");
 const { decryptSecret, encryptSecret } = require("./meta.crypto");
+const {
+  INSTAGRAM_CREDENTIAL_MODES,
+  INSTAGRAM_SCOPE_REQUIREMENTS,
+  detectInstagramCredentialMode,
+  instagramApiTarget,
+  missingScopes,
+} = require("./meta.instagram");
 const webhook = require("./meta.webhook");
 
 const CHANNEL_TYPES = new Set(["WHATSAPP", "MESSENGER", "INSTAGRAM"]);
@@ -118,7 +125,8 @@ async function getOverview() {
                      encrypted_access_token IS NOT NULL AS has_access_token
               FROM meta_integrations ORDER BY created_at DESC`),
     db.query(`SELECT id, integration_id, channel_type, external_account_id, display_name, status,
-                     token_expires_at, last_verified_at, last_error, created_at, updated_at,
+                     token_expires_at, credential_mode, api_sender_id,
+                     last_verified_at, last_error, created_at, updated_at,
                      encrypted_access_token IS NOT NULL AS has_access_token
               FROM meta_channels ORDER BY channel_type, display_name`),
     db.query(`SELECT
@@ -334,7 +342,8 @@ async function saveChannel(integrationId, input, actor) {
         `UPDATE meta_channels SET channel_type = ?, external_account_id = ?, display_name = ?,
            encrypted_access_token = COALESCE(?, encrypted_access_token),
            token_iv = COALESCE(?, token_iv), token_auth_tag = COALESCE(?, token_auth_tag),
-           token_expires_at = ?, status = 'PENDING', last_verified_at = NULL, last_error = NULL
+           token_expires_at = ?, credential_mode = NULL, api_sender_id = NULL,
+           status = 'PENDING', last_verified_at = NULL, last_error = NULL
          WHERE id = ?`,
         [
           channelType,
@@ -522,26 +531,103 @@ async function verifyChannel(channelId, actor) {
         scopes: inspection.scopes,
       };
     } else {
-      const baseUrl = `https://graph.instagram.com/${version}`;
-      const profileResponse = await axios.get(`${baseUrl}/me`, {
-        ...requestConfig,
-        params: { fields: "user_id,username,account_type" },
-      });
-      const profile = Array.isArray(profileResponse.data?.data)
-        ? profileResponse.data.data[0] || {}
-        : profileResponse.data || {};
-      if (String(profile.user_id || "") !== String(channel.external_account_id)) {
-        throw httpError(409, "Il token Instagram appartiene a un account diverso", "META_INSTAGRAM_MISMATCH");
+      const appId = String(channel.app_id || "").trim();
+      if (!appId) throw httpError(400, "Meta App ID obbligatorio", "META_APP_ID_MISSING");
+      const inspection = await inspectMetaAccessToken({ token, appId, version, requiredScopes: [] });
+      if (!inspection.isValid) {
+        throw httpError(403, "Il token Instagram non e valido", "META_INSTAGRAM_TOKEN_INVALID");
       }
-      await axios.post(`${baseUrl}/me/subscribed_apps`, null, {
-        ...requestConfig,
-        params: {
-          subscribed_fields:
-            "messages,messaging_optins,messaging_postbacks,messaging_reactions,messaging_referrals,messaging_seen",
-        },
-      });
-      verifiedName = profile.username ? `@${profile.username}` : verifiedName;
-      details = { instagramId: profile.user_id, username: profile.username, accountType: profile.account_type };
+      if (inspection.appId && inspection.appId !== appId) {
+        throw httpError(403, "Il token Instagram appartiene a una Meta App diversa", "META_TOKEN_APP_MISMATCH");
+      }
+      const credentialMode = detectInstagramCredentialMode(inspection.scopes);
+      if (!credentialMode) {
+        const facebookMissing = missingScopes(
+          inspection.scopes,
+          INSTAGRAM_SCOPE_REQUIREMENTS[INSTAGRAM_CREDENTIAL_MODES.FACEBOOK_LOGIN]
+        );
+        const instagramMissing = missingScopes(
+          inspection.scopes,
+          INSTAGRAM_SCOPE_REQUIREMENTS[INSTAGRAM_CREDENTIAL_MODES.INSTAGRAM_LOGIN]
+        );
+        throw httpError(
+          403,
+          `Permessi Instagram mancanti. Page token: ${facebookMissing.join(", ") || "completo"}. ` +
+            `Instagram token: ${instagramMissing.join(", ") || "completo"}`,
+          "META_INSTAGRAM_SCOPES_MISSING"
+        );
+      }
+
+      if (credentialMode === INSTAGRAM_CREDENTIAL_MODES.FACEBOOK_LOGIN) {
+        const baseUrl = `https://graph.facebook.com/${version}`;
+        const pageResponse = await axios.get(`${baseUrl}/me`, {
+          ...requestConfig,
+          params: { fields: "id,name,instagram_business_account{id,username}" },
+        });
+        const page = pageResponse.data || {};
+        const instagramAccount = page.instagram_business_account || {};
+        if (!instagramAccount.id) {
+          throw httpError(
+            409,
+            "La Pagina del token non ha un account Instagram professionale collegato",
+            "META_INSTAGRAM_PAGE_NOT_LINKED"
+          );
+        }
+        if (String(instagramAccount.id) !== String(channel.external_account_id)) {
+          throw httpError(
+            409,
+            "Il Page access token appartiene a un account Instagram diverso",
+            "META_INSTAGRAM_MISMATCH"
+          );
+        }
+        await axios.post(`${baseUrl}/${encodeURIComponent(page.id)}/subscribed_apps`, null, {
+          ...requestConfig,
+          params: { subscribed_fields: "messages" },
+        });
+        verifiedName = instagramAccount.username ? `@${instagramAccount.username}` : verifiedName;
+        details = {
+          credentialMode,
+          instagramId: String(instagramAccount.id),
+          username: instagramAccount.username || null,
+          pageId: String(page.id),
+          pageName: page.name || null,
+          subscribedFields: ["messages"],
+          scopes: inspection.scopes,
+        };
+      } else {
+        const baseUrl = `https://graph.instagram.com/${version}`;
+        const profileResponse = await axios.get(`${baseUrl}/me`, {
+          ...requestConfig,
+          params: { fields: "user_id,username,account_type" },
+        });
+        const profile = Array.isArray(profileResponse.data?.data)
+          ? profileResponse.data.data[0] || {}
+          : profileResponse.data || {};
+        if (String(profile.user_id || "") !== String(channel.external_account_id)) {
+          throw httpError(
+            409,
+            "Il token Instagram appartiene a un account diverso",
+            "META_INSTAGRAM_MISMATCH"
+          );
+        }
+        await axios.post(
+          `${baseUrl}/${encodeURIComponent(channel.external_account_id)}/subscribed_apps`,
+          null,
+          {
+            ...requestConfig,
+            params: { subscribed_fields: "messages,messaging_postbacks,messaging_seen" },
+          }
+        );
+        verifiedName = profile.username ? `@${profile.username}` : verifiedName;
+        details = {
+          credentialMode,
+          instagramId: String(profile.user_id),
+          username: profile.username || null,
+          accountType: profile.account_type || null,
+          subscribedFields: ["messages", "messaging_postbacks", "messaging_seen"],
+          scopes: inspection.scopes,
+        };
+      }
     }
 
     const conn = await db.getConnection();
@@ -549,8 +635,16 @@ async function verifyChannel(channelId, actor) {
       await conn.beginTransaction();
       await conn.query(
         `UPDATE meta_channels SET status = 'ACTIVE', display_name = COALESCE(?, display_name),
+         credential_mode = ?, api_sender_id = ?,
          last_verified_at = CURRENT_TIMESTAMP(3), last_error = NULL WHERE id = ?`,
-        [verifiedName, channelId]
+        [
+          verifiedName,
+          channel.channel_type === "INSTAGRAM" ? details.credentialMode || null : null,
+          channel.channel_type === "INSTAGRAM"
+            ? details.pageId || details.instagramId || channel.external_account_id
+            : channel.external_account_id,
+          channelId,
+        ]
       );
       await refreshIntegrationConnectionStatus(conn, channel.integration_id);
       await audit(conn, {
@@ -1456,6 +1550,7 @@ async function processNextOutbound({ jobId = null, force = false } = {}) {
     const [rows] = await conn.query(
       `SELECT j.*, m.body_text, m.conversation_id, cv.contact_id,
               c.external_contact_id, ch.channel_type, ch.external_account_id,
+              ch.credential_mode, ch.api_sender_id,
               i.graph_api_version,
               COALESCE(ch.encrypted_access_token, i.encrypted_access_token) AS encrypted_access_token,
               COALESCE(ch.token_iv, i.token_iv) AS token_iv,
@@ -1543,10 +1638,13 @@ async function processNextOutbound({ jobId = null, force = false } = {}) {
     });
     const version = job.graph_api_version || process.env.META_GRAPH_API_VERSION;
     if (!token || !version) throw new Error("Credenziali o versione Graph API mancanti");
-    const graphHost = job.channel_type === "INSTAGRAM"
-      ? "https://graph.instagram.com"
-      : "https://graph.facebook.com";
-    const url = `${graphHost}/${version}/${encodeURIComponent(job.external_account_id)}/messages`;
+    const instagramTarget = job.channel_type === "INSTAGRAM" ? instagramApiTarget(job) : null;
+    if (job.channel_type === "INSTAGRAM" && !instagramTarget) {
+      throw new Error("Canale Instagram da verificare nuovamente prima dell'invio");
+    }
+    const graphHost = instagramTarget?.host || "https://graph.facebook.com";
+    const senderId = instagramTarget?.senderId || job.external_account_id;
+    const url = `${graphHost}/${version}/${encodeURIComponent(senderId)}/messages`;
     const body = job.channel_type === "WHATSAPP"
       ? { messaging_product: "whatsapp", to: job.external_contact_id, type: "text", text: { body: job.body_text } }
       : job.channel_type === "MESSENGER"

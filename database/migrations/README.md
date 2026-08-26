@@ -32,5 +32,6 @@ npm run migrate:meta
 `003_meta_crm_foundation.sql` creates the integration, channel, lead, contact,
 conversation, message, webhook inbox, outbound queue, and audit tables. Access
 tokens are encrypted by the application; the migration never stores secrets.
-The Meta migration runner also applies the tracked `004` archive/deletion update
-and `005` per-channel credential and connection-health update exactly once.
+The Meta migration runner also applies the tracked `004` archive/deletion update,
+`005` per-channel credential and connection-health update, and `006` Instagram
+connection-mode update exactly once.

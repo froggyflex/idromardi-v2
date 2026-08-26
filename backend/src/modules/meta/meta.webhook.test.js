@@ -148,6 +148,30 @@ test("normalizes Messenger and Instagram messages plus delivery receipts", () =>
   assert.equal(instagram.contactId, "igsid-1");
 });
 
+test("normalizes an Instagram postback as an inbound message", () => {
+  const [postback] = webhook.normalizeWebhook({
+    object: "instagram",
+    entry: [
+      {
+        id: "ig-1",
+        messaging: [
+          {
+            sender: { id: "igsid-1" },
+            recipient: { id: "ig-1" },
+            timestamp: 1700000003000,
+            postback: { mid: "ig-postback-1", title: "Parla con noi", payload: "CONTACT" },
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(postback.channelType, "INSTAGRAM");
+  assert.equal(postback.messageType, "POSTBACK");
+  assert.equal(postback.text, "Parla con noi");
+  assert.equal(postback.externalMessageId, "ig-postback-1");
+});
+
+
 test("encrypts access tokens with authenticated encryption", () => {
   const previous = process.env.META_CREDENTIALS_ENCRYPTION_KEY;
   process.env.META_CREDENTIALS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");

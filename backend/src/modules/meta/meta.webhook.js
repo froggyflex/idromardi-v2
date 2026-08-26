@@ -108,6 +108,19 @@ function pageEvents(payload) {
           payload: item,
         });
       }
+      if (item.postback) {
+        events.push({
+          kind: "MESSAGE",
+          channelType,
+          accountId,
+          contactId: String(item.sender?.id || ""),
+          externalMessageId: item.postback.mid ? String(item.postback.mid) : null,
+          text: item.postback.title || item.postback.payload || null,
+          messageType: "POSTBACK",
+          occurredAt: unixDateTime(item.timestamp),
+          payload: item,
+        });
+      }
       for (const messageId of item.delivery?.mids || []) {
         events.push({
           kind: "STATUS",

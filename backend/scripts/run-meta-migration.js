@@ -28,6 +28,7 @@ async function runMetaMigration() {
     const migrations = [
       "004_meta_archive_and_message_deletion.sql",
       "005_meta_channel_credentials_and_health.sql",
+      "006_meta_instagram_connection_mode.sql",
     ];
     for (const migrationName of migrations) {
       const [applied] = await connection.execute(

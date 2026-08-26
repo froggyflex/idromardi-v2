@@ -41,6 +41,8 @@ type MetaChannel = {
   status: string;
   has_access_token?: number;
   token_expires_at?: string | null;
+  credential_mode?: "FACEBOOK_LOGIN" | "INSTAGRAM_LOGIN" | null;
+  api_sender_id?: string | null;
   last_verified_at?: string | null;
   last_error?: string | null;
   created_at?: string | null;
@@ -157,9 +159,9 @@ const CHANNEL_DETAILS: Record<ChannelType, {
   INSTAGRAM: {
     title: "Instagram Direct",
     idLabel: "Instagram Professional Account ID",
-    idPlaceholder: "Instagram user_id dell’account professionale",
-    tokenLabel: "Instagram user access token",
-    permissions: "instagram_business_basic, instagram_business_manage_messages",
+    idPlaceholder: "ID dell'account Instagram professionale collegato",
+    tokenLabel: "Page access token o Instagram user token",
+    permissions: "Pagina collegata: instagram_basic, instagram_manage_messages, pages_manage_metadata. Instagram Login: instagram_business_basic, instagram_business_manage_messages",
   },
 };
 
@@ -1302,6 +1304,13 @@ export default function MetaBusinessPage() {
                       <span>{channel?.has_access_token ? "Token cifrato salvato" : "Token non presente"}</span>
                       <span>Scadenza: {formatDate(channel?.token_expires_at)}</span>
                     </div>
+                    {channelType === "INSTAGRAM" && channel?.credential_mode && (
+                      <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] text-blue-800">
+                        Collegamento verificato: {channel.credential_mode === "FACEBOOK_LOGIN"
+                          ? "Pagina Facebook collegata"
+                          : "Instagram Login"}
+                      </div>
+                    )}
                     {channel?.last_error && (
                       <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">
                         {channel.last_error}

@@ -67,10 +67,15 @@ encryption key requires re-encrypting stored tokens; do not replace it casually.
      `business_management`, `pages_show_list`, `pages_manage_metadata`, `pages_messaging`, and
      `pages_read_engagement`; add `leads_retrieval` when Lead Ads are used. The Page administrator must have MESSAGING and
      MODERATE tasks.
-   - **Instagram:** the Instagram Professional Account `user_id` and a long-lived
-     Instagram user token with `instagram_business_basic` and
-     `instagram_business_manage_messages`. Instagram Login calls use
-     `graph.instagram.com`; do not reuse the WhatsApp or Page token.
+   - **Instagram with the linked Facebook Page (the current Idromardi setup):**
+     the Instagram Professional Account ID and the Page access token for the
+     linked Page. The token needs `instagram_basic`, `instagram_manage_messages`,
+     and `pages_manage_metadata`. Verification confirms both the Page and linked
+     Instagram account, then subscribes the Page to message webhooks.
+   - **Instagram Login (also supported):** the Instagram Professional Account
+     `user_id` and an Instagram user token with `instagram_business_basic` and
+     `instagram_business_manage_messages`. These calls use `graph.instagram.com`.
+     The platform detects and stores the model during verification.
 7. Do not paste tokens into chat, source code, logs, screenshots, or frontend
    environment variables. Enter them only in the platform configuration page,
    where they are encrypted and never returned to the browser.
