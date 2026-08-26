@@ -25,7 +25,10 @@ async function runMetaMigration() {
       applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       PRIMARY KEY (migration_name)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci`);
-    const migrations = ["004_meta_archive_and_message_deletion.sql"];
+    const migrations = [
+      "004_meta_archive_and_message_deletion.sql",
+      "005_meta_channel_credentials_and_health.sql",
+    ];
     for (const migrationName of migrations) {
       const [applied] = await connection.execute(
         `SELECT migration_name FROM meta_schema_migrations WHERE migration_name = ? LIMIT 1`,

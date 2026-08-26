@@ -35,7 +35,12 @@ function normalizeAccessToken(value) {
     .replace(/\s+/g, "");
 }
 
-async function inspectMetaAccessToken({ token, appId, version }) {
+async function inspectMetaAccessToken({
+  token,
+  appId,
+  version,
+  requiredScopes = ["whatsapp_business_management", "whatsapp_business_messaging"],
+}) {
   const appSecret = String(process.env.META_APP_SECRET || "").trim();
   if (!appSecret) {
     throw httpError(500, "META_APP_SECRET non configurato", "META_APP_SECRET_MISSING");
@@ -47,9 +52,7 @@ async function inspectMetaAccessToken({ token, appId, version }) {
   });
   const data = response.data?.data || {};
   const scopes = Array.isArray(data.scopes) ? data.scopes.map(String) : [];
-  const missingScopes = ["whatsapp_business_management", "whatsapp_business_messaging"].filter(
-    (scope) => !scopes.includes(scope)
-  );
+  const missingScopes = requiredScopes.filter((scope) => !scopes.includes(scope));
   return {
     isValid: data.is_valid === true,
     appId: data.app_id ? String(data.app_id) : null,
@@ -115,7 +118,8 @@ async function getOverview() {
                      encrypted_access_token IS NOT NULL AS has_access_token
               FROM meta_integrations ORDER BY created_at DESC`),
     db.query(`SELECT id, integration_id, channel_type, external_account_id, display_name, status,
-                     created_at, updated_at
+                     token_expires_at, last_verified_at, last_error, created_at, updated_at,
+                     encrypted_access_token IS NOT NULL AS has_access_token
               FROM meta_channels ORDER BY channel_type, display_name`),
     db.query(`SELECT
       COUNT(*) AS total,
@@ -174,12 +178,16 @@ async function saveIntegration(input, actor) {
       `SELECT id, encrypted_access_token FROM meta_integrations WHERE id = ? LIMIT 1`,
       [id]
     );
-    const [[channelCount]] = existing.length
-      ? await conn.query(`SELECT COUNT(*) AS count FROM meta_channels WHERE integration_id = ?`, [id])
-      : [[{ count: 0 }]];
+    const [[channelSummary]] = existing.length
+      ? await conn.query(
+          `SELECT COUNT(*) AS count, COALESCE(SUM(status = 'ACTIVE'), 0) AS active
+           FROM meta_channels WHERE integration_id = ?`,
+          [id]
+        )
+      : [[{ count: 0, active: 0 }]];
     const willBeConnected = Boolean(
-      (token || existing[0]?.encrypted_access_token) &&
-        (channels.length || Number(channelCount?.count || 0))
+      Number(channelSummary?.active || 0) > 0 ||
+        ((token || existing[0]?.encrypted_access_token) && channels.length)
     );
     if (existing.length) {
       await conn.query(
@@ -260,6 +268,352 @@ async function saveIntegration(input, actor) {
       }
     }
     return getOverview();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function refreshIntegrationConnectionStatus(conn, integrationId) {
+  const [[summary]] = await conn.query(
+    `SELECT COUNT(*) AS total, COALESCE(SUM(status = 'ACTIVE'), 0) AS active
+     FROM meta_channels WHERE integration_id = ?`,
+    [integrationId]
+  );
+  const status = Number(summary?.active || 0) > 0 ? "CONNECTED" : "PENDING";
+  await conn.query(
+    `UPDATE meta_integrations SET status = ?, last_error = IF(? = 'CONNECTED', NULL, last_error)
+     WHERE id = ?`,
+    [status, status, integrationId]
+  );
+  return { status, total: Number(summary?.total || 0), active: Number(summary?.active || 0) };
+}
+
+async function saveChannel(integrationId, input, actor) {
+  const channelType = String(input.channelType || "").toUpperCase();
+  const externalAccountId = String(input.externalAccountId || "").trim();
+  if (!CHANNEL_TYPES.has(channelType) || !externalAccountId) {
+    throw httpError(400, "Tipo canale e ID account sono obbligatori", "META_CHANNEL_INVALID");
+  }
+  const normalizedToken = input.accessToken ? normalizeAccessToken(input.accessToken) : "";
+  const encryptedToken = normalizedToken ? encryptSecret(normalizedToken) : null;
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[integration]] = await conn.query(
+      `SELECT id, encrypted_access_token, token_iv, token_auth_tag, token_expires_at
+       FROM meta_integrations WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [integrationId]
+    );
+    if (!integration) {
+      throw httpError(404, "Integrazione Meta non trovata", "META_INTEGRATION_NOT_FOUND");
+    }
+    const requestedId = input.id ? String(input.id) : null;
+    const [[existing]] = requestedId
+      ? await conn.query(
+          `SELECT * FROM meta_channels WHERE id = ? AND integration_id = ? LIMIT 1 FOR UPDATE`,
+          [requestedId, integrationId]
+        )
+      : await conn.query(
+          `SELECT * FROM meta_channels WHERE integration_id = ? AND channel_type = ?
+           ORDER BY created_at LIMIT 1 FOR UPDATE`,
+          [integrationId, channelType]
+        );
+    if (requestedId && !existing) {
+      throw httpError(404, "Canale Meta non trovato", "META_CHANNEL_NOT_FOUND");
+    }
+    const channelId = existing?.id || crypto.randomUUID();
+    const legacyWhatsAppCredential =
+      channelType === "WHATSAPP" && !encryptedToken && !existing?.encrypted_access_token
+        ? integration
+        : null;
+    if (existing) {
+      await conn.query(
+        `UPDATE meta_channels SET channel_type = ?, external_account_id = ?, display_name = ?,
+           encrypted_access_token = COALESCE(?, encrypted_access_token),
+           token_iv = COALESCE(?, token_iv), token_auth_tag = COALESCE(?, token_auth_tag),
+           token_expires_at = ?, status = 'PENDING', last_verified_at = NULL, last_error = NULL
+         WHERE id = ?`,
+        [
+          channelType,
+          externalAccountId,
+          input.displayName ? String(input.displayName).trim() : null,
+          encryptedToken?.encrypted || legacyWhatsAppCredential?.encrypted_access_token || null,
+          encryptedToken?.iv || legacyWhatsAppCredential?.token_iv || null,
+          encryptedToken?.authTag || legacyWhatsAppCredential?.token_auth_tag || null,
+          input.tokenExpiresAt
+            ? mysqlDateTime(input.tokenExpiresAt)
+            : encryptedToken
+              ? null
+              : existing.token_expires_at || legacyWhatsAppCredential?.token_expires_at || null,
+          channelId,
+        ]
+      );
+    } else {
+      await conn.query(
+        `INSERT INTO meta_channels
+           (id, integration_id, channel_type, external_account_id, display_name, status,
+            encrypted_access_token, token_iv, token_auth_tag, token_expires_at)
+         VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`,
+        [
+          channelId,
+          integrationId,
+          channelType,
+          externalAccountId,
+          input.displayName ? String(input.displayName).trim() : null,
+          encryptedToken?.encrypted || legacyWhatsAppCredential?.encrypted_access_token || null,
+          encryptedToken?.iv || legacyWhatsAppCredential?.token_iv || null,
+          encryptedToken?.authTag || legacyWhatsAppCredential?.token_auth_tag || null,
+          input.tokenExpiresAt
+            ? mysqlDateTime(input.tokenExpiresAt)
+            : legacyWhatsAppCredential?.token_expires_at || null,
+        ]
+      );
+    }
+    await refreshIntegrationConnectionStatus(conn, integrationId);
+    await audit(conn, {
+      integrationId,
+      actorId: actor.sub,
+      actorKind: "HUMAN",
+      action: existing ? "CHANNEL_UPDATED" : "CHANNEL_CREATED",
+      entityType: "CHANNEL",
+      entityId: channelId,
+      details: { channelType, externalAccountId, tokenUpdated: Boolean(encryptedToken) },
+    });
+    await conn.commit();
+    return { channelId, overview: await getOverview() };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+function effectiveChannelCredential(channel) {
+  if (channel.encrypted_access_token) {
+    return {
+      encrypted: channel.encrypted_access_token,
+      iv: channel.token_iv,
+      authTag: channel.token_auth_tag,
+    };
+  }
+  if (channel.channel_type === "WHATSAPP" && channel.integration_access_token) {
+    return {
+      encrypted: channel.integration_access_token,
+      iv: channel.integration_token_iv,
+      authTag: channel.integration_token_auth_tag,
+    };
+  }
+  return null;
+}
+
+async function verifyChannel(channelId, actor) {
+  const [[channel]] = await db.query(
+    `SELECT ch.*, i.business_account_id, i.app_id, i.graph_api_version,
+            i.encrypted_access_token AS integration_access_token,
+            i.token_iv AS integration_token_iv,
+            i.token_auth_tag AS integration_token_auth_tag
+     FROM meta_channels ch
+     JOIN meta_integrations i ON i.id = ch.integration_id
+     WHERE ch.id = ? LIMIT 1`,
+    [channelId]
+  );
+  if (!channel) throw httpError(404, "Canale Meta non trovato", "META_CHANNEL_NOT_FOUND");
+  const credential = effectiveChannelCredential(channel);
+  if (!credential?.encrypted) {
+    throw httpError(400, "Access token del canale non presente", "META_CHANNEL_TOKEN_MISSING");
+  }
+  const version = String(
+    channel.graph_api_version || process.env.META_GRAPH_API_VERSION || ""
+  ).trim();
+  if (!version) throw httpError(400, "Versione Graph API mancante", "META_GRAPH_VERSION_MISSING");
+  let verifiedName = channel.display_name || null;
+  let details = {};
+  try {
+    const token = decryptSecret(credential);
+    const requestConfig = {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
+    };
+    if (channel.channel_type === "WHATSAPP") {
+      const wabaId = String(channel.business_account_id || "").trim();
+      const appId = String(channel.app_id || "").trim();
+      if (!wabaId || !appId) {
+        throw httpError(400, "WABA ID e Meta App ID sono obbligatori", "META_WHATSAPP_DATA_MISSING");
+      }
+      const inspection = await inspectMetaAccessToken({ token, appId, version });
+      if (!inspection.isValid || inspection.missingScopes.length) {
+        throw httpError(
+          403,
+          inspection.missingScopes.length
+            ? `Permessi token mancanti: ${inspection.missingScopes.join(", ")}`
+            : "Il token WhatsApp non è valido",
+          "META_WHATSAPP_TOKEN_INVALID"
+        );
+      }
+      if (inspection.appId && inspection.appId !== appId) {
+        throw httpError(403, "Il token appartiene a una Meta App diversa", "META_TOKEN_APP_MISMATCH");
+      }
+      const baseUrl = `https://graph.facebook.com/${version}/${encodeURIComponent(wabaId)}`;
+      await axios.post(`${baseUrl}/subscribed_apps`, null, requestConfig);
+      const phonesResponse = await axios.get(`${baseUrl}/phone_numbers`, {
+        ...requestConfig,
+        params: { fields: "id,display_phone_number,verified_name,status,quality_rating" },
+      });
+      const phones = Array.isArray(phonesResponse.data?.data) ? phonesResponse.data.data : [];
+      const phone = phones.find((item) => String(item.id) === String(channel.external_account_id));
+      if (!phone) {
+        throw httpError(409, "Il Phone Number ID non appartiene al WABA configurato", "META_PHONE_MISMATCH");
+      }
+      verifiedName = phone.verified_name || phone.display_phone_number || verifiedName;
+      details = {
+        phoneNumber: phone.display_phone_number || null,
+        qualityRating: phone.quality_rating || null,
+        tokenType: inspection.type,
+        scopes: inspection.scopes,
+      };
+    } else if (channel.channel_type === "MESSENGER") {
+      const baseUrl = `https://graph.facebook.com/${version}`;
+      const appId = String(channel.app_id || "").trim();
+      if (!appId) throw httpError(400, "Meta App ID obbligatorio", "META_APP_ID_MISSING");
+      const inspection = await inspectMetaAccessToken({
+        token,
+        appId,
+        version,
+        requiredScopes: ["pages_messaging", "pages_manage_metadata"],
+      });
+      if (!inspection.isValid || inspection.missingScopes.length) {
+        throw httpError(
+          403,
+          inspection.missingScopes.length
+            ? `Permessi token mancanti: ${inspection.missingScopes.join(", ")}`
+            : "Il Page access token non è valido",
+          "META_MESSENGER_TOKEN_INVALID"
+        );
+      }
+      if (inspection.appId && inspection.appId !== appId) {
+        throw httpError(403, "Il Page token appartiene a una Meta App diversa", "META_TOKEN_APP_MISMATCH");
+      }
+      const profileResponse = await axios.get(`${baseUrl}/me`, {
+        ...requestConfig,
+        params: { fields: "id,name" },
+      });
+      if (String(profileResponse.data?.id || "") !== String(channel.external_account_id)) {
+        throw httpError(409, "Il Page access token appartiene a una Pagina diversa", "META_PAGE_MISMATCH");
+      }
+      await axios.post(`${baseUrl}/${encodeURIComponent(channel.external_account_id)}/subscribed_apps`, null, {
+        ...requestConfig,
+        params: {
+          subscribed_fields:
+            "messages,messaging_postbacks,message_deliveries,message_reads,messaging_optins,messaging_referrals",
+        },
+      });
+      verifiedName = profileResponse.data?.name || verifiedName;
+      details = {
+        pageId: profileResponse.data?.id,
+        subscribedFields: "messages",
+        scopes: inspection.scopes,
+      };
+    } else {
+      const baseUrl = `https://graph.instagram.com/${version}`;
+      const profileResponse = await axios.get(`${baseUrl}/me`, {
+        ...requestConfig,
+        params: { fields: "user_id,username,account_type" },
+      });
+      const profile = Array.isArray(profileResponse.data?.data)
+        ? profileResponse.data.data[0] || {}
+        : profileResponse.data || {};
+      if (String(profile.user_id || "") !== String(channel.external_account_id)) {
+        throw httpError(409, "Il token Instagram appartiene a un account diverso", "META_INSTAGRAM_MISMATCH");
+      }
+      await axios.post(`${baseUrl}/me/subscribed_apps`, null, {
+        ...requestConfig,
+        params: {
+          subscribed_fields:
+            "messages,messaging_optins,messaging_postbacks,messaging_reactions,messaging_referrals,messaging_seen",
+        },
+      });
+      verifiedName = profile.username ? `@${profile.username}` : verifiedName;
+      details = { instagramId: profile.user_id, username: profile.username, accountType: profile.account_type };
+    }
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `UPDATE meta_channels SET status = 'ACTIVE', display_name = COALESCE(?, display_name),
+         last_verified_at = CURRENT_TIMESTAMP(3), last_error = NULL WHERE id = ?`,
+        [verifiedName, channelId]
+      );
+      await refreshIntegrationConnectionStatus(conn, channel.integration_id);
+      await audit(conn, {
+        integrationId: channel.integration_id,
+        actorId: actor.sub,
+        actorKind: "HUMAN",
+        action: "CHANNEL_CONNECTION_VERIFIED",
+        entityType: "CHANNEL",
+        entityId: channelId,
+        details: { channelType: channel.channel_type, ...details },
+      });
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+    const replay = await replayUnmatchedEvents();
+    return { fullyConnected: true, channelType: channel.channel_type, details, replay, overview: await getOverview() };
+  } catch (error) {
+    const message = metaApiErrorMessage(error);
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
+        `UPDATE meta_channels SET status = 'ERROR', last_error = ? WHERE id = ?`,
+        [message, channelId]
+      );
+      await refreshIntegrationConnectionStatus(conn, channel.integration_id);
+      await conn.commit();
+    } catch (updateError) {
+      await conn.rollback();
+      console.error("Unable to persist Meta channel verification error", updateError);
+    } finally {
+      conn.release();
+    }
+    throw httpError(502, `Verifica ${channel.channel_type} non riuscita: ${message}`, "META_CHANNEL_VERIFICATION_FAILED");
+  }
+}
+
+async function setChannelStatus(channelId, status, actor) {
+  const normalized = String(status || "").toUpperCase();
+  if (!new Set(["PAUSED", "PENDING"]).has(normalized)) {
+    throw httpError(400, "Stato canale non valido", "META_CHANNEL_STATUS_INVALID");
+  }
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[channel]] = await conn.query(
+      `SELECT integration_id, channel_type FROM meta_channels WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [channelId]
+    );
+    if (!channel) throw httpError(404, "Canale Meta non trovato", "META_CHANNEL_NOT_FOUND");
+    await conn.query(`UPDATE meta_channels SET status = ? WHERE id = ?`, [normalized, channelId]);
+    await refreshIntegrationConnectionStatus(conn, channel.integration_id);
+    await audit(conn, {
+      integrationId: channel.integration_id,
+      actorId: actor.sub,
+      actorKind: "HUMAN",
+      action: "CHANNEL_STATUS_CHANGED",
+      entityType: "CHANNEL",
+      entityId: channelId,
+      details: { channelType: channel.channel_type, status: normalized },
+    });
+    await conn.commit();
+    return { ok: true, overview: await getOverview() };
   } catch (error) {
     await conn.rollback();
     throw error;
@@ -410,6 +764,24 @@ async function applyStatus(conn, channel, event) {
   const map = { SENT: "SENT", DELIVERED: "DELIVERED", READ: "READ", FAILED: "FAILED" };
   const status = map[event.status];
   if (!status) return;
+  if (status === "READ" && !event.externalMessageId && event.contactId) {
+    await conn.query(
+      `UPDATE meta_messages m
+       JOIN meta_conversations cv ON cv.id = m.conversation_id
+       JOIN meta_contacts c ON c.id = cv.contact_id
+       SET m.status = 'READ', m.payload_json = ?
+       WHERE m.channel_id = ? AND m.direction = 'OUTBOUND'
+         AND c.external_contact_id = ? AND m.occurred_at <= ?
+         AND m.status IN ('SENT', 'DELIVERED')`,
+      [
+        JSON.stringify(event.payload || {}),
+        channel.id,
+        event.contactId,
+        mysqlDateTime(event.occurredAt),
+      ]
+    );
+    return;
+  }
   await conn.query(
     `UPDATE meta_messages SET status = ?, payload_json = ?,
        error_message = IF(? = 'FAILED', ?, NULL)
@@ -749,16 +1121,24 @@ async function ingestWebhook(rawBody, payload) {
   }
 }
 
-async function listConversations({ status = "ACTIVE", limit = 100 } = {}) {
+async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 100 } = {}) {
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
   const normalizedStatus = String(status).toUpperCase();
+  const normalizedChannel = String(channel).toUpperCase();
+  if (normalizedChannel !== "ALL" && !CHANNEL_TYPES.has(normalizedChannel)) {
+    throw httpError(400, "Filtro canale non valido", "META_CHANNEL_FILTER_INVALID");
+  }
   const params = [];
-  let statusClause = "";
+  const clauses = [];
   if (normalizedStatus === "ACTIVE") {
-    statusClause = "WHERE cv.status <> 'ARCHIVED'";
+    clauses.push("cv.status <> 'ARCHIVED'");
   } else if (normalizedStatus !== "ALL") {
-    statusClause = "WHERE cv.status = ?";
+    clauses.push("cv.status = ?");
     params.push(normalizedStatus);
+  }
+  if (normalizedChannel !== "ALL") {
+    clauses.push("ch.channel_type = ?");
+    params.push(normalizedChannel);
   }
   params.push(safeLimit);
   const [rows] = await db.query(
@@ -774,7 +1154,7 @@ async function listConversations({ status = "ACTIVE", limit = 100 } = {}) {
        SELECT m.id FROM meta_messages m WHERE m.conversation_id = cv.id
        ORDER BY m.occurred_at DESC, m.created_at DESC LIMIT 1
      )
-     ${statusClause}
+     ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
      ORDER BY cv.last_message_at DESC LIMIT ?`,
     params
   );
@@ -941,6 +1321,13 @@ async function queueMessage(conversationId, input, actor) {
   if (conversation.status === "ARCHIVED") {
     throw httpError(409, "Ripristina la conversazione prima di rispondere", "META_CONVERSATION_ARCHIVED");
   }
+  if (conversation.channel_type === "INSTAGRAM" && Buffer.byteLength(text, "utf8") > 1000) {
+    throw httpError(
+      400,
+      "Instagram accetta messaggi di massimo 1000 byte",
+      "META_INSTAGRAM_MESSAGE_TOO_LONG"
+    );
+  }
   if (conversation.integration_status !== "CONNECTED" || conversation.channel_status !== "ACTIVE") {
     throw httpError(409, "Canale Meta non connesso", "META_CHANNEL_NOT_CONNECTED");
   }
@@ -1065,7 +1452,10 @@ async function processNextOutbound({ jobId = null, force = false } = {}) {
     const [rows] = await conn.query(
       `SELECT j.*, m.body_text, m.conversation_id, cv.contact_id,
               c.external_contact_id, ch.channel_type, ch.external_account_id,
-              i.graph_api_version, i.encrypted_access_token, i.token_iv, i.token_auth_tag
+              i.graph_api_version,
+              COALESCE(ch.encrypted_access_token, i.encrypted_access_token) AS encrypted_access_token,
+              COALESCE(ch.token_iv, i.token_iv) AS token_iv,
+              COALESCE(ch.token_auth_tag, i.token_auth_tag) AS token_auth_tag
        FROM meta_outbound_jobs j
        JOIN meta_messages m ON m.id = j.message_id
        JOIN meta_conversations cv ON cv.id = m.conversation_id
@@ -1149,10 +1539,15 @@ async function processNextOutbound({ jobId = null, force = false } = {}) {
     });
     const version = job.graph_api_version || process.env.META_GRAPH_API_VERSION;
     if (!token || !version) throw new Error("Credenziali o versione Graph API mancanti");
-    const url = `https://graph.facebook.com/${version}/${encodeURIComponent(job.external_account_id)}/messages`;
+    const graphHost = job.channel_type === "INSTAGRAM"
+      ? "https://graph.instagram.com"
+      : "https://graph.facebook.com";
+    const url = `${graphHost}/${version}/${encodeURIComponent(job.external_account_id)}/messages`;
     const body = job.channel_type === "WHATSAPP"
       ? { messaging_product: "whatsapp", to: job.external_contact_id, type: "text", text: { body: job.body_text } }
-      : { recipient: { id: job.external_contact_id }, messaging_type: "RESPONSE", message: { text: job.body_text } };
+      : job.channel_type === "MESSENGER"
+        ? { recipient: { id: job.external_contact_id }, messaging_type: "RESPONSE", message: { text: job.body_text } }
+        : { recipient: { id: job.external_contact_id }, message: { text: job.body_text } };
     const response = await axios.post(url, body, {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
@@ -1195,9 +1590,13 @@ async function processNextLead() {
   try {
     await conn.beginTransaction();
     const [rows] = await conn.query(
-      `SELECT l.*, i.graph_api_version, i.encrypted_access_token, i.token_iv, i.token_auth_tag
+      `SELECT l.*, i.graph_api_version,
+              COALESCE(ch.encrypted_access_token, i.encrypted_access_token) AS encrypted_access_token,
+              COALESCE(ch.token_iv, i.token_iv) AS token_iv,
+              COALESCE(ch.token_auth_tag, i.token_auth_tag) AS token_auth_tag
        FROM meta_leads l
        JOIN meta_integrations i ON i.id = l.integration_id
+       LEFT JOIN meta_channels ch ON ch.id = l.channel_id
        WHERE l.hydration_status IN ('PENDING', 'RETRY')
          AND (l.hydration_next_attempt_at IS NULL OR l.hydration_next_attempt_at <= CURRENT_TIMESTAMP(3))
          AND i.status = 'CONNECTED'
@@ -1308,9 +1707,12 @@ module.exports = {
   processNextLead,
   queueMessage,
   replayUnmatchedEvents,
+  saveChannel,
   saveIntegration,
+  setChannelStatus,
   setAiMode,
   updateConversation,
   updateLead,
+  verifyChannel,
   verifyWhatsAppIntegration,
 };

@@ -43,6 +43,30 @@ exports.saveIntegration = async (req, res) => {
   }
 };
 
+exports.saveChannel = async (req, res) => {
+  try {
+    res.status(201).json(await service.saveChannel(req.params.id, req.body || {}, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
+exports.verifyChannel = async (req, res) => {
+  try {
+    res.json(await service.verifyChannel(req.params.id, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
+exports.setChannelStatus = async (req, res) => {
+  try {
+    res.json(await service.setChannelStatus(req.params.id, req.body?.status, req.user));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
 exports.replayUnmatchedEvents = async (req, res) => {
   try {
     const replay = await service.replayUnmatchedEvents({ limit: req.body?.limit });

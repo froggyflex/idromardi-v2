@@ -6,7 +6,8 @@ below is complete.
 
 ## What is already implemented
 
-- Unified WhatsApp, Messenger, and Instagram conversation inbox.
+- Unified WhatsApp, Messenger, and Instagram conversation inbox, with a separate
+  encrypted credential and health state for each channel.
 - Lead Ads webhook intake and background retrieval of complete lead fields.
 - Exact webhook-body signature verification (`X-Hub-Signature-256`).
 - Idempotent webhook storage, so Meta retries cannot duplicate messages/leads.
@@ -55,22 +56,33 @@ encryption key requires re-encrypting stored tokens; do not replace it casually.
 4. Configure the callback as
    `https://idromardi-v2.onrender.com/api/meta/webhook` and enter the same verify
    token stored in the backend.
-5. Subscribe the relevant WhatsApp Business Account/Page/Instagram account to
-   message, message-status, and `leadgen` events.
-6. Request only the permissions used by the selected channels. At the time of
-   activation, confirm the exact names in Meta App Review. They commonly include
-   `whatsapp_business_messaging`, `whatsapp_business_management`,
-   `pages_messaging`, `pages_manage_metadata`, `leads_retrieval`, and the current
-   Instagram messaging permission.
-7. Prefer a scoped System User access token for the server. Do not paste a token
-   into chat, source code, logs, screenshots, or frontend environment variables.
-8. In **Amministrazione → Meta Business → Configurazione**, store the Business
-   ID, App ID, Graph API version, token, and each external channel ID. For
-   WhatsApp use the Phone Number ID, not the visible telephone number.
+5. Subscribe the app-level Webhooks products to the required objects and fields:
+   `whatsapp_business_account/messages`, `page/messages` (plus delivery/read
+   fields), and `instagram/messages`. Use the same callback and verify token.
+6. Configure each production channel with its own credential:
+   - **WhatsApp:** the production Phone Number ID and a permanent System User
+     token with `business_management`, `whatsapp_business_management`, and
+     `whatsapp_business_messaging`. Assign the app and WABA to that System User.
+   - **Messenger:** the Facebook Page ID and Page access token with
+     `business_management`, `pages_show_list`, `pages_manage_metadata`, `pages_messaging`, and
+     `pages_read_engagement`; add `leads_retrieval` when Lead Ads are used. The Page administrator must have MESSAGING and
+     MODERATE tasks.
+   - **Instagram:** the Instagram Professional Account `user_id` and a long-lived
+     Instagram user token with `instagram_business_basic` and
+     `instagram_business_manage_messages`. Instagram Login calls use
+     `graph.instagram.com`; do not reuse the WhatsApp or Page token.
+7. Do not paste tokens into chat, source code, logs, screenshots, or frontend
+   environment variables. Enter them only in the platform configuration page,
+   where they are encrypted and never returned to the browser.
+8. In **Amministrazione → Meta Business → Impostazioni**, save the general App
+   ID, WABA ID and Graph API version. Then save and verify all three channel
+   cards. Verification subscribes the account to the correct webhook fields and
+   confirms that the token belongs to the entered account ID.
 9. Keep `META_OUTBOX_WORKER_ENABLED=false` while testing inbound webhooks. Use
    Meta's test number/Page/test-lead tools, verify deduplication, and confirm that
    lead contact fields hydrate correctly.
-10. Test one operator-approved outbound reply, delivery/read updates, an expired
+10. Test one inbound and operator-approved outbound reply on every channel,
+    delivery updates, an expired
     reply window, token failure, and retry behavior. Once inbound delivery is
     confirmed, set `META_OUTBOX_WORKER_ENABLED=true` and restart the backend so
     queued retries and future approved automation are processed continuously.
@@ -80,6 +92,12 @@ encryption key requires re-encrypting stored tokens; do not replace it casually.
 Meta App Review may also require a privacy policy URL, data-deletion instructions,
 a review screencast, and test credentials. Prepare these before requesting
 advanced access.
+
+Instagram tokens generated in the App Dashboard are normally long-lived for 60
+days. Record their expiry in the channel card and rotate them before expiry. A
+future multi-customer OAuth rollout should exchange and refresh these tokens
+automatically; manual encrypted storage is appropriate for the operator's own
+single production account.
 
 ## AI rollout guardrails
 

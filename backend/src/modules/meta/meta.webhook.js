@@ -108,6 +108,29 @@ function pageEvents(payload) {
           payload: item,
         });
       }
+      for (const messageId of item.delivery?.mids || []) {
+        events.push({
+          kind: "STATUS",
+          channelType,
+          accountId,
+          externalMessageId: String(messageId || ""),
+          status: "DELIVERED",
+          occurredAt: unixDateTime(item.delivery?.watermark || item.timestamp),
+          payload: item,
+        });
+      }
+      if (item.read?.watermark) {
+        events.push({
+          kind: "STATUS",
+          channelType,
+          accountId,
+          contactId: String(item.sender?.id || ""),
+          externalMessageId: null,
+          status: "READ",
+          occurredAt: unixDateTime(item.read.watermark),
+          payload: item,
+        });
+      }
     }
     for (const change of entry.changes || []) {
       if (change.field !== "leadgen") continue;

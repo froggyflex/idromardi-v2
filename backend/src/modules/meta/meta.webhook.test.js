@@ -95,6 +95,59 @@ test("normalizes Page leadgen notifications", () => {
   assert.equal(lead.accountId, "page-1");
 });
 
+test("normalizes Messenger and Instagram messages plus delivery receipts", () => {
+  const messenger = webhook.normalizeWebhook({
+    object: "page",
+    entry: [
+      {
+        id: "page-1",
+        messaging: [
+          {
+            sender: { id: "psid-1" },
+            recipient: { id: "page-1" },
+            timestamp: 1700000000000,
+            message: { mid: "mid-1", text: "Ciao Messenger" },
+          },
+          {
+            timestamp: 1700000001000,
+            delivery: { mids: ["mid-out-1"], watermark: 1700000001000 },
+          },
+          {
+            sender: { id: "psid-1" },
+            timestamp: 1700000002000,
+            read: { watermark: 1700000002000 },
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(messenger[0].channelType, "MESSENGER");
+  assert.equal(messenger[0].contactId, "psid-1");
+  assert.equal(messenger[1].status, "DELIVERED");
+  assert.equal(messenger[2].status, "READ");
+  assert.equal(messenger[2].contactId, "psid-1");
+
+  const [instagram] = webhook.normalizeWebhook({
+    object: "instagram",
+    entry: [
+      {
+        id: "ig-1",
+        messaging: [
+          {
+            sender: { id: "igsid-1" },
+            recipient: { id: "ig-1" },
+            timestamp: 1700000002000,
+            message: { mid: "ig-mid-1", text: "Ciao Instagram" },
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(instagram.channelType, "INSTAGRAM");
+  assert.equal(instagram.accountId, "ig-1");
+  assert.equal(instagram.contactId, "igsid-1");
+});
+
 test("encrypts access tokens with authenticated encryption", () => {
   const previous = process.env.META_CREDENTIALS_ENCRYPTION_KEY;
   process.env.META_CREDENTIALS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");

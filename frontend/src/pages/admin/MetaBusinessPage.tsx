@@ -39,6 +39,10 @@ type MetaChannel = {
   external_account_id: string;
   display_name?: string | null;
   status: string;
+  has_access_token?: number;
+  token_expires_at?: string | null;
+  last_verified_at?: string | null;
+  last_error?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -117,6 +121,47 @@ type Lead = {
 
 type Tab = "INBOX" | "LEADS" | "SETTINGS";
 type ConversationView = "ACTIVE" | "ARCHIVED";
+type ChannelType = "WHATSAPP" | "MESSENGER" | "INSTAGRAM";
+type ChannelFilter = "ALL" | ChannelType;
+
+type ChannelDraft = {
+  id?: string;
+  externalAccountId: string;
+  displayName: string;
+  accessToken: string;
+  tokenExpiresAt: string;
+};
+
+const CHANNEL_TYPES: ChannelType[] = ["WHATSAPP", "MESSENGER", "INSTAGRAM"];
+const CHANNEL_DETAILS: Record<ChannelType, {
+  title: string;
+  idLabel: string;
+  idPlaceholder: string;
+  tokenLabel: string;
+  permissions: string;
+}> = {
+  WHATSAPP: {
+    title: "WhatsApp Business",
+    idLabel: "Phone Number ID",
+    idPlaceholder: "ID del nuovo numero di produzione",
+    tokenLabel: "System user access token",
+    permissions: "business_management, whatsapp_business_management, whatsapp_business_messaging",
+  },
+  MESSENGER: {
+    title: "Facebook Messenger",
+    idLabel: "Facebook Page ID",
+    idPlaceholder: "ID della Pagina Facebook",
+    tokenLabel: "Page access token",
+    permissions: "business_management, pages_show_list, pages_manage_metadata, pages_messaging, pages_read_engagement, leads_retrieval",
+  },
+  INSTAGRAM: {
+    title: "Instagram Direct",
+    idLabel: "Instagram Professional Account ID",
+    idPlaceholder: "Instagram user_id dell’account professionale",
+    tokenLabel: "Instagram user access token",
+    permissions: "instagram_business_basic, instagram_business_manage_messages",
+  },
+};
 
 const EMPTY_OVERVIEW: Overview = {
   counts: {},
@@ -130,19 +175,43 @@ const EMPTY_OVERVIEW: Overview = {
 
 function formFromOverview(overview: Overview) {
   const integration = overview.integrations[0];
-  const channel = integration
-    ? overview.channels.find((item) => item.integration_id === integration.id)
-    : undefined;
   return {
     name: integration?.name || "Meta Business",
     businessAccountId: integration?.business_account_id || "",
     appId: integration?.app_id || "",
     graphApiVersion: integration?.graph_api_version || "",
-    accessToken: "",
-    channelType: channel?.channel_type || "WHATSAPP",
-    externalAccountId: channel?.external_account_id || "",
-    displayName: channel?.display_name || "",
   };
+}
+
+function dateTimeLocalValue(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function channelDraftsFromOverview(overview: Overview): Record<ChannelType, ChannelDraft> {
+  const integration = overview.integrations[0];
+  return Object.fromEntries(
+    CHANNEL_TYPES.map((type) => {
+      const channel = integration
+        ? overview.channels.find(
+            (item) => item.integration_id === integration.id && item.channel_type === type
+          )
+        : undefined;
+      return [
+        type,
+        {
+          id: channel?.id,
+          externalAccountId: channel?.external_account_id || "",
+          displayName: channel?.display_name || "",
+          accessToken: "",
+          tokenExpiresAt: dateTimeLocalValue(channel?.token_expires_at),
+        },
+      ];
+    })
+  ) as Record<ChannelType, ChannelDraft>;
 }
 
 function formatDate(value?: string | null) {
@@ -183,6 +252,7 @@ export default function MetaBusinessPage() {
   const isAdmin = String(user?.role || "").toUpperCase() === "ADMIN";
   const [tab, setTab] = useState<Tab>("INBOX");
   const [conversationView, setConversationView] = useState<ConversationView>("ACTIVE");
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>("ALL");
   const liveRefreshInFlight = useRef(false);
   const [overview, setOverview] = useState<Overview>(EMPTY_OVERVIEW);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -193,7 +263,8 @@ export default function MetaBusinessPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [replaying, setReplaying] = useState(false);
-  const [verifying, setVerifying] = useState(false);
+  const [verifyingChannelId, setVerifyingChannelId] = useState<string | null>(null);
+  const [savingChannelType, setSavingChannelType] = useState<ChannelType | null>(null);
   const [processingQueue, setProcessingQueue] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -202,21 +273,21 @@ export default function MetaBusinessPage() {
     businessAccountId: "",
     appId: "",
     graphApiVersion: "",
-    accessToken: "",
-    channelType: "WHATSAPP",
-    externalAccountId: "",
-    displayName: "",
   });
+  const [channelDrafts, setChannelDrafts] = useState<Record<ChannelType, ChannelDraft>>(
+    () => channelDraftsFromOverview(EMPTY_OVERVIEW)
+  );
 
   const selected = useMemo(
     () => conversations.find((item) => item.id === selectedId) || null,
     [conversations, selectedId]
   );
   const savedIntegration = overview.integrations[0] || null;
-  const savedChannel = savedIntegration
-    ? overview.channels.find((item) => item.integration_id === savedIntegration.id) || null
-    : null;
   const connected = overview.integrations.some((item) => item.status === "CONNECTED");
+  const integrationChannels = savedIntegration
+    ? overview.channels.filter((item) => item.integration_id === savedIntegration.id)
+    : [];
+  const activeChannelCount = integrationChannels.filter((item) => item.status === "ACTIVE").length;
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -225,12 +296,13 @@ export default function MetaBusinessPage() {
       const [overviewResponse, conversationsResponse, leadsResponse] = await Promise.all([
         api.get<Overview>("/meta/overview"),
         api.get<{ conversations: Conversation[] }>(
-          `/meta/conversations?status=${conversationView}`
+          `/meta/conversations?status=${conversationView}&channel=${channelFilter}`
         ),
         api.get<{ leads: Lead[] }>("/meta/leads?status=ALL"),
       ]);
       setOverview(overviewResponse.data);
       setForm(formFromOverview(overviewResponse.data));
+      setChannelDrafts(channelDraftsFromOverview(overviewResponse.data));
       setConversations(conversationsResponse.data.conversations || []);
       setLeads(leadsResponse.data.leads || []);
       setSelectedId((current) =>
@@ -243,7 +315,7 @@ export default function MetaBusinessPage() {
     } finally {
       setLoading(false);
     }
-  }, [conversationView]);
+  }, [channelFilter, conversationView]);
 
   useEffect(() => {
     void loadAll();
@@ -270,7 +342,7 @@ export default function MetaBusinessPage() {
         await Promise.all([
           api.get<Overview>("/meta/overview"),
           api.get<{ conversations: Conversation[] }>(
-            `/meta/conversations?status=${conversationView}`
+            `/meta/conversations?status=${conversationView}&channel=${channelFilter}`
           ),
           selectedId
             ? api.get<{ messages: Message[] }>(`/meta/conversations/${selectedId}/messages`)
@@ -294,7 +366,7 @@ export default function MetaBusinessPage() {
     } finally {
       liveRefreshInFlight.current = false;
     }
-  }, [conversationView, selectedId, tab]);
+  }, [channelFilter, conversationView, selectedId, tab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -426,21 +498,13 @@ export default function MetaBusinessPage() {
         businessAccountId: form.businessAccountId || null,
         appId: form.appId || null,
         graphApiVersion: form.graphApiVersion || null,
-        accessToken: form.accessToken || null,
-        channels: form.externalAccountId
-          ? [
-              {
-                channelType: form.channelType,
-                externalAccountId: form.externalAccountId,
-                displayName: form.displayName || null,
-              },
-            ]
-          : [],
+        channels: [],
       };
       const response = await api.post<Overview>("/meta/integrations", payload);
       setOverview(response.data);
       setForm(formFromOverview(response.data));
-      setNotice("Configurazione salvata. Il token non verrà mai mostrato nuovamente.");
+      setChannelDrafts(channelDraftsFromOverview(response.data));
+      setNotice("Configurazione generale salvata. Ora collega e verifica i tre canali.");
     } catch (requestError: unknown) {
       setError(requestErrorMessage(requestError, "Configurazione non salvata."));
     }
@@ -457,13 +521,14 @@ export default function MetaBusinessPage() {
       }>("/meta/webhooks/replay", { limit: 100 });
       setOverview(response.data.overview);
       setForm(formFromOverview(response.data.overview));
+      setChannelDrafts(channelDraftsFromOverview(response.data.overview));
       const result = response.data.replay;
       setNotice(
         `Webhook controllati: ${result.examined}. Recuperati: ${result.processed}. ` +
           `Non abbinati: ${result.stillUnmatched}. Errori: ${result.failed}.`
       );
       const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
-        `/meta/conversations?status=${conversationView}`
+        `/meta/conversations?status=${conversationView}&channel=${channelFilter}`
       );
       setConversations(conversationsResponse.data.conversations || []);
       setSelectedId((current) =>
@@ -478,47 +543,80 @@ export default function MetaBusinessPage() {
     }
   }
 
-  async function verifyWhatsAppConnection() {
-    if (!savedIntegration) return;
-    setVerifying(true);
+  async function saveChannel(channelType: ChannelType) {
+    if (!savedIntegration) {
+      setError("Salva prima la configurazione generale Meta.");
+      return;
+    }
+    const draft = channelDrafts[channelType];
+    if (!draft.externalAccountId.trim()) {
+      setError(`${CHANNEL_DETAILS[channelType].idLabel} obbligatorio.`);
+      return;
+    }
+    setSavingChannelType(channelType);
     setError(null);
     setNotice(null);
     try {
       const response = await api.post<{
-        subscribed: boolean;
-        phones: Array<{ id: string; displayPhoneNumber?: string | null }>;
-        matchedChannels: number;
-        fullyConnected: boolean;
-        credentialSync?: { integrationsUpdated: number; jobsRecovered: number };
+        channelId: string;
         overview: Overview;
-      }>(`/meta/integrations/${savedIntegration.id}/verify-whatsapp`);
+      }>(`/meta/integrations/${savedIntegration.id}/channels`, {
+        id: draft.id,
+        channelType,
+        externalAccountId: draft.externalAccountId.trim(),
+        displayName: draft.displayName.trim() || null,
+        accessToken: draft.accessToken || null,
+        tokenExpiresAt: draft.tokenExpiresAt || null,
+      });
       setOverview(response.data.overview);
       setForm(formFromOverview(response.data.overview));
-      const phoneSummary = response.data.phones
-        .map((phone) => phone.displayPhoneNumber || phone.id)
-        .join(", ");
-      setNotice(
-        response.data.fullyConnected
-          ? `WhatsApp verificato e sottoscritto correttamente${phoneSummary ? `: ${phoneSummary}.` : "."} ` +
-            `Connessioni sincronizzate: ${response.data.credentialSync?.integrationsUpdated || 0}. ` +
-            `Messaggi recuperati: ${response.data.credentialSync?.jobsRecovered || 0}.`
-          : "Verifica completata, ma il Phone Number ID salvato non corrisponde ai numeri del WABA."
-      );
-      const conversationsResponse = await api.get<{ conversations: Conversation[] }>(
-        `/meta/conversations?status=${conversationView}`
-      );
-      setConversations(conversationsResponse.data.conversations || []);
+      setChannelDrafts(channelDraftsFromOverview(response.data.overview));
+      setNotice(`${CHANNEL_DETAILS[channelType].title} salvato. Ora esegui la verifica.`);
     } catch (requestError: unknown) {
-      setError(requestErrorMessage(requestError, "Verifica della connessione WhatsApp non riuscita."));
-      try {
-        const overviewResponse = await api.get<Overview>("/meta/overview");
+      setError(requestErrorMessage(requestError, `Salvataggio ${channelType} non riuscito.`));
+    } finally {
+      setSavingChannelType(null);
+    }
+  }
+
+  async function verifyMetaChannel(channel: MetaChannel) {
+    setVerifyingChannelId(channel.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await api.post<{
+        fullyConnected: boolean;
+        channelType: ChannelType;
+        overview: Overview;
+      }>(`/meta/channels/${channel.id}/verify`);
+      setOverview(response.data.overview);
+      setForm(formFromOverview(response.data.overview));
+      setChannelDrafts(channelDraftsFromOverview(response.data.overview));
+      setNotice(`${CHANNEL_DETAILS[response.data.channelType].title} verificato e operativo.`);
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, `Verifica ${channel.channel_type} non riuscita.`));
+      const overviewResponse = await api.get<Overview>("/meta/overview").catch(() => null);
+      if (overviewResponse) {
         setOverview(overviewResponse.data);
-        setForm(formFromOverview(overviewResponse.data));
-      } catch {
-        // Preserve the verification error; the standard refresh remains available.
+        setChannelDrafts(channelDraftsFromOverview(overviewResponse.data));
       }
     } finally {
-      setVerifying(false);
+      setVerifyingChannelId(null);
+    }
+  }
+
+  async function toggleChannel(channel: MetaChannel) {
+    const status = channel.status === "PAUSED" ? "PENDING" : "PAUSED";
+    setError(null);
+    try {
+      const response = await api.patch<{ overview: Overview }>(`/meta/channels/${channel.id}/status`, {
+        status,
+      });
+      setOverview(response.data.overview);
+      setChannelDrafts(channelDraftsFromOverview(response.data.overview));
+      setNotice(status === "PAUSED" ? "Canale sospeso." : "Canale riattivato: esegui la verifica.");
+    } catch (requestError: unknown) {
+      setError(requestErrorMessage(requestError, "Stato del canale non aggiornato."));
     }
   }
 
@@ -708,11 +806,12 @@ export default function MetaBusinessPage() {
       {tab === "INBOX" && (
         <div className="grid min-h-[560px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[360px_1fr]">
           <div className="border-b border-slate-200 lg:border-b-0 lg:border-r">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
-              <div className="text-sm font-bold text-slate-900">
-                {conversationView === "ACTIVE" ? "Inbox unificata" : "Archivio"}
-              </div>
-              <div className="flex rounded-lg bg-slate-100 p-0.5">
+            <div className="space-y-2 border-b border-slate-200 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-bold text-slate-900">
+                  {conversationView === "ACTIVE" ? "Inbox unificata" : "Archivio"}
+                </div>
+                <div className="flex rounded-lg bg-slate-100 p-0.5">
                 <button
                   type="button"
                   onClick={() => setConversationView("ACTIVE")}
@@ -731,7 +830,18 @@ export default function MetaBusinessPage() {
                 >
                   Archivio
                 </button>
+                </div>
               </div>
+              <select
+                value={channelFilter}
+                onChange={(event) => setChannelFilter(event.target.value as ChannelFilter)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700"
+              >
+                <option value="ALL">Tutti i canali</option>
+                <option value="WHATSAPP">WhatsApp</option>
+                <option value="MESSENGER">Messenger</option>
+                <option value="INSTAGRAM">Instagram</option>
+              </select>
             </div>
             <div className="max-h-[560px] overflow-auto">
               {!conversations.length && (
@@ -971,25 +1081,20 @@ export default function MetaBusinessPage() {
                     </span>
                   </div>
                   <p className="mt-1 text-sm text-slate-500">
-                    Salva i dati, poi verifica e attiva la sottoscrizione WhatsApp direttamente da qui.
+                    Un’unica inbox per WhatsApp, Messenger e Instagram, con credenziali separate e cifrate.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => void verifyWhatsAppConnection()}
-                disabled={!isAdmin || !savedIntegration || verifying}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RefreshCw className={`h-4 w-4 ${verifying ? "animate-spin" : ""}`} />
-                {verifying ? "Verifica in corso…" : "Verifica e attiva WhatsApp"}
-              </button>
+              <div className="rounded-xl bg-slate-900 px-4 py-3 text-right text-white">
+                <div className="text-2xl font-black">{activeChannelCount}/3</div>
+                <div className="text-[10px] font-bold text-slate-300">canali operativi</div>
+              </div>
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {[
                 ["Firma webhook", overview.webhookConfigured, "App Secret e verify token"],
                 ["Credenziali protette", overview.encryptionConfigured, "Token cifrato AES-256-GCM"],
-                ["Canale operativo", connected, "WABA, token e Phone Number ID"],
+                ["Canali operativi", activeChannelCount === 3, `${activeChannelCount} di 3 verificati`],
                 ["Invio automatico", overview.outboxWorkerEnabled, "Worker per invii e tentativi"],
               ].map(([label, ready, detail]) => (
                 <div key={String(label)} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-3">
@@ -1043,57 +1148,10 @@ export default function MetaBusinessPage() {
                     ))}
                   </div>
                 </div>
-                <div className="border-t border-slate-100 pt-5">
-                  <h3 className="text-xs font-black uppercase tracking-wide text-slate-400">Canale operativo</h3>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-600">Canale</span>
-                      <select
-                        value={form.channelType}
-                        onChange={(event) => setForm((current) => ({ ...current, channelType: event.target.value }))}
-                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
-                      >
-                        <option value="WHATSAPP">WhatsApp</option>
-                        <option value="MESSENGER">Messenger</option>
-                        <option value="INSTAGRAM">Instagram</option>
-                      </select>
-                    </label>
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-600">Phone Number / Page ID</span>
-                      <input
-                        value={form.externalAccountId}
-                        onChange={(event) => setForm((current) => ({ ...current, externalAccountId: event.target.value }))}
-                        placeholder="Phone Number ID o Page ID"
-                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
-                      />
-                    </label>
-                    <label className="block sm:col-span-2">
-                      <span className="text-xs font-semibold text-slate-600">Nome visualizzato</span>
-                      <input
-                        value={form.displayName}
-                        onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
-                        placeholder="Assistenza clienti"
-                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
-                      />
-                    </label>
-                  </div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-900">
+                  Il WABA ID serve a WhatsApp. Messenger e Instagram vengono collegati sotto con il proprio
+                  account ID e il proprio token, senza condividere credenziali tra canali.
                 </div>
-                <label className="block border-t border-slate-100 pt-5">
-                  <span className="text-xs font-semibold text-slate-600">Access token</span>
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    value={form.accessToken}
-                    onChange={(event) => setForm((current) => ({ ...current, accessToken: event.target.value }))}
-                    placeholder={savedIntegration?.has_access_token
-                      ? "Token già salvato — compila solo per sostituirlo"
-                      : "Token di sistema o access token temporaneo"}
-                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                  <span className="mt-1 block text-[10px] text-slate-500">
-                    Il token salvato resta cifrato e non viene mai mostrato.
-                  </span>
-                </label>
               </fieldset>
               <button
                 type="submit"
@@ -1101,7 +1159,7 @@ export default function MetaBusinessPage() {
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ShieldCheck className="h-4 w-4" />
-                Salva configurazione
+                Salva configurazione generale
               </button>
             </form>
 
@@ -1109,8 +1167,8 @@ export default function MetaBusinessPage() {
               <div className="flex items-center gap-3">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white">2</span>
                 <div>
-                  <h2 className="font-bold text-slate-900">Dati effettivamente salvati</h2>
-                  <p className="text-xs text-slate-500">Valori riletti dal database, non dalla form.</p>
+                  <h2 className="font-bold text-slate-900">Account applicazione</h2>
+                  <p className="text-xs text-slate-500">Configurazione comune ai tre canali.</p>
                 </div>
               </div>
               {!savedIntegration ? (
@@ -1124,11 +1182,8 @@ export default function MetaBusinessPage() {
                     ["WABA ID", savedIntegration.business_account_id || "—"],
                     ["Meta App ID", savedIntegration.app_id || "—"],
                     ["Graph API", savedIntegration.graph_api_version || "—"],
-                    ["Canale", savedChannel?.channel_type || "—"],
-                    ["Phone Number / Page ID", savedChannel?.external_account_id || "—"],
-                    ["Nome visualizzato", savedChannel?.display_name || "—"],
-                    ["Stato canale", savedChannel?.status || "—"],
-                    ["Access token", savedIntegration.has_access_token ? "Salvato e cifrato" : "Non presente"],
+                    ["Canali configurati", String(integrationChannels.length)],
+                    ["Canali operativi", `${activeChannelCount} / 3`],
                     ["Ultimo salvataggio", formatDate(savedIntegration.updated_at)],
                   ].map(([label, value]) => (
                     <div key={String(label)} className="grid grid-cols-[140px_1fr] gap-3 py-3 first:pt-0 last:pb-0">
@@ -1142,9 +1197,159 @@ export default function MetaBusinessPage() {
           </div>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-xs font-black text-white">3</span>
+              <div>
+                <h2 className="font-bold text-slate-900">Canali di produzione</h2>
+                <p className="text-xs text-slate-500">
+                  Ogni canale conserva il proprio token cifrato. Salva, verifica e poi prova un messaggio reale.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 grid gap-4 xl:grid-cols-3">
+              {CHANNEL_TYPES.map((channelType) => {
+                const details = CHANNEL_DETAILS[channelType];
+                const draft = channelDrafts[channelType];
+                const channel = integrationChannels.find((item) => item.channel_type === channelType);
+                const verificationBusy = verifyingChannelId === channel?.id;
+                const saveBusy = savingChannelType === channelType;
+                const operational = channel?.status === "ACTIVE";
+                return (
+                  <div key={channelType} className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <ChannelBadge type={channelType} />
+                        <h3 className="mt-2 font-bold text-slate-900">{details.title}</h3>
+                      </div>
+                      <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${
+                        operational
+                          ? "bg-emerald-100 text-emerald-800"
+                          : channel?.status === "ERROR"
+                            ? "bg-rose-100 text-rose-800"
+                            : channel?.status === "PAUSED"
+                              ? "bg-slate-200 text-slate-700"
+                              : "bg-amber-100 text-amber-800"
+                      }`}>
+                        {channel?.status || "NON CONFIGURATO"}
+                      </span>
+                    </div>
+                    <fieldset disabled={!isAdmin || !savedIntegration} className="mt-4 space-y-3 disabled:opacity-60">
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-600">{details.idLabel}</span>
+                        <input
+                          value={draft.externalAccountId}
+                          onChange={(event) =>
+                            setChannelDrafts((current) => ({
+                              ...current,
+                              [channelType]: { ...current[channelType], externalAccountId: event.target.value },
+                            }))
+                          }
+                          placeholder={details.idPlaceholder}
+                          className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-600">Nome visualizzato</span>
+                        <input
+                          value={draft.displayName}
+                          onChange={(event) =>
+                            setChannelDrafts((current) => ({
+                              ...current,
+                              [channelType]: { ...current[channelType], displayName: event.target.value },
+                            }))
+                          }
+                          placeholder="Assistenza Idromardi"
+                          className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-600">{details.tokenLabel}</span>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          value={draft.accessToken}
+                          onChange={(event) =>
+                            setChannelDrafts((current) => ({
+                              ...current,
+                              [channelType]: { ...current[channelType], accessToken: event.target.value },
+                            }))
+                          }
+                          placeholder={channel?.has_access_token
+                            ? "Token salvato — compila solo per sostituirlo"
+                            : "Incolla il token del canale"}
+                          className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-600">Scadenza token (se applicabile)</span>
+                        <input
+                          type="datetime-local"
+                          value={draft.tokenExpiresAt}
+                          onChange={(event) =>
+                            setChannelDrafts((current) => ({
+                              ...current,
+                              [channelType]: { ...current[channelType], tokenExpiresAt: event.target.value },
+                            }))
+                          }
+                          className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                        />
+                      </label>
+                    </fieldset>
+                    <div className="mt-3 rounded-xl bg-white px-3 py-2 text-[10px] leading-4 text-slate-500">
+                      Permessi: {details.permissions}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                      <span>{channel?.has_access_token ? "Token cifrato salvato" : "Token non presente"}</span>
+                      <span>Scadenza: {formatDate(channel?.token_expires_at)}</span>
+                    </div>
+                    {channel?.last_error && (
+                      <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">
+                        {channel.last_error}
+                      </div>
+                    )}
+                    <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => void saveChannel(channelType)}
+                        disabled={!isAdmin || !savedIntegration || saveBusy}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"
+                      >
+                        {saveBusy && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+                        Salva
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => channel && void verifyMetaChannel(channel)}
+                        disabled={!isAdmin || !channel || verificationBusy || channel.status === "PAUSED"}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${verificationBusy ? "animate-spin" : ""}`} />
+                        Verifica
+                      </button>
+                    </div>
+                    {channel && (
+                      <div className="mt-3 flex items-center justify-between border-t border-slate-200 pt-3 text-[10px] text-slate-500">
+                        <span>Ultima verifica: {formatDate(channel.last_verified_at)}</span>
+                        <button
+                          type="button"
+                          onClick={() => void toggleChannel(channel)}
+                          disabled={!isAdmin}
+                          className="font-bold text-slate-700 hover:text-slate-950 disabled:opacity-50"
+                        >
+                          {channel.status === "PAUSED" ? "Riattiva" : "Sospendi"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-3">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-600 text-xs font-black text-white">3</span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-600 text-xs font-black text-white">4</span>
                 <div>
                   <h2 className="font-bold text-slate-900">Monitoraggio webhook</h2>
                   <p className="text-xs text-slate-500">Eventi consegnati da Meta e relativo esito.</p>
@@ -1176,7 +1381,7 @@ export default function MetaBusinessPage() {
               <div className="overflow-hidden rounded-xl border border-slate-200">
                 {overview.webhookDiagnostics.recentEvents.length === 0 ? (
                   <div className="p-5 text-sm text-slate-500">
-                    Nessun webhook ricevuto. Usa “Verifica e attiva WhatsApp”, quindi invia un nuovo messaggio.
+                    Nessun webhook ricevuto. Verifica un canale, quindi invia un nuovo messaggio reale.
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">

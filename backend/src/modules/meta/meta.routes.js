@@ -23,6 +23,21 @@ protectedRouter.post(
   controller.saveIntegration
 );
 protectedRouter.post(
+  "/integrations/:id/channels",
+  requireRole("ADMIN"),
+  controller.saveChannel
+);
+protectedRouter.post(
+  "/channels/:id/verify",
+  requireRole("ADMIN"),
+  controller.verifyChannel
+);
+protectedRouter.patch(
+  "/channels/:id/status",
+  requireRole("ADMIN"),
+  controller.setChannelStatus
+);
+protectedRouter.post(
   "/webhooks/replay",
   requireRole("ADMIN"),
   controller.replayUnmatchedEvents
