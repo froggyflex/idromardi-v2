@@ -249,6 +249,47 @@ function ChannelBadge({ type }: { type: string }) {
   );
 }
 
+const CHANNEL_SURFACES = {
+  WHATSAPP: {
+    conversation: "bg-emerald-50/45",
+    selected: "bg-emerald-50",
+    outbound: "bg-emerald-600 text-white",
+    outboundMeta: "text-emerald-100",
+    focus: "focus:border-emerald-500 focus:ring-emerald-100",
+    action: "bg-emerald-600 hover:bg-emerald-700",
+    webhook: "border-l-emerald-400 bg-emerald-50/40",
+  },
+  INSTAGRAM: {
+    conversation: "bg-fuchsia-50/40",
+    selected: "bg-fuchsia-50",
+    outbound: "bg-fuchsia-600 text-white",
+    outboundMeta: "text-fuchsia-100",
+    focus: "focus:border-fuchsia-500 focus:ring-fuchsia-100",
+    action: "bg-fuchsia-600 hover:bg-fuchsia-700",
+    webhook: "border-l-fuchsia-400 bg-fuchsia-50/40",
+  },
+  MESSENGER: {
+    conversation: "bg-blue-50/45",
+    selected: "bg-blue-50",
+    outbound: "bg-blue-600 text-white",
+    outboundMeta: "text-blue-100",
+    focus: "focus:border-blue-500 focus:ring-blue-100",
+    action: "bg-blue-600 hover:bg-blue-700",
+    webhook: "border-l-blue-400 bg-blue-50/40",
+  },
+} as const;
+
+function channelSurface(type?: string | null) {
+  return CHANNEL_SURFACES[String(type || "MESSENGER").toUpperCase() as keyof typeof CHANNEL_SURFACES]
+    || CHANNEL_SURFACES.MESSENGER;
+}
+
+function webhookSurface(objectType?: string | null) {
+  if (objectType === "instagram") return CHANNEL_SURFACES.INSTAGRAM.webhook;
+  if (objectType === "whatsapp_business_account") return CHANNEL_SURFACES.WHATSAPP.webhook;
+  return CHANNEL_SURFACES.MESSENGER.webhook;
+}
+
 export default function MetaBusinessPage() {
   const user = getAuthUser();
   const isAdmin = String(user?.role || "").toUpperCase() === "ADMIN";
@@ -256,6 +297,8 @@ export default function MetaBusinessPage() {
   const [conversationView, setConversationView] = useState<ConversationView>("ACTIVE");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("ALL");
   const liveRefreshInFlight = useRef(false);
+  const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledConversationRef = useRef<string | null>(null);
   const [overview, setOverview] = useState<Overview>(EMPTY_OVERVIEW);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -290,6 +333,7 @@ export default function MetaBusinessPage() {
     ? overview.channels.filter((item) => item.integration_id === savedIntegration.id)
     : [];
   const activeChannelCount = integrationChannels.filter((item) => item.status === "ACTIVE").length;
+  const selectedSurface = channelSurface(selected?.channel_type);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -335,6 +379,19 @@ export default function MetaBusinessPage() {
         setError(requestError?.response?.data?.error || "Impossibile caricare i messaggi.")
       );
   }, [selectedId]);
+
+  useEffect(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport || !selectedId) return;
+    const conversationChanged = lastScrolledConversationRef.current !== selectedId;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    if (conversationChanged || distanceFromBottom < 140) {
+      window.requestAnimationFrame(() => {
+        viewport.scrollTop = viewport.scrollHeight;
+      });
+    }
+    lastScrolledConversationRef.current = selectedId;
+  }, [messages, selectedId]);
 
   const refreshLiveData = useCallback(async () => {
     if (document.visibilityState !== "visible" || liveRefreshInFlight.current) return;
@@ -806,8 +863,8 @@ export default function MetaBusinessPage() {
       </div>
 
       {tab === "INBOX" && (
-        <div className="grid min-h-[560px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[360px_1fr]">
-          <div className="border-b border-slate-200 lg:border-b-0 lg:border-r">
+        <div className="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:h-[calc(100vh-14rem)] lg:min-h-[560px] lg:max-h-[720px] lg:grid-cols-[340px_1fr]">
+          <div className="flex min-h-0 flex-col border-b border-slate-200 lg:border-b-0 lg:border-r">
             <div className="space-y-2 border-b border-slate-200 px-3 py-2.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-bold text-slate-900">
@@ -845,7 +902,7 @@ export default function MetaBusinessPage() {
                 <option value="INSTAGRAM">Instagram</option>
               </select>
             </div>
-            <div className="max-h-[560px] overflow-auto">
+            <div className="max-h-[300px] min-h-0 overflow-y-auto overscroll-contain lg:max-h-none lg:flex-1">
               {!conversations.length && (
                 <div className="p-8 text-center text-sm text-slate-500">
                   {conversationView === "ARCHIVED"
@@ -859,7 +916,7 @@ export default function MetaBusinessPage() {
                   type="button"
                   onClick={() => setSelectedId(conversation.id)}
                   className={`w-full border-b border-slate-100 px-4 py-4 text-left hover:bg-slate-50 ${
-                    selectedId === conversation.id ? "bg-blue-50/70" : ""
+                    selectedId === conversation.id ? channelSurface(conversation.channel_type).selected : ""
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -888,15 +945,15 @@ export default function MetaBusinessPage() {
             </div>
           </div>
 
-          <div className="flex min-h-[560px] flex-col">
+          <div className="flex h-[600px] min-h-0 flex-col lg:h-full">
             {!selected ? (
               <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-slate-500">
                 Seleziona una conversazione per visualizzare i messaggi.
               </div>
             ) : (
               <>
-                <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-                  <div>
+                <div className="flex flex-col gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                  <div className="min-w-0">
                     <div className="font-bold text-slate-900">
                       {selected.display_name || selected.external_contact_id}
                     </div>
@@ -907,7 +964,7 @@ export default function MetaBusinessPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
                     {selected.status !== "ARCHIVED" && (
                       <button
                         type="button"
@@ -932,7 +989,15 @@ export default function MetaBusinessPage() {
                     </button>
                   </div>
                 </div>
-                <div className="flex-1 space-y-3 overflow-auto bg-slate-50 p-5">
+                <div
+                  ref={messageViewportRef}
+                  className={`min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4 scroll-smooth sm:p-5 ${selectedSurface.conversation}`}
+                >
+                  {!messages.length && (
+                    <div className="flex h-full min-h-40 items-center justify-center text-center text-sm text-slate-500">
+                      Nessun messaggio in questa conversazione.
+                    </div>
+                  )}
                   {messages.map((message) => (
                     <div
                       key={message.id}
@@ -946,8 +1011,8 @@ export default function MetaBusinessPage() {
                             message.deleted_at
                               ? "border border-slate-200 bg-slate-100 text-slate-500"
                               : message.direction === "OUTBOUND"
-                                ? "bg-blue-600 text-white"
-                                : "border border-slate-200 bg-white text-slate-800"
+                                ? selectedSurface.outbound
+                                : "border border-white/80 bg-white/95 text-slate-800 ring-1 ring-slate-200/70"
                           }`}
                         >
                           <div className={`whitespace-pre-wrap ${message.deleted_at ? "italic" : ""}`}>
@@ -959,7 +1024,7 @@ export default function MetaBusinessPage() {
                             message.deleted_at
                               ? "text-slate-400"
                               : message.direction === "OUTBOUND"
-                                ? "text-blue-100"
+                                ? selectedSurface.outboundMeta
                                 : "text-slate-400"
                           }`}>
                             {message.sender_kind} · {message.status} · {formatDate(message.occurred_at)}
@@ -984,20 +1049,20 @@ export default function MetaBusinessPage() {
                     Ripristina la conversazione per inviare una risposta.
                   </div>
                 ) : (
-                  <div className="border-t border-slate-200 p-4">
+                  <div className="border-t border-slate-200 bg-white p-3 sm:p-4">
                     <div className="flex gap-2">
                       <textarea
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
                         placeholder="Scrivi una risposta..."
                         rows={2}
-                        className="min-w-0 flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        className={`min-w-0 flex-1 resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 ${selectedSurface.focus}`}
                       />
                       <button
                         type="button"
                         onClick={() => void sendMessage()}
                         disabled={sending || !draft.trim() || !connected}
-                        className="inline-flex w-12 items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        className={`inline-flex w-12 shrink-0 items-center justify-center rounded-xl text-white disabled:cursor-not-allowed disabled:opacity-50 ${selectedSurface.action}`}
                       >
                         {sending ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
                       </button>
@@ -1387,15 +1452,18 @@ export default function MetaBusinessPage() {
                   </div>
                 ))}
               </div>
-              <div className="overflow-hidden rounded-xl border border-slate-200">
+              <div className="max-h-[300px] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/50">
                 {overview.webhookDiagnostics.recentEvents.length === 0 ? (
                   <div className="p-5 text-sm text-slate-500">
                     Nessun webhook ricevuto. Verifica un canale, quindi invia un nuovo messaggio reale.
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">
-                    {overview.webhookDiagnostics.recentEvents.slice(0, 5).map((event) => (
-                      <div key={event.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                    {overview.webhookDiagnostics.recentEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className={`flex items-center justify-between gap-3 border-l-4 px-4 py-3 ${webhookSurface(event.object_type)}`}
+                      >
                         <div className="min-w-0">
                           <div className="truncate text-xs font-bold text-slate-800">
                             {event.object_type || "Evento Meta"}
