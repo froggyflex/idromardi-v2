@@ -5,6 +5,7 @@ function sendError(res, error) {
   return res.status(error.statusCode || 500).json({
     error: error.message || "Errore integrazione Meta",
     code: error.code || "META_ERROR",
+    ...(error.verification ? { verification: error.verification } : {}),
   });
 }
 

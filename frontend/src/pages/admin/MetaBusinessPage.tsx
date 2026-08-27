@@ -81,6 +81,11 @@ type Overview = {
   webhookConfigured: boolean;
   encryptionConfigured: boolean;
   outboxWorkerEnabled: boolean;
+  instagramLogin?: {
+    appId: string | null;
+    appSecretConfigured: boolean;
+    verifyTokenConfigured: boolean;
+  };
 };
 
 type Conversation = {
@@ -132,6 +137,7 @@ type ChannelDraft = {
   displayName: string;
   accessToken: string;
   tokenExpiresAt: string;
+  credentialMode: "INSTAGRAM_LOGIN" | "FACEBOOK_LOGIN";
 };
 
 const CHANNEL_TYPES: ChannelType[] = ["WHATSAPP", "MESSENGER", "INSTAGRAM"];
@@ -210,6 +216,7 @@ function channelDraftsFromOverview(overview: Overview): Record<ChannelType, Chan
           displayName: channel?.display_name || "",
           accessToken: "",
           tokenExpiresAt: dateTimeLocalValue(channel?.token_expires_at),
+          credentialMode: channel?.credential_mode || "INSTAGRAM_LOGIN",
         },
       ];
     })
@@ -626,6 +633,7 @@ export default function MetaBusinessPage() {
         displayName: draft.displayName.trim() || null,
         accessToken: draft.accessToken || null,
         tokenExpiresAt: draft.tokenExpiresAt || null,
+        ...(channelType === "INSTAGRAM" ? { credentialMode: draft.credentialMode } : {}),
       });
       setOverview(response.data.overview);
       setForm(formFromOverview(response.data.overview));
@@ -651,7 +659,9 @@ export default function MetaBusinessPage() {
       setOverview(response.data.overview);
       setForm(formFromOverview(response.data.overview));
       setChannelDrafts(channelDraftsFromOverview(response.data.overview));
-      setNotice(`${CHANNEL_DETAILS[response.data.channelType].title} verificato e operativo.`);
+      setNotice(response.data.channelType === "INSTAGRAM"
+        ? "Instagram: account e iscrizione webhook verificati. Per l'uso reale conferma la pubblicazione in Meta e prova ricezione e risposta dall'inbox."
+        : `${CHANNEL_DETAILS[response.data.channelType].title} verificato e operativo.`);
     } catch (requestError: unknown) {
       setError(requestErrorMessage(requestError, `Verifica ${channel.channel_type} non riuscita.`));
       const overviewResponse = await api.get<Overview>("/meta/overview").catch(() => null);
@@ -1154,14 +1164,14 @@ export default function MetaBusinessPage() {
               </div>
               <div className="rounded-xl bg-slate-900 px-4 py-3 text-right text-white">
                 <div className="text-2xl font-black">{activeChannelCount}/3</div>
-                <div className="text-[10px] font-bold text-slate-300">canali operativi</div>
+                <div className="text-[10px] font-bold text-slate-300">canali verificati</div>
               </div>
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {[
                 ["Firma webhook", overview.webhookConfigured, "App Secret e verify token"],
                 ["Credenziali protette", overview.encryptionConfigured, "Token cifrato AES-256-GCM"],
-                ["Canali operativi", activeChannelCount === 3, `${activeChannelCount} di 3 verificati`],
+                ["Canali verificati", activeChannelCount === 3, `${activeChannelCount} di 3 verificati`],
                 ["Invio automatico", overview.outboxWorkerEnabled, "Worker per invii e tentativi"],
               ].map(([label, ready, detail]) => (
                 <div key={String(label)} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-3">
@@ -1250,7 +1260,7 @@ export default function MetaBusinessPage() {
                     ["Meta App ID", savedIntegration.app_id || "—"],
                     ["Graph API", savedIntegration.graph_api_version || "—"],
                     ["Canali configurati", String(integrationChannels.length)],
-                    ["Canali operativi", `${activeChannelCount} / 3`],
+                    ["Canali verificati", `${activeChannelCount} / 3`],
                     ["Ultimo salvataggio", formatDate(savedIntegration.updated_at)],
                   ].map(([label, value]) => (
                     <div key={String(label)} className="grid grid-cols-[140px_1fr] gap-3 py-3 first:pt-0 last:pb-0">
@@ -1281,6 +1291,10 @@ export default function MetaBusinessPage() {
                 const verificationBusy = verifyingChannelId === channel?.id;
                 const saveBusy = savingChannelType === channelType;
                 const operational = channel?.status === "ACTIVE";
+                const instagramUnsaved = channelType === "INSTAGRAM" && (
+                  Boolean(draft.accessToken) || draft.credentialMode !== channel?.credential_mode ||
+                  draft.externalAccountId.trim() !== channel?.external_account_id
+                );
                 return (
                   <div key={channelType} className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -1301,6 +1315,24 @@ export default function MetaBusinessPage() {
                       </span>
                     </div>
                     <fieldset disabled={!isAdmin || !savedIntegration} className="mt-4 space-y-3 disabled:opacity-60">
+                      {channelType === "INSTAGRAM" && (
+                        <label className="block">
+                          <span className="text-xs font-semibold text-slate-600">Tipo di collegamento</span>
+                          <select
+                            aria-label="Tipo di collegamento"
+                            value={draft.credentialMode}
+                            onChange={(event) => setChannelDrafts((current) => ({
+                              ...current,
+                              INSTAGRAM: { ...current.INSTAGRAM, credentialMode: event.target.value as ChannelDraft["credentialMode"] },
+                            }))}
+                            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                          >
+                            <option value="INSTAGRAM_LOGIN">Instagram Login — token da API Instagram</option>
+                            <option value="FACEBOOK_LOGIN">Facebook Login — token della Pagina</option>
+                          </select>
+                          <span className="mt-1 block text-[11px] text-slate-500">Salva il tipo scelto prima di verificare. I due token non sono intercambiabili.</span>
+                        </label>
+                      )}
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-600">{details.idLabel}</span>
                         <input
@@ -1330,7 +1362,9 @@ export default function MetaBusinessPage() {
                         />
                       </label>
                       <label className="block">
-                        <span className="text-xs font-semibold text-slate-600">{details.tokenLabel}</span>
+                        <span className="text-xs font-semibold text-slate-600">{channelType === "INSTAGRAM"
+                          ? draft.credentialMode === "INSTAGRAM_LOGIN" ? "Instagram user access token" : "Page access token"
+                          : details.tokenLabel}</span>
                         <input
                           type="password"
                           autoComplete="new-password"
@@ -1362,18 +1396,44 @@ export default function MetaBusinessPage() {
                         />
                       </label>
                     </fieldset>
+                    {channelType === "INSTAGRAM" && draft.credentialMode === "INSTAGRAM_LOGIN" && (
+                      <div className="mt-3 space-y-1 rounded-xl border border-fuchsia-100 bg-fuchsia-50 px-3 py-2 text-[11px] text-fuchsia-950">
+                        <p>App Instagram configurata: <strong>{overview.instagramLogin?.appId || "non configurata"}</strong></p>
+                        <p>Secret Instagram: {overview.instagramLogin?.appSecretConfigured ? "configurato sul server" : "mancante sul server"}</p>
+                        {(!overview.instagramLogin?.appId || !overview.instagramLogin?.appSecretConfigured) && (
+                          <p className="break-words">Su Render configura META_INSTAGRAM_APP_ID e META_INSTAGRAM_APP_SECRET. Non sostituire l'App ID generale o META_APP_SECRET.</p>
+                        )}
+                        <details>
+                          <summary className="cursor-pointer font-semibold">Cosa viene verificato?</summary>
+                          <p className="mt-1">L'App ID è la configurazione del server. La verifica controlla account e iscrizione, non lo stato di pubblicazione in Meta.</p>
+                        </details>
+                      </div>
+                    )}
                     <div className="mt-3 rounded-xl bg-white px-3 py-2 text-[10px] leading-4 text-slate-500">
-                      Permessi: {details.permissions}
+                      Permessi: {channelType === "INSTAGRAM"
+                        ? draft.credentialMode === "INSTAGRAM_LOGIN"
+                          ? "instagram_business_basic, instagram_business_manage_messages"
+                          : "instagram_basic, instagram_manage_messages, pages_manage_metadata, pages_read_engagement, pages_show_list"
+                        : details.permissions}
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
                       <span>{channel?.has_access_token ? "Token cifrato salvato" : "Token non presente"}</span>
                       <span>Scadenza: {formatDate(channel?.token_expires_at)}</span>
                     </div>
-                    {channelType === "INSTAGRAM" && channel?.credential_mode && (
+                    {channelType === "INSTAGRAM" && channel?.credential_mode && operational && (
                       <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] text-blue-800">
                         Collegamento verificato: {channel.credential_mode === "FACEBOOK_LOGIN"
                           ? "Pagina Facebook collegata"
                           : "Instagram Login"}
+                      </div>
+                    )}
+                    {channelType === "INSTAGRAM" && (
+                      <div className="mt-3 space-y-1 text-[11px] leading-4 text-slate-600">
+                        {draft.credentialMode === "INSTAGRAM_LOGIN" && !draft.tokenExpiresAt && <p className="text-amber-800">Scadenza token non registrata. Rinnovo automatico non attivo.</p>}
+                        <details>
+                          <summary className="cursor-pointer font-semibold">Prima dell'uso reale</summary>
+                          <p className="mt-1">Pubblica l'app e completa gli accessi richiesti da Meta, poi prova un messaggio in entrata e una risposta. Il badge ACTIVE indica la verifica tecnica, non l'approvazione Meta. Registra la scadenza effettiva del token e rinnovalo prima del termine.</p>
+                        </details>
                       </div>
                     )}
                     {channel?.last_error && (
@@ -1394,7 +1454,7 @@ export default function MetaBusinessPage() {
                       <button
                         type="button"
                         onClick={() => channel && void verifyMetaChannel(channel)}
-                        disabled={!isAdmin || !channel || verificationBusy || channel.status === "PAUSED"}
+                        disabled={!isAdmin || !channel || verificationBusy || channel.status === "PAUSED" || instagramUnsaved}
                         className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-50"
                       >
                         <RefreshCw className={`h-3.5 w-3.5 ${verificationBusy ? "animate-spin" : ""}`} />

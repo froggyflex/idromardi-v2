@@ -17,13 +17,18 @@ function verifyChallenge(query) {
 }
 
 function verifySignature(rawBody, signatureHeader) {
-  const secret = process.env.META_APP_SECRET;
-  if (!secret || !rawBody || !signatureHeader) return false;
-  const expected = `sha256=${crypto
-    .createHmac("sha256", secret)
-    .update(rawBody)
-    .digest("hex")}`;
-  return secureEqual(signatureHeader, expected);
+  if (!rawBody || typeof signatureHeader !== "string" || !/^sha256=[a-f0-9]{64}$/.test(signatureHeader)) return false;
+  const matches = (secret) => Boolean(secret) && secureEqual(signatureHeader,
+    `sha256=${crypto.createHmac("sha256", secret).update(rawBody).digest("hex")}`);
+  // Keep parent-app signing for existing channels. The Instagram secret is
+  // accepted ONLY for Instagram objects; it cannot authenticate Page/WhatsApp.
+  if (matches(String(process.env.META_APP_SECRET || "").trim())) return true;
+  try {
+    return JSON.parse(rawBody.toString("utf8"))?.object === "instagram" &&
+      matches(String(process.env.META_INSTAGRAM_APP_SECRET || "").trim());
+  } catch {
+    return false;
+  }
 }
 
 function eventKey(rawBody) {
@@ -132,7 +137,13 @@ function pageEvents(payload) {
           payload: item,
         });
       }
-      if (item.read?.watermark) {
+      if (item.read?.mid) {
+        events.push({
+          kind: "STATUS", channelType, accountId,
+          externalMessageId: String(item.read.mid), status: "READ",
+          occurredAt: unixDateTime(item.timestamp), payload: item,
+        });
+      } else if (item.read?.watermark) {
         events.push({
           kind: "STATUS",
           channelType,

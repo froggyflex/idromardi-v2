@@ -77,6 +77,51 @@ test("normalizes WhatsApp messages and statuses", () => {
   assert.equal(events[1].status, "DELIVERED");
 });
 
+test("Instagram accepts its own signing secret without granting it Page or WhatsApp access", () => {
+  const previousMain = process.env.META_APP_SECRET;
+  const previousInstagram = process.env.META_INSTAGRAM_APP_SECRET;
+  process.env.META_APP_SECRET = "main-app-secret";
+  process.env.META_INSTAGRAM_APP_SECRET = "instagram-app-secret";
+  const sign = (raw, secret) => `sha256=${crypto.createHmac("sha256", secret).update(raw).digest("hex")}`;
+  try {
+    const instagram = Buffer.from('{"object":"instagram","entry":[]}');
+    assert.equal(webhook.verifySignature(instagram, sign(instagram, "instagram-app-secret")), true);
+    assert.equal(webhook.verifySignature(instagram, sign(instagram, "main-app-secret")), true);
+    assert.equal(webhook.verifySignature(instagram, sign(instagram, "wrong-secret")), false);
+    assert.equal(webhook.verifySignature(Buffer.from('{"object":"instagram","entry":[1]}'), sign(instagram, "instagram-app-secret")), false);
+    for (const object of ["page", "whatsapp_business_account"]) {
+      const raw = Buffer.from(JSON.stringify({ object, entry: [] }));
+      assert.equal(webhook.verifySignature(raw, sign(raw, "instagram-app-secret")), false);
+      assert.equal(webhook.verifySignature(raw, sign(raw, "main-app-secret")), true);
+    }
+    delete process.env.META_APP_SECRET;
+    assert.equal(webhook.verifySignature(instagram, sign(instagram, "instagram-app-secret")), true);
+    assert.equal(webhook.verifySignature(instagram, "sha256=invalid"), false);
+    assert.equal(webhook.verifySignature(instagram, null), false);
+    const invalidJson = Buffer.from("not json");
+    assert.equal(webhook.verifySignature(invalidJson, sign(invalidJson, "instagram-app-secret")), false);
+    delete process.env.META_INSTAGRAM_APP_SECRET;
+    assert.equal(webhook.verifySignature(instagram, sign(instagram, "instagram-app-secret")), false);
+  } finally {
+    if (previousMain === undefined) delete process.env.META_APP_SECRET;
+    else process.env.META_APP_SECRET = previousMain;
+    if (previousInstagram === undefined) delete process.env.META_INSTAGRAM_APP_SECRET;
+    else process.env.META_INSTAGRAM_APP_SECRET = previousInstagram;
+  }
+});
+
+test("Instagram messaging_seen identifies the read message by mid", () => {
+  const events = webhook.normalizeWebhook({ object: "instagram", entry: [{ id: "ig-1", messaging: [{
+    sender: { id: "customer-1" }, recipient: { id: "ig-1" },
+    timestamp: 1700000000000, read: { mid: "instagram-message-1" },
+  }] }] });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "STATUS");
+  assert.equal(events[0].status, "READ");
+  assert.equal(events[0].externalMessageId, "instagram-message-1");
+  assert.equal(events[0].channelType, "INSTAGRAM");
+});
+
 test("normalizes Page leadgen notifications", () => {
   const [lead] = webhook.normalizeWebhook({
     object: "page",

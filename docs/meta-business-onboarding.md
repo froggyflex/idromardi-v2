@@ -26,6 +26,8 @@ frontend variables:
 ```text
 META_WEBHOOK_VERIFY_TOKEN=<random secret used only for webhook verification>
 META_APP_SECRET=<secret from the Meta developer app>
+META_INSTAGRAM_APP_ID=<Instagram App ID from API setup with Instagram Login>
+META_INSTAGRAM_APP_SECRET=<Instagram secret from that same setup page>
 META_CREDENTIALS_ENCRYPTION_KEY=<32 random bytes encoded as base64>
 META_GRAPH_API_VERSION=<currently approved version, e.g. vXX.X>
 META_OUTBOX_WORKER_ENABLED=false
@@ -37,13 +39,101 @@ RUN_META_MIGRATION_ON_STARTUP=true
 Generate the encryption key in PowerShell:
 
 ```powershell
-[Convert]::ToBase64String(
-  [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-)
+$metaKeyBytes = New-Object byte[] 32
+$metaKeyRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+  $metaKeyRng.GetBytes($metaKeyBytes)
+  [Convert]::ToBase64String($metaKeyBytes)
+} finally {
+  $metaKeyRng.Dispose()
+}
 ```
 
 Use a separate random value for `META_WEBHOOK_VERIFY_TOKEN`. Rotation of the
 encryption key requires re-encrypting stored tokens; do not replace it casually.
+
+### Instagram Login: deploy the native-token fix
+
+The Instagram token generated in **API setup with Instagram Login → Generate
+token** is not a Page token. Select the connection type explicitly in the
+platform; changing the selection requires **Salva** before **Verifica**.
+Previously verified Page-linked connections retain their Facebook Login mode.
+Legacy unverified connections need their mode saved once; verification never
+silently switches API families after a failure.
+
+For this installation, add these backend Render variables:
+
+```text
+META_INSTAGRAM_APP_ID=1007783208974158
+META_INSTAGRAM_APP_SECRET=<copy the hidden Instagram secret from the same Meta setup page>
+```
+
+Keep the general Meta App ID `1965478457453791`, `META_APP_SECRET`, webhook verify
+token and encryption key unchanged. Never put secrets in frontend variables,
+source control, screenshots or chat. Redeploy both backend and frontend. No new
+database migration is required by this fix; the existing `006` connection-mode
+migration must already be applied (`RUN_META_MIGRATION_ON_STARTUP=true`).
+
+In **Meta Business → Impostazioni → Instagram Direct**:
+
+1. Choose **Instagram Login — token da API Instagram**.
+2. Use Instagram Professional Account ID `17841400717570644` for the account
+   shown during setup. For a different real business account, use its own ID
+   and token together, never the test account's ID.
+3. Keep the saved Instagram token if it is still valid. A blank token field on
+   reload is deliberate: the encrypted token is not sent back to the browser.
+4. Record the actual token expiry from Meta. Dashboard tokens normally last 60
+   days from generation, NOT 60 days from saving or verifying in this platform.
+5. Confirm that the card shows the separate Instagram App ID and a configured
+   secret, then click **Salva → Verifica**.
+
+Native verification calls `graph.instagram.com/<version>/me` and checks the
+returned `user_id` against the saved account. It then subscribes to `messages`,
+`messaging_postbacks`, and `messaging_seen` and requires `success: true`.
+Facebook `/debug_token` is not a prerequisite for this flow. Permissions are
+enforced by Meta's account and subscription requests; the application does not
+invent an introspected scopes list or an expiry for a manually pasted token.
+The Instagram App ID displayed in the card is operator-configured metadata,
+not proof of the token's issuing app. Generate the token in that same app and
+confirm inbound delivery to this backend before using it with customers.
+
+The shared webhook endpoint accepts the main app signature as before; the
+separate Instagram secret can authenticate only payloads whose raw body has
+`object: instagram`. It cannot authenticate Page or WhatsApp payloads.
+
+Errors now identify **Configurazione Instagram**, **Account e token Instagram**,
+or **Iscrizione webhook Instagram**, plus Meta's code/subcode and trace ID when
+available. Verification retries a transient failure once; it never retries
+message sends as part of verification, and does not bypass permission or
+account errors. Share only that redacted error, not an access token.
+
+### Live acceptance checklist (not implied by ACTIVE)
+
+- In the same Meta app, configure the Instagram webhook callback as
+  `https://idromardi-v2.onrender.com/api/meta/webhook` with the existing verify
+  token. Enable `messages`, `messaging_postbacks`, and `messaging_seen`.
+- Complete Meta's publication, account-role, business-verification and permission
+  access requirements for the intended audience. Testing with app-role accounts
+  does not establish access for unrelated customers.
+- Send a unique test DM from another Instagram account to the connected
+  professional account. Confirm it appears once in the Instagram inbox and
+  that webhook diagnostics show it processed rather than unmatched.
+- Reply from Idromardi within the allowed reply window; confirm delivery on the
+  recipient's device. Read it and confirm the read receipt updates in Idromardi.
+- Reload the settings and inbox: connection mode, IDs, saved-token indicator and
+  messages must persist. Confirm archive/restore does not lose the conversation.
+- Enable `META_OUTBOX_WORKER_ENABLED=true` for queued retries. Keep AI OFF until
+  the separate AI rollout checks below have been approved.
+- Enter/track the token's actual expiry and replace it before expiry. Native
+  token refresh is not automated by this fix.
+
+The local regression suite uses mocked Meta responses and tests signature
+verification; it is not a live Meta acceptance test. ACTIVE means the technical
+account/subscription verification passed, not that Meta approved production use.
+
+References: [Instagram Login account validation](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/get-started),
+[Instagram webhooks](https://developers.facebook.com/documentation/instagram-platform/webhooks),
+[Business Login and token lifetime](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/business-login).
 
 ## Steps after the Business invitation arrives
 
@@ -67,7 +157,7 @@ encryption key requires re-encrypting stored tokens; do not replace it casually.
      `business_management`, `pages_show_list`, `pages_manage_metadata`, `pages_messaging`, and
      `pages_read_engagement`; add `leads_retrieval` when Lead Ads are used. The Page administrator must have MESSAGING and
      MODERATE tasks.
-   - **Instagram with the linked Facebook Page (the current Idromardi setup):**
+   - **Instagram with the linked Facebook Page:**
      the Instagram Professional Account ID and the Page access token for the
      linked Page. The token needs `instagram_basic`, `instagram_manage_messages`,
      and `pages_manage_metadata`. Verification confirms both the Page and linked
@@ -75,7 +165,8 @@ encryption key requires re-encrypting stored tokens; do not replace it casually.
    - **Instagram Login (also supported):** the Instagram Professional Account
      `user_id` and an Instagram user token with `instagram_business_basic` and
      `instagram_business_manage_messages`. These calls use `graph.instagram.com`.
-     The platform detects and stores the model during verification.
+     Select **Instagram Login** explicitly, save, then verify. The platform uses
+     the separate Instagram app configuration described above.
 7. Do not paste tokens into chat, source code, logs, screenshots, or frontend
    environment variables. Enter them only in the platform configuration page,
    where they are encrypted and never returned to the browser.
