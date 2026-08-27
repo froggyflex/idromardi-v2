@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { isAxiosError } from "axios";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import api from "../api/client";
 import { isAuthenticated, setAuthSession } from "../auth";
@@ -26,8 +27,9 @@ export default function LoginPage() {
       setAuthSession(data.token, data.user);
       const state = location.state as { from?: string } | null;
       navigate(state?.from || "/", { replace: true });
-    } catch (err: any) {
-      setError(err?.response?.data?.error || "Credenziali non valide");
+    } catch (err: unknown) {
+      const message = isAxiosError<{ error?: unknown }>(err) ? err.response?.data?.error : undefined;
+      setError(typeof message === "string" && message ? message : "Credenziali non valide");
     } finally {
       setLoading(false);
     }
@@ -79,6 +81,11 @@ export default function LoginPage() {
         >
           {loading ? "Accesso..." : "Accedi"}
         </button>
+        <p className="mt-5 text-center text-xs text-slate-500">
+          <a href="/privacy" className="rounded underline underline-offset-4 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600">
+            Informativa sulla privacy
+          </a>
+        </p>
       </form>
     </div>
   );

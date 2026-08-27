@@ -137,6 +137,73 @@ References: [Instagram Login account validation](https://developers.facebook.com
 
 ## Steps after the Business invitation arrives
 
+### Public privacy notice
+
+The frontend includes a standalone Italian notice at **/privacy**, with deletion
+instructions at **/privacy#cancellazione**. It is static HTML, readable without
+JavaScript, login, cookies or a backend request. Login and Meta settings link to
+it using ordinary anchors, not the protected SPA router. No CRM route or API
+authorization has been relaxed.
+
+After deploying the frontend on the existing production domain, the intended
+Meta Privacy Policy URL is:
+
+```text
+https://manage.idromardi.it/privacy
+```
+
+The alternative Vercel domain serves the same page after its deployment:
+`https://idromardi-v2.vercel.app/privacy`. Use the actual public production
+domain; do not use a protected preview deployment or localhost. Vercel's project
+root should be `frontend` so that `frontend/vercel.json` is loaded. Its explicit
+privacy rewrites precede the existing-style SPA fallback; static files keep
+filesystem precedence. Direct /privacy, /privacy/ and /privacy/index.html should
+all serve the full notice, not the SPA shell.
+
+**Business approval before submitting this URL to Meta:** this is an
+implementation-specific draft, not a legal compliance certification. Confirm:
+
+- Controller: **Idromardi l.t.d.**, Sofia legal address and Napoli operating
+  address, taken from the existing invoice/proforma templates in
+  `backend/src/modules/financialSummary/financialSummary.service.js`.
+- Contact: **info@idromardi.it**, already used in invoices. Confirm it is the
+  correct monitored mailbox for privacy requests; no separate DPO was invented.
+- Scope: Idromardi's own communications and leads, not a substitute for
+  condominium-service notices or processing agreements with other controllers.
+- Legal bases, actual retention criteria, complete provider list, hosting/backup
+  locations, transfer safeguards and any required DPO/representative details.
+  The current deployment's provider contracts and data regions were not audited.
+- The business must assign someone to handle deletion requests and examine
+  linked contacts, leads, raw webhook payloads, outbox content, audit records and
+  backups where applicable. Existing message deletion is not full data-subject
+  erasure; this change adds neither scheduled purging nor a deletion API.
+- Keep AI off until its data flow, providers and notice have been reviewed. The
+  notice does not advertise the future assistant as an active feature.
+
+Do not put the deletion-instructions URL in a field requiring a programmatic
+callback. Where Meta offers **data deletion instructions**, the anchor URL can
+be used; this page does not process signed deletion callbacks.
+
+Verification before publication:
+
+1. Confirm the business-approved wording and both contact/address details.
+2. Deploy the frontend; no backend migration or environment change is required.
+3. Open /privacy without logging in and inspect its HTML source: the complete
+   notice must be present. Check the CSS, navigation and deletion email link.
+4. Check that /admin/meta-business and /condomini still redirect to /login when
+   unauthenticated, and that authenticated operators can open the notice too.
+5. Save the confirmed production URL in Meta's privacy-policy field.
+
+Local checks: `cd frontend`, `npm run build`, `npm run test:privacy`.
+Tests use a loopback-only production preview and no live Meta/backend requests.
+
+References:
+[Meta Platform Terms, section 4](https://developers.facebook.com/terms#privacypolicy),
+[Garante: GDPR guidance](https://www.garanteprivacy.it/documents/10160/0/Guida%2Ball%2Bapplicazione%2Bdel%2BRegolamento%2BUE%2B2016%2B679.pdf/2281f960-a7b2-4c53-a3f1-ad7578f8761d?download=true&version=2.0),
+[Vercel rewrite configuration](https://vercel.com/docs/project-configuration/vercel-json).
+
+### Account connection
+
 1. Accept the invitation using a named personal Meta account with MFA. Grant
    only the assets and tasks needed for Pages, WhatsApp accounts, Instagram, and
    lead access; avoid shared administrator accounts.

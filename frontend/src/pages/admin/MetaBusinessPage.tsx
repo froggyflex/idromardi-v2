@@ -1230,6 +1230,16 @@ export default function MetaBusinessPage() {
                   account ID e il proprio token, senza condividere credenziali tra canali.
                 </div>
               </fieldset>
+              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
+                <p className="font-bold text-slate-800">Pubblicazione Meta · Informativa sulla privacy</p>
+                <p className="mt-1">Pagina pubblica, senza accesso ai messaggi. Verifica il testo prima di inserirne l’URL in Meta.</p>
+                <a href="/privacy" target="_blank" rel="noopener noreferrer" className="mt-2 block break-all font-semibold text-blue-700 underline underline-offset-2">
+                  {new URL("/privacy", window.location.origin).href}
+                </a>
+                <a href="/privacy#cancellazione" target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-blue-700 underline underline-offset-2">
+                  Istruzioni per la cancellazione dei dati
+                </a>
+              </div>
               <button
                 type="submit"
                 disabled={!isAdmin}
