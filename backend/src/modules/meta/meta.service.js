@@ -115,7 +115,8 @@ async function getOverview() {
     db.query(`SELECT
       (SELECT COUNT(*) FROM meta_leads WHERE status IN ('NEW', 'CONTACTED', 'QUALIFIED')) AS active_leads,
       (SELECT COUNT(*) FROM meta_conversations WHERE status IN ('OPEN', 'PENDING')) AS open_conversations,
-      (SELECT COALESCE(SUM(unread_count), 0) FROM meta_conversations) AS unread_messages,
+      (SELECT COALESCE(SUM(unread_count), 0) FROM meta_conversations
+       WHERE status IN ('OPEN', 'PENDING')) AS unread_messages,
       (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state = 'WAITING_APPROVAL') AS awaiting_approval,
       (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state IN ('READY', 'PROCESSING', 'RETRY')) AS queued_messages`),
     db.query(`SELECT id, name, business_account_id, app_id, graph_api_version, token_expires_at,
@@ -158,6 +159,29 @@ async function getOverview() {
     },
     outboxWorkerEnabled:
       String(process.env.META_OUTBOX_WORKER_ENABLED || "false").toLowerCase() === "true",
+  };
+}
+
+async function getUnreadSummary() {
+  const [[summary]] = await db.query(
+    `SELECT
+       COALESCE(SUM(cv.unread_count), 0) AS total,
+       COALESCE(SUM(IF(ch.channel_type = 'WHATSAPP', cv.unread_count, 0)), 0) AS whatsapp,
+       COALESCE(SUM(IF(ch.channel_type = 'MESSENGER', cv.unread_count, 0)), 0) AS messenger,
+       COALESCE(SUM(IF(ch.channel_type = 'INSTAGRAM', cv.unread_count, 0)), 0) AS instagram,
+       COUNT(DISTINCT IF(cv.unread_count > 0, cv.id, NULL)) AS conversations
+     FROM meta_conversations cv
+     JOIN meta_channels ch ON ch.id = cv.channel_id
+     WHERE cv.status IN ('OPEN', 'PENDING')`
+  );
+  return {
+    total: Number(summary?.total || 0),
+    conversations: Number(summary?.conversations || 0),
+    byChannel: {
+      whatsapp: Number(summary?.whatsapp || 0),
+      messenger: Number(summary?.messenger || 0),
+      instagram: Number(summary?.instagram || 0),
+    },
   };
 }
 
@@ -1198,12 +1222,45 @@ async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 1
 async function listMessages(conversationId, { limit = 200 } = {}) {
   const safeLimit = Math.min(500, Math.max(1, Number(limit) || 200));
   const [rows] = await db.query(
-    `SELECT * FROM meta_messages WHERE conversation_id = ?
-     ORDER BY occurred_at ASC, created_at ASC LIMIT ?`,
+    `SELECT recent.* FROM (
+       SELECT * FROM meta_messages WHERE conversation_id = ?
+       ORDER BY occurred_at DESC, created_at DESC LIMIT ?
+     ) AS recent
+     ORDER BY recent.occurred_at ASC, recent.created_at ASC`,
     [conversationId, safeLimit]
   );
-  await db.query(`UPDATE meta_conversations SET unread_count = 0 WHERE id = ?`, [conversationId]);
   return { messages: serializeRows(rows) };
+}
+
+async function readConversation(conversationId, { limit = 200 } = {}) {
+  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 200));
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[conversation]] = await conn.query(
+      `SELECT id FROM meta_conversations WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [conversationId]
+    );
+    if (!conversation) {
+      throw httpError(404, "Conversazione non trovata", "META_CONVERSATION_NOT_FOUND");
+    }
+    const [rows] = await conn.query(
+      `SELECT recent.* FROM (
+         SELECT * FROM meta_messages WHERE conversation_id = ?
+         ORDER BY occurred_at DESC, created_at DESC LIMIT ?
+       ) AS recent
+       ORDER BY recent.occurred_at ASC, recent.created_at ASC`,
+      [conversationId, safeLimit]
+    );
+    await conn.query(`UPDATE meta_conversations SET unread_count = 0 WHERE id = ?`, [conversationId]);
+    await conn.commit();
+    return { messages: serializeRows(rows) };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 async function listLeads({ status = "ALL", limit = 200 } = {}) {
@@ -1737,10 +1794,12 @@ module.exports = {
   approveJob,
   deleteMessage,
   getOverview,
+  getUnreadSummary,
   ingestWebhook,
   listConversations,
   listLeads,
   listMessages,
+  readConversation,
   processNextOutbound,
   processNextLead,
   queueMessage,

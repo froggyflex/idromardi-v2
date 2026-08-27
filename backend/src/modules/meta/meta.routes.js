@@ -12,6 +12,11 @@ protectedRouter.get(
   requireRole("ADMIN", "REVIEWER"),
   controller.getOverview
 );
+protectedRouter.get(
+  "/unread",
+  requireRole("ADMIN", "REVIEWER"),
+  controller.getUnreadSummary
+);
 protectedRouter.patch(
   "/conversations/:id",
   requireRole("ADMIN", "REVIEWER"),
@@ -66,6 +71,11 @@ protectedRouter.get(
   "/conversations/:id/messages",
   requireRole("ADMIN", "REVIEWER"),
   controller.listMessages
+);
+protectedRouter.post(
+  "/conversations/:id/read",
+  requireRole("ADMIN", "REVIEWER"),
+  controller.readConversation
 );
 protectedRouter.delete(
   "/conversations/:id/messages/:messageId",

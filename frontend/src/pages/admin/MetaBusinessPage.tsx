@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import api from "../../api/client";
 import { getAuthUser } from "../../auth";
+import { requestMetaUnreadRefresh } from "../../metaNotifications";
 
 type Integration = {
   id: string;
@@ -375,17 +376,23 @@ export default function MetaBusinessPage() {
   }, [loadAll]);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedId || tab !== "INBOX") {
       setMessages([]);
       return;
     }
     api
-      .get<{ messages: Message[] }>(`/meta/conversations/${selectedId}/messages`)
-      .then((response) => setMessages(response.data.messages || []))
+      .post<{ messages: Message[] }>(`/meta/conversations/${selectedId}/read`, { limit: 200 })
+      .then((response) => {
+        setMessages(response.data.messages || []);
+        setConversations((current) => current.map((conversation) =>
+          conversation.id === selectedId ? { ...conversation, unread_count: 0 } : conversation
+        ));
+        requestMetaUnreadRefresh();
+      })
       .catch((requestError) =>
         setError(requestError?.response?.data?.error || "Impossibile caricare i messaggi.")
       );
-  }, [selectedId]);
+  }, [selectedId, tab]);
 
   useEffect(() => {
     const viewport = messageViewportRef.current;
@@ -404,14 +411,20 @@ export default function MetaBusinessPage() {
     if (document.visibilityState !== "visible" || liveRefreshInFlight.current) return;
     liveRefreshInFlight.current = true;
     try {
+      const viewport = messageViewportRef.current;
+      const selectedConversationVisible = tab === "INBOX" && Boolean(selectedId);
+      const shouldMarkRead = selectedConversationVisible && viewport !== null &&
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 140;
       const [overviewResponse, conversationsResponse, messagesResponse, leadsResponse] =
         await Promise.all([
           api.get<Overview>("/meta/overview"),
           api.get<{ conversations: Conversation[] }>(
             `/meta/conversations?status=${conversationView}&channel=${channelFilter}`
           ),
-          selectedId
-            ? api.get<{ messages: Message[] }>(`/meta/conversations/${selectedId}/messages`)
+          selectedConversationVisible
+            ? shouldMarkRead
+              ? api.post<{ messages: Message[] }>(`/meta/conversations/${selectedId}/read`, { limit: 200 })
+              : api.get<{ messages: Message[] }>(`/meta/conversations/${selectedId}/messages`)
             : Promise.resolve(null),
           tab === "LEADS"
             ? api.get<{ leads: Lead[] }>("/meta/leads?status=ALL")
@@ -421,6 +434,7 @@ export default function MetaBusinessPage() {
       setOverview(overviewResponse.data);
       setConversations(nextConversations);
       if (messagesResponse) setMessages(messagesResponse.data.messages || []);
+      if (messagesResponse && shouldMarkRead) requestMetaUnreadRefresh();
       if (leadsResponse) setLeads(leadsResponse.data.leads || []);
       setSelectedId((current) =>
         current && nextConversations.some((item) => item.id === current)
@@ -478,7 +492,13 @@ export default function MetaBusinessPage() {
           detail?: string;
         }>("/meta/outbox/process", { jobId: queued.data.jobId, force: true });
         if (delivery.data.sent) {
-          setNotice("Messaggio inviato correttamente tramite WhatsApp.");
+          setNotice(`Messaggio inviato correttamente tramite ${
+            selected.channel_type === "WHATSAPP"
+              ? "WhatsApp"
+              : selected.channel_type === "INSTAGRAM"
+                ? "Instagram"
+                : "Messenger"
+          }.`);
         } else if (delivery.data.processed && delivery.data.error) {
           setError(`Messaggio mantenuto in coda: ${delivery.data.error}`);
         } else if (delivery.data.detail) {

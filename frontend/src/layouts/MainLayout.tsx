@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { clearAuthSession, getAuthUser } from "../auth";
+import api from "../api/client";
+import { META_UNREAD_REFRESH_EVENT } from "../metaNotifications";
 
 type Props = {
   children: ReactNode;
@@ -33,6 +35,7 @@ type NavItemProps = {
   label: string;
   icon: LucideIcon;
   end?: boolean;
+  badgeCount?: number;
 };
 
 type PipelineStatus = "idle" | "checking" | "ready" | "sleeping" | "error";
@@ -42,7 +45,7 @@ const PIPELINE_HEALTH_URL =
 
 const STALE_AFTER_MS = 1000 * 60 * 15; // 15 min
 
-function NavItem({ to, label, icon: Icon, end = false }: NavItemProps) {
+function NavItem({ to, label, icon: Icon, end = false, badgeCount = 0 }: NavItemProps) {
   return (
     <NavLink
       to={to}
@@ -63,6 +66,15 @@ function NavItem({ to, label, icon: Icon, end = false }: NavItemProps) {
     >
       <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.9} aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badgeCount > 0 && (
+        <span
+          className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm"
+          aria-label={`${badgeCount} messaggi non letti`}
+          title={`${badgeCount} messaggi non letti`}
+        >
+          {badgeCount > 99 ? "99+" : badgeCount}
+        </span>
+      )}
       <ChevronRight
         className="h-3.5 w-3.5 shrink-0 text-current opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-40"
         aria-hidden="true"
@@ -286,6 +298,36 @@ export default function MainLayout({ children }: Props) {
   const mainRef = useRef<HTMLElement | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [metaUnreadCount, setMetaUnreadCount] = useState(0);
+  const normalizedRole = String(user?.role || (user?.username === "admin" ? "ADMIN" : "")).toUpperCase();
+  const canUseMeta = normalizedRole === "ADMIN" || normalizedRole === "REVIEWER";
+
+  const refreshMetaUnread = useCallback(async () => {
+    if (!canUseMeta || document.visibilityState !== "visible") return;
+    try {
+      const response = await api.get<{ total?: number }>("/meta/unread");
+      setMetaUnreadCount(Math.max(0, Number(response.data.total || 0)));
+    } catch {
+      // Navigation must remain usable if Meta is not configured yet.
+    }
+  }, [canUseMeta]);
+
+  useEffect(() => {
+    if (!canUseMeta) return;
+    const initialRefresh = window.setTimeout(() => void refreshMetaUnread(), 0);
+    const timer = window.setInterval(() => void refreshMetaUnread(), 10_000);
+    const refreshWhenVisible = () => void refreshMetaUnread();
+    window.addEventListener(META_UNREAD_REFRESH_EVENT, refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearTimeout(initialRefresh);
+      window.clearInterval(timer);
+      window.removeEventListener(META_UNREAD_REFRESH_EVENT, refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [canUseMeta, refreshMetaUnread]);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -408,6 +450,7 @@ export default function MainLayout({ children }: Props) {
                 to="/admin/meta-business"
                 label="Meta Business"
                 icon={MessagesSquare}
+                badgeCount={metaUnreadCount}
               />
               <NavItem to="/admin/contabilita" label="Contabilità" icon={WalletCards} />
             </div>
@@ -474,12 +517,27 @@ export default function MainLayout({ children }: Props) {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-bold text-slate-900">IDROMARDI 2.0</div>
             <div className="truncate text-xs text-slate-500">
               {condominioId ? "Gestione condominio" : "Pannello operativo"}
             </div>
           </div>
+          {canUseMeta && (
+            <NavLink
+              to="/admin/meta-business"
+              aria-label={metaUnreadCount > 0 ? `Meta Business, ${metaUnreadCount} messaggi non letti` : "Meta Business"}
+              title={metaUnreadCount > 0 ? `${metaUnreadCount} messaggi non letti` : "Meta Business"}
+              className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-100"
+            >
+              <MessagesSquare className="h-5 w-5" />
+              {metaUnreadCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 py-0.5 text-[9px] font-bold leading-none text-white ring-2 ring-white">
+                  {metaUnreadCount > 99 ? "99+" : metaUnreadCount}
+                </span>
+              )}
+            </NavLink>
+          )}
         </div>
         {children}
       </main>

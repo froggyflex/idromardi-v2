@@ -36,6 +36,14 @@ exports.getOverview = async (req, res) => {
   }
 };
 
+exports.getUnreadSummary = async (req, res) => {
+  try {
+    res.json(await service.getUnreadSummary());
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
 exports.saveIntegration = async (req, res) => {
   try {
     res.status(201).json(await service.saveIntegration(req.body || {}, req.user));
@@ -104,6 +112,14 @@ exports.listConversations = async (req, res) => {
 exports.listMessages = async (req, res) => {
   try {
     res.json(await service.listMessages(req.params.id, req.query || {}));
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
+exports.readConversation = async (req, res) => {
+  try {
+    res.json(await service.readConversation(req.params.id, req.body || {}));
   } catch (error) {
     sendError(res, error);
   }
