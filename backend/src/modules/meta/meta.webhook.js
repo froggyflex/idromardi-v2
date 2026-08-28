@@ -104,11 +104,14 @@ function pageEvents(payload) {
       }
       if (item.message?.mid && item.message?.is_echo) {
         events.push({
-          kind: "STATUS",
+          kind: "MESSAGE",
+          isEcho: true,
           channelType,
           accountId,
+          contactId: String(item.recipient?.id || ""),
           externalMessageId: String(item.message.mid),
-          status: "SENT",
+          messageType: item.message.attachments?.length ? "ATTACHMENT" : "TEXT",
+          text: item.message.text || null,
           occurredAt: unixDateTime(item.timestamp),
           payload: item,
         });

@@ -1,9 +1,10 @@
 const service = require("./meta.service");
 const webhook = require("./meta.webhook");
+const { safeError } = require("./meta.policy");
 
 function sendError(res, error) {
   return res.status(error.statusCode || 500).json({
-    error: error.message || "Errore integrazione Meta",
+    error: error.statusCode ? error.message : safeError(error),
     code: error.code || "META_ERROR",
     ...(error.verification ? { verification: error.verification } : {}),
   });
@@ -143,7 +144,7 @@ exports.listLeads = async (req, res) => {
 
 exports.updateLead = async (req, res) => {
   try {
-    res.json(await service.updateLead(req.params.id, req.body || {}, req.user));
+    res.json(await service.operations.updateLead(req.params.id, req.body || {}, req.user));
   } catch (error) {
     sendError(res, error);
   }
@@ -185,3 +186,23 @@ exports.processOutbox = async (req, res) => {
     sendError(res, error);
   }
 };
+
+const action = fn => async (req,res) => { try { res.json(await fn(req)); } catch(error) {sendError(res,error);} };
+exports.processLead = action(() => service.processNextLead());
+exports.listOutbox = action(req => service.operations.outbox(req.query));
+exports.controlJob = action(req => service.operations.controlJob(req.params.id,req.body || {},req.user));
+exports.consent = action(req => service.operations.consent(req.params.id,req.body || {},req.user));
+exports.eraseContact = action(req => service.operations.eraseContact(req.params.id,req.body || {},req.user));
+exports.startWhatsApp = action(req => service.operations.startWhatsApp(req.body || {},req.user));
+exports.refreshInstagram = action(req => service.operations.refreshInstagram(req.params.id,req.user));
+exports.templates = action(req => service.assets.templates(req.params.id,req.query.after));
+exports.upload = action(req => service.assets.upload(req.params.id,req.file,req.user));
+
+function sendFile(res,file) {
+  res.set({"Content-Type":file.mime_type,"Content-Length":String(file.content.length),"Cache-Control":"private, no-store",
+    "X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'none'; sandbox",
+    "Content-Disposition":`attachment; filename="${String(file.filename).replace(/[^a-zA-Z0-9._ -]/g,"_")}"`});
+  res.send(file.content);
+}
+exports.download = async(req,res) => {try{sendFile(res,await service.assets.download(req.params.id,Number(req.params.index)));}catch(error){sendError(res,error);} };
+exports.publicMedia = async(req,res) => {try{sendFile(res,await service.assets.publicMedia(req.params.id,req.query.expires,req.query.signature));}catch(error){sendError(res,error);} };

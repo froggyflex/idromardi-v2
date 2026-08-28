@@ -52,10 +52,10 @@ test("message history loads the latest page and restores chronological order", a
   });
   const result = await service.listMessages("conversation-1", { limit: 25 });
   assert.equal(result.messages.length, 2);
-  assert.match(calls[0].sql, /ORDER BY occurred_at DESC, created_at DESC LIMIT \?/);
+  assert.match(calls[0].sql, /ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT \?/);
   assert.match(calls[0].sql, /ORDER BY recent\.occurred_at ASC/);
   assert.equal(calls[0].params[0], "conversation-1");
-  assert.equal(calls[0].params[1], 25);
+  assert.equal(calls[0].params[1], 26);
 });
 
 test("opening a conversation marks it read in the same locked transaction", async () => {

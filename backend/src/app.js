@@ -80,6 +80,10 @@ app.use("/uploads/mobile-readings", (req, res) => res.status(404).end());
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/meta", (req,res,next) => {
+  if (app.locals.metaReady === false) return res.status(503).set("Retry-After","30").json({error:"Area Meta in avvio. Riprova tra poco.",code:"META_STARTING"});
+  next();
+});
 // Public only for Meta's challenge and signed webhook delivery. The controller
 // rejects unsigned POST requests before any payload is persisted.
 app.use("/api/meta", metaRoutes.publicRouter);

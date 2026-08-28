@@ -11,6 +11,11 @@ export function setAuthSession(token: string, user: any) {
 }
 
 export function clearAuthSession() {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith("meta-draft:")) sessionStorage.removeItem(key);
+    }
+  } catch { /* Storage may be disabled by the browser. */ }
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 }

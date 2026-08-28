@@ -89,6 +89,7 @@ test("deployment routes privacy before the CRM fallback without redirecting it t
 
 test("entry links use full navigation to the static notice rather than the guarded SPA", async () => {
   for (const path of ["src/pages/LoginPage.tsx", "src/pages/admin/MetaBusinessPage.tsx"]) {
-    assert.match(await read(path), /<a href="\/privacy"/);
+    // Attribute wrapping must not make this semantic navigation check fail.
+    assert.match(await read(path), /<a\b[^>]*\bhref="\/privacy"/);
   }
 });

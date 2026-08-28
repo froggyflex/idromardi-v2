@@ -8,6 +8,9 @@ const {
   verifyInstagramConnection,
 } = require("./meta.instagram");
 const webhook = require("./meta.webhook");
+const policy = require("./meta.policy");
+const assets = require("./meta.assets")({ db, client: axios, audit });
+const operations = require("./meta.operations")({ db, client: axios, assets, audit, messageContext, mysqlDateTime, parseJson });
 
 const CHANNEL_TYPES = new Set(["WHATSAPP", "MESSENGER", "INSTAGRAM"]);
 const AI_MODES = new Set(["OFF", "DRAFT", "APPROVAL", "AUTO"]);
@@ -20,16 +23,7 @@ function httpError(statusCode, message, code) {
 }
 
 function metaApiErrorMessage(error) {
-  const metaError = error?.response?.data?.error;
-  const baseMessage = String(
-    metaError?.error_user_msg || metaError?.message || error?.message || error
-  );
-  const codes = [
-    metaError?.code !== undefined ? `code ${metaError.code}` : null,
-    metaError?.error_subcode !== undefined ? `subcode ${metaError.error_subcode}` : null,
-    metaError?.type || null,
-  ].filter(Boolean);
-  return `${baseMessage}${codes.length ? ` (${codes.join(", ")})` : ""}`.slice(0, 1000);
+  return policy.safeError(error);
 }
 
 function normalizeAccessToken(value) {
@@ -70,7 +64,9 @@ async function inspectMetaAccessToken({
 }
 
 function mysqlDateTime(value = new Date()) {
-  return new Date(value).toISOString().slice(0, 23).replace("T", " ");
+  const date = policy.utcDate(value);
+  if (!date || !Number.isFinite(date.getTime())) throw httpError(400, "Data non valida", "META_DATE_INVALID");
+  return date.toISOString().slice(0, 23).replace("T", " ");
 }
 
 function parseJson(value) {
@@ -118,13 +114,15 @@ async function getOverview() {
       (SELECT COALESCE(SUM(unread_count), 0) FROM meta_conversations
        WHERE status IN ('OPEN', 'PENDING')) AS unread_messages,
       (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state = 'WAITING_APPROVAL') AS awaiting_approval,
-      (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state IN ('READY', 'PROCESSING', 'RETRY')) AS queued_messages`),
+      (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state IN ('READY', 'PROCESSING', 'RETRY')) AS queued_messages,
+      (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state IN ('FAILED', 'UNCERTAIN')) AS failed_messages,
+      (SELECT COUNT(*) FROM meta_leads WHERE hydration_status IN ('FAILED','RETRY','PROCESSING')) AS lead_errors`),
     db.query(`SELECT id, name, business_account_id, app_id, graph_api_version, token_expires_at,
                      status, ai_mode, last_error, created_at, updated_at,
                      encrypted_access_token IS NOT NULL AS has_access_token
               FROM meta_integrations ORDER BY created_at DESC`),
     db.query(`SELECT id, integration_id, channel_type, external_account_id, display_name, status,
-                     token_expires_at, credential_mode, api_sender_id,
+                     token_expires_at, credential_mode, api_sender_id, leads_enabled, last_token_refresh_at, refresh_error,
                      last_verified_at, last_error, created_at, updated_at,
                      encrypted_access_token IS NOT NULL AS has_access_token
               FROM meta_channels ORDER BY channel_type, display_name`),
@@ -197,6 +195,7 @@ async function saveIntegration(input, actor) {
   }
 
   const channels = Array.isArray(input.channels) ? input.channels : [];
+  if(channels.length)throw httpError(400,"Salva e verifica ogni canale nella sezione Canali di produzione.","META_USE_CHANNEL_SETUP");
   for (const channel of channels) {
     const type = String(channel.channelType || "").toUpperCase();
     if (!CHANNEL_TYPES.has(type) || !String(channel.externalAccountId || "").trim()) {
@@ -210,7 +209,7 @@ async function saveIntegration(input, actor) {
   try {
     await conn.beginTransaction();
     const [existing] = await conn.query(
-      `SELECT id, encrypted_access_token FROM meta_integrations WHERE id = ? LIMIT 1`,
+      `SELECT id, encrypted_access_token, status, app_id, business_account_id, graph_api_version FROM meta_integrations WHERE id = ? LIMIT 1 FOR UPDATE`,
       [id]
     );
     const [[channelSummary]] = existing.length
@@ -220,7 +219,15 @@ async function saveIntegration(input, actor) {
           [id]
         )
       : [[{ count: 0, active: 0 }]];
-    const willBeConnected = Boolean(
+    const changedIdentity = existing.length && (
+      String(existing[0].app_id || "") !== String(input.appId || "") ||
+      String(existing[0].business_account_id || "") !== String(input.businessAccountId || "") ||
+      String(existing[0].graph_api_version || "") !== graphVersion
+    );
+    if(changedIdentity) {
+      await conn.query("UPDATE meta_channels SET status=IF(status='PAUSED','PAUSED','PENDING'),last_verified_at=NULL,last_error='Configurazione generale modificata: verifica nuovamente il canale' WHERE integration_id=?",[id]);
+    }
+    const willBeConnected = !changedIdentity && Boolean(
       Number(channelSummary?.active || 0) > 0 ||
         ((token || existing[0]?.encrypted_access_token) && channels.length)
     );
@@ -241,7 +248,7 @@ async function saveIntegration(input, actor) {
           token?.encrypted || null,
           token?.iv || null,
           token?.authTag || null,
-          input.status === "PAUSED" ? "PAUSED" : willBeConnected ? "CONNECTED" : "PENDING",
+          input.status === "PAUSED" || (input.status === undefined && existing[0].status === "PAUSED") ? "PAUSED" : willBeConnected ? "CONNECTED" : "PENDING",
           id,
         ]
       );
@@ -320,7 +327,7 @@ async function refreshIntegrationConnectionStatus(conn, integrationId) {
   const status = Number(summary?.active || 0) > 0 ? "CONNECTED" : "PENDING";
   await conn.query(
     `UPDATE meta_integrations SET status = ?, last_error = IF(? = 'CONNECTED', NULL, last_error)
-     WHERE id = ?`,
+     WHERE id = ? AND status <> 'PAUSED'`,
     [status, status, integrationId]
   );
   return { status, total: Number(summary?.total || 0), active: Number(summary?.active || 0) };
@@ -358,6 +365,17 @@ async function saveChannel(integrationId, input, actor) {
         );
     if (requestedId && !existing) {
       throw httpError(404, "Canale Meta non trovato", "META_CHANNEL_NOT_FOUND");
+    }
+    if(!existing || existing.external_account_id !== externalAccountId) {
+      const [duplicates] = await conn.query("SELECT id,integration_id FROM meta_channels WHERE channel_type=? AND external_account_id=? AND integration_id<>? LIMIT 1",[channelType,externalAccountId,integrationId]);
+      if(duplicates.length)throw httpError(409,"Questo account è già collegato a un’altra integrazione. Selezionala per aggiornare il token; non duplicare lo stesso canale.","META_CHANNEL_ALREADY_LINKED");
+    }
+    // Never move an existing history/queue to a different sender account.
+    if (existing && (existing.external_account_id !== externalAccountId || existing.channel_type !== channelType)) {
+      const [[history]] = await conn.query("SELECT COUNT(*) AS count FROM meta_conversations WHERE channel_id = ?", [existing.id]);
+      if (Number(history.count)) throw httpError(409,
+        "Questo canale ha uno storico. Crea una nuova integrazione per il numero/account di produzione; conserva il canale di prova in pausa.",
+        "META_CHANNEL_HAS_HISTORY");
     }
     const channelId = existing?.id || crypto.randomUUID();
     const credentialMode = channelType === "INSTAGRAM"
@@ -412,6 +430,10 @@ async function saveChannel(integrationId, input, actor) {
           credentialMode,
         ]
       );
+    }
+    if(encryptedToken) await conn.query("UPDATE meta_channels SET refresh_error=NULL,last_token_refresh_at=NULL WHERE id=?",[channelId]);
+    if (input.leadsEnabled !== undefined && channelType === "MESSENGER") {
+      await conn.query("UPDATE meta_channels SET leads_enabled = ? WHERE id = ?", [input.leadsEnabled === true ? 1 : 0, channelId]);
     }
     await refreshIntegrationConnectionStatus(conn, integrationId);
     await audit(conn, {
@@ -514,12 +536,17 @@ async function verifyChannel(channelId, actor) {
       if (!phone) {
         throw httpError(409, "Il Phone Number ID non appartiene al WABA configurato", "META_PHONE_MISMATCH");
       }
+      if (phone.status && phone.status !== "CONNECTED") {
+        throw httpError(409, `Numero WhatsApp non operativo (${phone.status}). Completa la registrazione in WhatsApp Manager.`, "META_PHONE_NOT_CONNECTED");
+      }
       verifiedName = phone.verified_name || phone.display_phone_number || verifiedName;
       details = {
         phoneNumber: phone.display_phone_number || null,
         qualityRating: phone.quality_rating || null,
         tokenType: inspection.type,
         scopes: inspection.scopes,
+        expiresAt: inspection.expiresAt,
+        dataAccessExpiresAt: inspection.dataAccessExpiresAt,
       };
     } else if (channel.channel_type === "MESSENGER") {
       const baseUrl = `https://graph.facebook.com/${version}`;
@@ -533,6 +560,7 @@ async function verifyChannel(channelId, actor) {
           "pages_messaging",
           "pages_manage_metadata",
           "pages_read_engagement",
+          ...(channel.leads_enabled ? ["leads_retrieval", "pages_show_list", "ads_management", "pages_manage_ads"] : []),
         ],
       });
       if (!inspection.isValid || inspection.missingScopes.length) {
@@ -554,18 +582,26 @@ async function verifyChannel(channelId, actor) {
       if (String(profileResponse.data?.id || "") !== String(channel.external_account_id)) {
         throw httpError(409, "Il Page access token appartiene a una Pagina diversa", "META_PAGE_MISMATCH");
       }
-      await axios.post(`${baseUrl}/${encodeURIComponent(channel.external_account_id)}/subscribed_apps`, null, {
+      const subscriptionUrl = `${baseUrl}/${encodeURIComponent(channel.external_account_id)}/subscribed_apps`;
+      const existingSubscriptions = await axios.get(subscriptionUrl, requestConfig);
+      const existingFields = (existingSubscriptions.data?.data || []).find(item => String(item.id) === appId)?.subscribed_fields || [];
+      const subscribedFields = [...new Set([...existingFields, "messages", "messaging_postbacks", "message_deliveries", "message_reads",
+        ...(channel.leads_enabled ? ["leadgen"] : [])])];
+      const subscribed = await axios.post(subscriptionUrl, null, {
         ...requestConfig,
         params: {
           subscribed_fields:
-            "messages,messaging_postbacks,message_deliveries,message_reads,messaging_optins,messaging_referrals",
+            subscribedFields.join(","),
         },
       });
+      if (subscribed.data?.success !== true) throw httpError(502, "Meta non ha confermato l'iscrizione della Pagina.", "META_SUBSCRIPTION_FAILED");
       verifiedName = profileResponse.data?.name || verifiedName;
       details = {
         pageId: profileResponse.data?.id,
-        subscribedFields: "messages",
+        subscribedFields,
         scopes: inspection.scopes,
+        expiresAt: inspection.expiresAt,
+        dataAccessExpiresAt: inspection.dataAccessExpiresAt,
       };
     } else {
       details = await verifyInstagramConnection({
@@ -601,6 +637,12 @@ async function verifyChannel(channelId, actor) {
       );
       if (!verificationUpdate.affectedRows) {
         throw httpError(409, "Il canale è stato modificato durante la verifica: verifica nuovamente i dati salvati.", "META_CHANNEL_CHANGED");
+      }
+      const expiries = [details.expiresAt, details.dataAccessExpiresAt].filter(value => Number(value) > 0);
+      if (channel.channel_type !== "INSTAGRAM") {
+        await conn.query("UPDATE meta_channels SET token_expires_at = ? WHERE id = ?", [
+          expiries.length ? mysqlDateTime(new Date(Math.min(...expiries) * 1000)) : null, channelId,
+        ]);
       }
       await refreshIntegrationConnectionStatus(conn, channel.integration_id);
       await audit(conn, {
@@ -702,100 +744,69 @@ async function findChannel(conn, channelType, accountId) {
   const [rows] = await conn.query(
     `SELECT c.*, i.status AS integration_status
      FROM meta_channels c JOIN meta_integrations i ON i.id = c.integration_id
-     WHERE c.channel_type = ? AND c.external_account_id = ? LIMIT 1`,
+     WHERE c.channel_type = ? AND c.external_account_id = ?
+     ORDER BY (c.status = 'ACTIVE') DESC,c.last_verified_at DESC,c.updated_at DESC,c.id DESC LIMIT 2`,
     [channelType, accountId]
   );
+  if(rows.length>1 && rows[0].status==='ACTIVE' && rows[1].status==='ACTIVE')throw httpError(409,"Lo stesso account è attivo in più integrazioni. Sospendi il duplicato e recupera gli eventi.","META_DUPLICATE_ACTIVE_CHANNEL");
   return rows[0] || null;
 }
 
 async function upsertInboundMessage(conn, channel, event) {
+  if (!event.contactId || !event.externalMessageId) return;
+  // Check the message tombstone before touching the contact or reopening a thread.
+  const [[existing]] = await conn.query(
+    "SELECT id FROM meta_messages WHERE channel_id = ? AND external_message_id = ? LIMIT 1",
+    [channel.id, event.externalMessageId]);
+  if (existing) {
+    if (event.isEcho) await applyStatus(conn, channel, { ...event, status: "SENT" });
+    return;
+  }
   const contactId = crypto.randomUUID();
   await conn.query(
-    `INSERT INTO meta_contacts
-       (id, integration_id, channel_type, external_contact_id, display_name, phone, profile_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       display_name = COALESCE(VALUES(display_name), display_name),
-       profile_json = COALESCE(VALUES(profile_json), profile_json)`,
-    [
-      contactId,
-      channel.integration_id,
-      event.channelType,
-      event.contactId,
-      event.contactName,
-      event.channelType === "WHATSAPP" ? event.contactId : null,
-      JSON.stringify(event.payload || {}),
-    ]
-  );
+    `INSERT INTO meta_contacts (id, integration_id, channel_type, external_contact_id, display_name, phone)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name)`,
+    [contactId, channel.integration_id, event.channelType, event.contactId, event.contactName || null,
+      event.channelType === "WHATSAPP" ? event.contactId : null]);
   const [[contact]] = await conn.query(
-    `SELECT id FROM meta_contacts
-     WHERE integration_id = ? AND channel_type = ? AND external_contact_id = ? LIMIT 1`,
-    [channel.integration_id, event.channelType, event.contactId]
-  );
-  if (!contact) return;
-
+    "SELECT id FROM meta_contacts WHERE integration_id = ? AND channel_type = ? AND external_contact_id = ? LIMIT 1",
+    [channel.integration_id, event.channelType, event.contactId]);
   const conversationId = crypto.randomUUID();
   await conn.query(
-    `INSERT INTO meta_conversations
-       (id, integration_id, channel_id, contact_id, last_message_at, last_inbound_at,
-        reply_window_expires_at, unread_count)
-     VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(?, INTERVAL 24 HOUR), 0)
-     ON DUPLICATE KEY UPDATE
-       last_message_at = GREATEST(COALESCE(last_message_at, VALUES(last_message_at)), VALUES(last_message_at)),
-       last_inbound_at = GREATEST(COALESCE(last_inbound_at, VALUES(last_inbound_at)), VALUES(last_inbound_at)),
-       reply_window_expires_at = DATE_ADD(VALUES(last_inbound_at), INTERVAL 24 HOUR),
-       status = IF(status = 'SPAM', status, 'OPEN'),
-       archived_at = IF(status = 'SPAM', archived_at, NULL)`,
-    [
-      conversationId,
-      channel.integration_id,
-      channel.id,
-      contact.id,
-      mysqlDateTime(event.occurredAt),
-      mysqlDateTime(event.occurredAt),
-      mysqlDateTime(event.occurredAt),
-    ]
-  );
+    `INSERT INTO meta_conversations (id, integration_id, channel_id, contact_id)
+     VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`,
+    [conversationId, channel.integration_id, channel.id, contact.id]);
   const [[conversation]] = await conn.query(
-    `SELECT id FROM meta_conversations WHERE channel_id = ? AND contact_id = ? LIMIT 1`,
-    [channel.id, contact.id]
-  );
-  const [messageInsert] = await conn.query(
+    "SELECT id FROM meta_conversations WHERE channel_id = ? AND contact_id = ? LIMIT 1 FOR UPDATE", [channel.id, contact.id]);
+  const [insert] = await conn.query(
     `INSERT IGNORE INTO meta_messages
-       (id, conversation_id, channel_id, external_message_id, direction, sender_kind,
-        message_type, body_text, payload_json, status, occurred_at)
-     VALUES (?, ?, ?, ?, 'INBOUND', 'CONTACT', ?, ?, ?, 'RECEIVED', ?)`,
-    [
-      crypto.randomUUID(),
-      conversation.id,
-      channel.id,
-      event.externalMessageId,
-      event.messageType,
-      event.text,
-      JSON.stringify(event.payload || {}),
-      mysqlDateTime(event.occurredAt),
-    ]
-  );
-  if (messageInsert.affectedRows) {
-    await conn.query(
-      `UPDATE meta_conversations SET
-         last_message_at = GREATEST(COALESCE(last_message_at, ?), ?),
-         last_inbound_at = GREATEST(COALESCE(last_inbound_at, ?), ?),
-         reply_window_expires_at = DATE_ADD(?, INTERVAL 24 HOUR),
-         unread_count = unread_count + 1,
-         status = IF(status = 'SPAM', status, 'OPEN'),
-         archived_at = IF(status = 'SPAM', archived_at, NULL)
-       WHERE id = ?`,
-      [
-        mysqlDateTime(event.occurredAt),
-        mysqlDateTime(event.occurredAt),
-        mysqlDateTime(event.occurredAt),
-        mysqlDateTime(event.occurredAt),
-        mysqlDateTime(event.occurredAt),
-        conversation.id,
-      ]
-    );
-  }
+     (id, conversation_id, channel_id, external_message_id, direction, sender_kind, message_type, body_text, payload_json, status, occurred_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [crypto.randomUUID(), conversation.id, channel.id, event.externalMessageId,
+      event.isEcho ? "OUTBOUND" : "INBOUND", event.isEcho ? "SYSTEM" : "CONTACT",
+      event.messageType, event.text, JSON.stringify(event.payload || {}), event.isEcho ? "SENT" : "RECEIVED", mysqlDateTime(event.occurredAt)]);
+  if (!insert.affectedRows) return;
+  const occurred = mysqlDateTime(event.occurredAt);
+  await conn.query(
+    `UPDATE meta_conversations SET
+       last_message_at = GREATEST(COALESCE(last_message_at, ?), ?),
+       last_inbound_at = IF(?, last_inbound_at, GREATEST(COALESCE(last_inbound_at, ?), ?)),
+       reply_window_expires_at = IF(?, reply_window_expires_at, DATE_ADD(last_inbound_at, INTERVAL 24 HOUR)),
+       unread_count = unread_count + ?,
+       archived_at = IF(? OR status = 'SPAM', archived_at, NULL),
+       status = IF(? OR status = 'SPAM', status, 'OPEN')
+     WHERE id = ?`,
+    [occurred, occurred, event.isEcho ? 1 : 0, occurred, occurred, event.isEcho ? 1 : 0,
+      event.isEcho ? 0 : 1, event.isEcho ? 1 : 0, event.isEcho ? 1 : 0, conversation.id]);
+}
+
+function presentMessages(rows) {
+  return serializeRows(rows).map(row => {
+    const attachments = require("./meta.assets").attachmentDescriptors(row);
+    const { payload_json, status_payload_json, request_json, ...safe } = row;
+    return { ...safe, attachments };
+  });
 }
 
 async function upsertLead(conn, channel, event) {
@@ -804,7 +815,7 @@ async function upsertLead(conn, channel, event) {
        (id, integration_id, channel_id, external_lead_id, form_id, ad_id,
         raw_payload_json, received_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE raw_payload_json = VALUES(raw_payload_json)`,
+     ON DUPLICATE KEY UPDATE raw_payload_json = IF(hydration_status = 'COMPLETE',raw_payload_json,VALUES(raw_payload_json))`,
     [
       crypto.randomUUID(),
       channel.integration_id,
@@ -819,40 +830,32 @@ async function upsertLead(conn, channel, event) {
 }
 
 async function applyStatus(conn, channel, event) {
-  const map = { SENT: "SENT", DELIVERED: "DELIVERED", READ: "READ", FAILED: "FAILED" };
-  const status = map[event.status];
-  if (!status) return;
-  if (status === "READ" && !event.externalMessageId && event.contactId) {
+  if (!["SENT", "DELIVERED", "READ", "FAILED"].includes(event.status)) return true;
+  if (event.status === "READ" && !event.externalMessageId && event.contactId) {
     await conn.query(
-      `UPDATE meta_messages m
-       JOIN meta_conversations cv ON cv.id = m.conversation_id
-       JOIN meta_contacts c ON c.id = cv.contact_id
-       SET m.status = 'READ', m.payload_json = ?
-       WHERE m.channel_id = ? AND m.direction = 'OUTBOUND'
-         AND c.external_contact_id = ? AND m.occurred_at <= ?
-         AND m.status IN ('SENT', 'DELIVERED')`,
-      [
-        JSON.stringify(event.payload || {}),
-        channel.id,
-        event.contactId,
-        mysqlDateTime(event.occurredAt),
-      ]
-    );
-    return;
+      `UPDATE meta_messages m JOIN meta_conversations cv ON cv.id = m.conversation_id
+       JOIN meta_contacts c ON c.id = cv.contact_id SET m.status = 'READ'
+       WHERE m.channel_id = ? AND m.direction = 'OUTBOUND' AND c.external_contact_id = ?
+         AND m.occurred_at <= ? AND m.status IN ('SENT', 'DELIVERED')`,
+      [channel.id, event.contactId, mysqlDateTime(event.occurredAt)]);
+    return true;
   }
-  await conn.query(
-    `UPDATE meta_messages SET status = ?, payload_json = ?,
-       error_message = IF(? = 'FAILED', ?, NULL)
-     WHERE channel_id = ? AND external_message_id = ?`,
-    [
-      status,
-      JSON.stringify(event.payload || {}),
-      status,
-      event.payload?.errors?.[0]?.title || event.payload?.errors?.[0]?.message || null,
-      channel.id,
-      event.externalMessageId,
-    ]
-  );
+  const [[message]] = await conn.query(
+    "SELECT id, status, deleted_at FROM meta_messages WHERE channel_id = ? AND external_message_id = ? FOR UPDATE",
+    [channel.id, event.externalMessageId]);
+  if (!message) return false; // Receipt may arrive before the HTTP send response.
+  const ranks = { SENT: 1, DELIVERED: 2, READ: 3 };
+  const advance = event.status === "FAILED" ? !["DELIVERED", "READ"].includes(message.status)
+    : (ranks[event.status] || 0) >= (ranks[message.status] || 0);
+  if (advance) await conn.query(
+    "UPDATE meta_messages SET status = ?, status_payload_json = ?, error_message = ? WHERE id = ?",
+    [event.status, message.deleted_at ? null : JSON.stringify(event.payload || {}),
+      event.status === "FAILED" ? String(event.payload?.errors?.[0]?.message || "Consegna non riuscita").slice(0,1000) : null, message.id]);
+  if(advance) await conn.query(
+    `UPDATE meta_outbound_jobs SET state = ?, last_error = ?, locked_at = NULL WHERE message_id = ?
+     AND state IN ('PROCESSING','UNCERTAIN','RETRY','SENT','FAILED')`,
+    [event.status === "FAILED" ? "FAILED" : "SENT", event.status === "FAILED" ? "Consegna rifiutata da Meta" : null, message.id]);
+  return true;
 }
 
 async function processWebhookPayload(conn, payload) {
@@ -868,319 +871,75 @@ async function processWebhookPayload(conn, payload) {
     matched += 1;
     if (event.kind === "MESSAGE") await upsertInboundMessage(conn, channel, event);
     if (event.kind === "LEAD") await upsertLead(conn, channel, event);
-    if (event.kind === "STATUS") await applyStatus(conn, channel, event);
+    if (event.kind === "STATUS" && !(await applyStatus(conn, channel, event))) unmatched += 1;
   }
   return { events: events.length, matched, unmatched };
 }
 
-async function replayUnmatchedEvents({ limit = 100 } = {}) {
-  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
-  const [rows] = await db.query(
-    `SELECT id, payload_json, attempt_count
-     FROM meta_webhook_events
-     WHERE processing_status = 'UNMATCHED'
-     ORDER BY received_at ASC LIMIT ?`,
-    [safeLimit]
-  );
-  let processed = 0;
-  let stillUnmatched = 0;
-  let failed = 0;
-
-  for (const row of rows) {
-    const conn = await db.getConnection();
-    try {
-      await conn.beginTransaction();
-      const result = await processWebhookPayload(conn, parseJson(row.payload_json) || {});
-      const status = result.unmatched ? "UNMATCHED" : "PROCESSED";
-      await conn.query(
-        `UPDATE meta_webhook_events SET processing_status = ?, attempt_count = ?,
-         error_message = NULL, processed_at = IF(? = 'PROCESSED', CURRENT_TIMESTAMP(3), processed_at)
-         WHERE id = ?`,
-        [status, Number(row.attempt_count || 0) + 1, status, row.id]
-      );
-      await conn.commit();
-      if (status === "PROCESSED") processed += 1;
-      else stillUnmatched += 1;
-    } catch (error) {
-      await conn.rollback();
-      failed += 1;
-      await db.query(
-        `UPDATE meta_webhook_events SET processing_status = 'FAILED', attempt_count = ?,
-         error_message = ? WHERE id = ?`,
-        [Number(row.attempt_count || 0) + 1, String(error.message || error).slice(0, 1000), row.id]
-      );
-    } finally {
-      conn.release();
-    }
-  }
-  return { examined: rows.length, processed, stillUnmatched, failed };
-}
-
-async function synchronizeVerifiedChannelCredentials(conn, sourceIntegrationId, externalAccountIds) {
-  const accountIds = [...new Set((externalAccountIds || []).map(String).filter(Boolean))];
-  if (!accountIds.length) return { integrationsUpdated: 0, jobsRecovered: 0 };
-  const [[source]] = await conn.query(
-    `SELECT business_account_id, app_id, graph_api_version, encrypted_access_token,
-            token_iv, token_auth_tag, token_expires_at
-     FROM meta_integrations WHERE id = ? LIMIT 1`,
-    [sourceIntegrationId]
-  );
-  if (!source?.encrypted_access_token) {
-    throw httpError(400, "Credenziale verificata non disponibile", "META_VERIFIED_TOKEN_MISSING");
-  }
-  const placeholders = accountIds.map(() => "?").join(", ");
-  const [integrationUpdate] = await conn.query(
-    `UPDATE meta_integrations i
-     JOIN meta_channels ch ON ch.integration_id = i.id
-     SET i.business_account_id = ?, i.app_id = ?, i.graph_api_version = ?,
-         i.encrypted_access_token = ?, i.token_iv = ?, i.token_auth_tag = ?,
-         i.token_expires_at = ?, i.status = 'CONNECTED', i.last_error = NULL
-     WHERE ch.channel_type = 'WHATSAPP'
-       AND ch.external_account_id IN (${placeholders})`,
-    [
-      source.business_account_id,
-      source.app_id,
-      source.graph_api_version,
-      source.encrypted_access_token,
-      source.token_iv,
-      source.token_auth_tag,
-      source.token_expires_at,
-      ...accountIds,
-    ]
-  );
-  await conn.query(
-    `UPDATE meta_channels SET status = 'ACTIVE'
-     WHERE channel_type = 'WHATSAPP' AND external_account_id IN (${placeholders})`,
-    accountIds
-  );
-  const [jobRecovery] = await conn.query(
-    `UPDATE meta_outbound_jobs j
-     JOIN meta_messages m ON m.id = j.message_id
-     JOIN meta_channels ch ON ch.id = m.channel_id
-     SET j.state = 'READY', j.attempt_count = 0, j.next_attempt_at = NULL,
-         j.locked_at = NULL, j.last_error = NULL,
-         m.status = 'QUEUED', m.error_message = NULL
-     WHERE ch.channel_type = 'WHATSAPP'
-       AND ch.external_account_id IN (${placeholders})
-       AND j.state IN ('RETRY', 'FAILED')
-       AND (j.last_error LIKE '%Authentication Error%'
-         OR j.last_error LIKE '%code 190%'
-         OR j.last_error LIKE '%OAuthException%')`,
-    accountIds
-  );
-  return {
-    integrationsUpdated: Number(integrationUpdate.affectedRows || 0),
-    jobsRecovered: Number(jobRecovery.affectedRows || 0),
-  };
-}
-
-async function verifyWhatsAppIntegration(integrationId, actor) {
-  const [[integration]] = await db.query(
-    `SELECT id, business_account_id, app_id, graph_api_version,
-            encrypted_access_token, token_iv, token_auth_tag
-     FROM meta_integrations WHERE id = ? LIMIT 1`,
-    [integrationId]
-  );
-  if (!integration) {
-    throw httpError(404, "Integrazione Meta non trovata", "META_INTEGRATION_NOT_FOUND");
-  }
-  const wabaId = String(integration.business_account_id || "").trim();
-  const appId = String(integration.app_id || "").trim();
-  const version = String(
-    integration.graph_api_version || process.env.META_GRAPH_API_VERSION || ""
-  ).trim();
-  if (!wabaId || !appId || !version) {
-    throw httpError(
-      400,
-      "WABA ID, Meta App ID e versione Graph API sono obbligatori",
-      "META_VERIFICATION_DATA_MISSING"
-    );
-  }
-  if (!integration.encrypted_access_token) {
-    throw httpError(400, "Access token Meta non presente", "META_ACCESS_TOKEN_MISSING");
-  }
-
-  const token = decryptSecret({
-    encrypted: integration.encrypted_access_token,
-    iv: integration.token_iv,
-    authTag: integration.token_auth_tag,
-  });
-  const baseUrl = `https://graph.facebook.com/${version}/${encodeURIComponent(wabaId)}`;
-  const requestConfig = {
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
-  };
-
+async function processStoredWebhook(id) {
+  const conn = await db.getConnection();
   try {
-    const tokenInspection = await inspectMetaAccessToken({ token, appId, version });
-    if (!tokenInspection.isValid) {
-      throw httpError(401, "Il token Meta risulta non valido o scaduto", "META_TOKEN_INVALID");
-    }
-    if (tokenInspection.appId && tokenInspection.appId !== appId) {
-      throw httpError(
-        401,
-        `Il token appartiene alla Meta App ${tokenInspection.appId}, non alla App ${appId}`,
-        "META_TOKEN_APP_MISMATCH"
-      );
-    }
-    if (tokenInspection.missingScopes.length) {
-      throw httpError(
-        403,
-        `Permessi token mancanti: ${tokenInspection.missingScopes.join(", ")}`,
-        "META_TOKEN_SCOPES_MISSING"
-      );
-    }
-    const subscribeResponse = await axios.post(`${baseUrl}/subscribed_apps`, null, requestConfig);
-    const [subscriptionsResponse, phonesResponse] = await Promise.all([
-      axios.get(`${baseUrl}/subscribed_apps`, requestConfig),
-      axios.get(`${baseUrl}/phone_numbers`, {
-        ...requestConfig,
-        params: { fields: "id,display_phone_number,verified_name,status,quality_rating" },
-      }),
-    ]);
-    const subscriptions = Array.isArray(subscriptionsResponse.data?.data)
-      ? subscriptionsResponse.data.data
-      : [];
-    const subscribedAppIds = subscriptions
-      .map((item) => String(item?.whatsapp_business_api_data?.id || item?.id || ""))
-      .filter(Boolean);
-    const subscribed = Boolean(subscribeResponse.data?.success) || subscribedAppIds.includes(appId);
-    const phones = (Array.isArray(phonesResponse.data?.data) ? phonesResponse.data.data : []).map(
-      (phone) => ({
-        id: String(phone.id || ""),
-        displayPhoneNumber: phone.display_phone_number || null,
-        verifiedName: phone.verified_name || null,
-        status: phone.status || null,
-        qualityRating: phone.quality_rating || null,
-      })
-    );
-    const phoneIds = new Set(phones.map((phone) => phone.id));
-    const [channels] = await db.query(
-      `SELECT id, external_account_id FROM meta_channels
-       WHERE integration_id = ? AND channel_type = 'WHATSAPP'`,
-      [integrationId]
-    );
-    const matchedChannelIds = channels
-      .filter((channel) => phoneIds.has(String(channel.external_account_id)))
-      .map((channel) => channel.id);
-    const fullyConnected = subscribed && channels.length > 0 && matchedChannelIds.length === channels.length;
-    const verificationError = !subscribed
-      ? "L'app non risulta sottoscritta al WABA"
-      : !channels.length
-        ? "Nessun canale WhatsApp configurato"
-        : matchedChannelIds.length !== channels.length
-          ? "Il Phone Number ID salvato non appartiene al WABA configurato"
-          : null;
-
-    const conn = await db.getConnection();
-    let credentialSync = { integrationsUpdated: 0, jobsRecovered: 0 };
-    try {
-      await conn.beginTransaction();
-      await conn.query(
-        `UPDATE meta_integrations SET status = ?, last_error = ? WHERE id = ?`,
-        [fullyConnected ? "CONNECTED" : "ERROR", verificationError, integrationId]
-      );
-      for (const channel of channels) {
-        await conn.query(`UPDATE meta_channels SET status = ? WHERE id = ?`, [
-          phoneIds.has(String(channel.external_account_id)) ? "ACTIVE" : "ERROR",
-          channel.id,
-        ]);
-      }
-      if (fullyConnected) {
-        credentialSync = await synchronizeVerifiedChannelCredentials(
-          conn,
-          integrationId,
-          channels.map((channel) => channel.external_account_id)
-        );
-      }
-      await audit(conn, {
-        integrationId,
-        actorId: actor?.sub,
-        actorKind: "HUMAN",
-        action: "WHATSAPP_CONNECTION_VERIFIED",
-        entityType: "INTEGRATION",
-        entityId: integrationId,
-        details: {
-          subscribed,
-          configuredChannels: channels.length,
-          matchedChannels: matchedChannelIds.length,
-          phoneIds: phones.map((phone) => phone.id),
-          credentialSync,
-        },
-      });
-      await conn.commit();
-    } catch (error) {
-      await conn.rollback();
-      throw error;
-    } finally {
-      conn.release();
-    }
-
-    const replay = fullyConnected ? await replayUnmatchedEvents() : null;
-    return {
-      subscribed,
-      appId,
-      wabaId,
-      tokenStatus: {
-        type: tokenInspection.type,
-        expiresAt: tokenInspection.expiresAt,
-        dataAccessExpiresAt: tokenInspection.dataAccessExpiresAt,
-        scopes: tokenInspection.scopes,
-      },
-      phones,
-      configuredChannels: channels.length,
-      matchedChannels: matchedChannelIds.length,
-      fullyConnected,
-      credentialSync,
-      replay,
-      overview: await getOverview(),
-    };
+    await conn.beginTransaction();
+    const [[event]] = await conn.query("SELECT * FROM meta_webhook_events WHERE id = ? FOR UPDATE SKIP LOCKED", [id]);
+    if (!event || event.processing_status === "PROCESSED") { await conn.commit(); return { processed: false }; }
+    const result = await processWebhookPayload(conn, parseJson(event.payload_json) || {});
+    await conn.query(
+      `UPDATE meta_webhook_events SET processing_status = ?, attempt_count = attempt_count + 1,
+       error_message = NULL, processed_at = CURRENT_TIMESTAMP(3),
+       next_attempt_at = IF(?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE), NULL) WHERE id = ?`,
+      [result.unmatched ? "UNMATCHED" : "PROCESSED", result.unmatched > 0, id]);
+    await conn.commit();
+    return { processed: true, ...result };
   } catch (error) {
-    const message = metaApiErrorMessage(error);
-    await db.query(`UPDATE meta_integrations SET status = 'ERROR', last_error = ? WHERE id = ?`, [
-      message,
-      integrationId,
-    ]);
-    throw httpError(502, `Verifica Meta non riuscita: ${message}`, "META_VERIFICATION_FAILED");
+    await conn.rollback();
+    await db.query(
+      `UPDATE meta_webhook_events SET processing_status = 'FAILED', attempt_count = attempt_count + 1,
+       error_message = ?, next_attempt_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE)
+       WHERE id = ? AND processing_status <> 'PROCESSED'`, [policy.safeError(error), id]);
+    return { processed: false, failed: true };
+  } finally { conn.release(); }
+}
+
+async function replayUnmatchedEvents({ limit = 100, automatic = false } = {}) {
+  const safeLimit = Math.max(1, policy.boundedInt(limit, 100, 500));
+  const [rows] = await db.query(
+    `SELECT id FROM meta_webhook_events WHERE processing_status IN ('RECEIVED','FAILED','UNMATCHED')
+     ${automatic ? "AND attempt_count < 20 AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP(3))" : ""}
+     ORDER BY received_at LIMIT ?`, [safeLimit]);
+  const summary = { examined: rows.length, processed: 0, stillUnmatched: 0, failed: 0 };
+  for (const row of rows) {
+    const result = await processStoredWebhook(row.id);
+    if (result.failed) summary.failed++;
+    else if (result.unmatched) summary.stillUnmatched++;
+    else if (result.processed) summary.processed++;
   }
+  return summary;
+}
+
+// Backwards-compatible endpoint: each channel must pass the same current checks.
+async function verifyWhatsAppIntegration(integrationId, actor) {
+  const [channels] = await db.query("SELECT id FROM meta_channels WHERE integration_id=? AND channel_type='WHATSAPP'",[integrationId]);
+  if(!channels.length)throw httpError(404,"Nessun canale WhatsApp configurato.","META_CHANNEL_NOT_FOUND");
+  const results=[];
+  for(const channel of channels)results.push(await verifyChannel(channel.id,actor));
+  return {fullyConnected:true,channels:results,overview:await getOverview()};
 }
 
 async function ingestWebhook(rawBody, payload) {
   const key = webhook.eventKey(rawBody);
-  const webhookId = crypto.randomUUID();
-  const [insert] = await db.query(
-    `INSERT IGNORE INTO meta_webhook_events (id, event_key, object_type, payload_json)
-     VALUES (?, ?, ?, ?)`,
-    [webhookId, key, payload?.object || null, JSON.stringify(payload)]
-  );
-  if (!insert.affectedRows) return { accepted: true, duplicate: true };
-
-  const conn = await db.getConnection();
-  try {
-    await conn.beginTransaction();
-    const result = await processWebhookPayload(conn, payload);
-    await conn.query(
-      `UPDATE meta_webhook_events SET processing_status = ?, attempt_count = 1,
-       processed_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
-      [result.unmatched ? "UNMATCHED" : "PROCESSED", webhookId]
-    );
-    await conn.commit();
-    return { accepted: true, duplicate: false, ...result };
-  } catch (error) {
-    await conn.rollback();
-    await db.query(
-      `UPDATE meta_webhook_events SET processing_status = 'FAILED', attempt_count = 1,
-       error_message = ? WHERE id = ?`,
-      [String(error.message || error).slice(0, 1000), webhookId]
-    );
-    throw error;
-  } finally {
-    conn.release();
-  }
+  await db.query(
+    "INSERT IGNORE INTO meta_webhook_events (id, event_key, object_type, payload_json) VALUES (?, ?, ?, ?)",
+    [crypto.randomUUID(), key, payload?.object || null, JSON.stringify(payload)]);
+  const [[stored]] = await db.query("SELECT id, processing_status FROM meta_webhook_events WHERE event_key = ?", [key]);
+  if (stored.processing_status === "PROCESSED") return { accepted: true, duplicate: true };
+  // Store first. A failed local processor must not make an accepted event disappear:
+  // duplicate delivery and the worker can both recover this durable row.
+  const result = await processStoredWebhook(stored.id);
+  return { accepted: true, ...result };
 }
 
-async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 100 } = {}) {
-  const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
+async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 100, offset = 0, search = "", id = null } = {}) {
+  const safeLimit = Math.max(1, policy.boundedInt(limit,100,200));
   const normalizedStatus = String(status).toUpperCase();
   const normalizedChannel = String(channel).toUpperCase();
   if (normalizedChannel !== "ALL" && !CHANNEL_TYPES.has(normalizedChannel)) {
@@ -1188,6 +947,7 @@ async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 1
   }
   const params = [];
   const clauses = [];
+  if (id) { clauses.push("cv.id = ?"); params.push(String(id)); }
   if (normalizedStatus === "ACTIVE") {
     clauses.push("cv.status <> 'ARCHIVED'");
   } else if (normalizedStatus !== "ALL") {
@@ -1198,10 +958,14 @@ async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 1
     clauses.push("ch.channel_type = ?");
     params.push(normalizedChannel);
   }
-  params.push(safeLimit);
+  if (String(search).trim()) {
+    clauses.push("LOCATE(LOWER(?), LOWER(CONCAT_WS(' ',c.display_name,c.phone,c.email,c.external_contact_id))) > 0");
+    params.push(String(search).trim().slice(0,200));
+  }
+  params.push(safeLimit + 1, policy.boundedInt(offset,0,1000000));
   const [rows] = await db.query(
-    `SELECT cv.*, c.display_name, c.external_contact_id, c.phone, c.email,
-            ch.channel_type, ch.display_name AS channel_name,
+    `SELECT cv.*, c.display_name, c.external_contact_id, c.phone, c.email, c.consent_status, c.consent_note,
+            ch.channel_type, ch.display_name AS channel_name, ch.status AS channel_status,
             last_message.body_text AS last_message_text,
             last_message.deleted_at AS last_message_deleted_at,
             last_message.sender_kind AS last_message_sender
@@ -1210,30 +974,37 @@ async function listConversations({ status = "ACTIVE", channel = "ALL", limit = 1
      JOIN meta_channels ch ON ch.id = cv.channel_id
      LEFT JOIN meta_messages last_message ON last_message.id = (
        SELECT m.id FROM meta_messages m WHERE m.conversation_id = cv.id
-       ORDER BY m.occurred_at DESC, m.created_at DESC LIMIT 1
+       ORDER BY m.occurred_at DESC, m.created_at DESC, m.id DESC LIMIT 1
      )
      ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
-     ORDER BY cv.last_message_at DESC LIMIT ?`,
+     ORDER BY cv.last_message_at DESC, cv.id DESC LIMIT ? OFFSET ?`,
     params
   );
-  return { conversations: serializeRows(rows) };
+  return { conversations: serializeRows(rows.slice(0,safeLimit)), hasMore: rows.length > safeLimit };
 }
 
-async function listMessages(conversationId, { limit = 200 } = {}) {
-  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 200));
+async function listMessages(conversationId, { limit = 200, before = null } = {}) {
+  const safeLimit = Math.max(1, policy.boundedInt(limit,200,500));
+  let cursor = null;
+  if (before) {
+    const [[row]] = await db.query("SELECT occurred_at,created_at,id FROM meta_messages WHERE id = ? AND conversation_id = ?", [before,conversationId]);
+    if (!row) throw httpError(400,"Cursore messaggi non valido.","META_CURSOR_INVALID");
+    cursor = row;
+  }
   const [rows] = await db.query(
     `SELECT recent.* FROM (
-       SELECT * FROM meta_messages WHERE conversation_id = ?
-       ORDER BY occurred_at DESC, created_at DESC LIMIT ?
+       SELECT meta_messages.*, (SELECT state FROM meta_outbound_jobs WHERE message_id=meta_messages.id LIMIT 1) AS delivery_state FROM meta_messages WHERE conversation_id = ?
+       ${cursor ? "AND (occurred_at,created_at,id) < (?,?,?)" : ""}
+       ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT ?
      ) AS recent
-     ORDER BY recent.occurred_at ASC, recent.created_at ASC`,
-    [conversationId, safeLimit]
+     ORDER BY recent.occurred_at ASC, recent.created_at ASC, recent.id ASC`,
+    [conversationId, ...(cursor ? [cursor.occurred_at,cursor.created_at,cursor.id] : []),safeLimit+1]
   );
-  return { messages: serializeRows(rows) };
+  return { messages: presentMessages(rows.slice(-safeLimit)), hasMore: rows.length > safeLimit };
 }
 
 async function readConversation(conversationId, { limit = 200 } = {}) {
-  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 200));
+  const safeLimit = Math.max(1, policy.boundedInt(limit,200,500));
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -1246,15 +1017,15 @@ async function readConversation(conversationId, { limit = 200 } = {}) {
     }
     const [rows] = await conn.query(
       `SELECT recent.* FROM (
-         SELECT * FROM meta_messages WHERE conversation_id = ?
-         ORDER BY occurred_at DESC, created_at DESC LIMIT ?
+         SELECT meta_messages.*, (SELECT state FROM meta_outbound_jobs WHERE message_id=meta_messages.id LIMIT 1) AS delivery_state FROM meta_messages WHERE conversation_id = ?
+         ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT ?
        ) AS recent
-       ORDER BY recent.occurred_at ASC, recent.created_at ASC`,
+       ORDER BY recent.occurred_at ASC, recent.created_at ASC, recent.id ASC`,
       [conversationId, safeLimit]
     );
     await conn.query(`UPDATE meta_conversations SET unread_count = 0 WHERE id = ?`, [conversationId]);
     await conn.commit();
-    return { messages: serializeRows(rows) };
+    return { messages: presentMessages(rows), hasMore: rows.length === safeLimit };
   } catch (error) {
     await conn.rollback();
     throw error;
@@ -1263,24 +1034,29 @@ async function readConversation(conversationId, { limit = 200 } = {}) {
   }
 }
 
-async function listLeads({ status = "ALL", limit = 200 } = {}) {
-  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 200));
+async function listLeads({ status = "ALL", limit = 100, offset = 0, search = "" } = {}) {
+  const safeLimit = Math.max(1, policy.boundedInt(limit,100,500));
   const params = [];
   let clause = "";
   if (status !== "ALL") {
     clause = "WHERE l.status = ?";
     params.push(String(status).toUpperCase());
   }
-  params.push(safeLimit);
+  if (String(search).trim()) {
+    clause += `${clause ? " AND" : "WHERE"} LOCATE(LOWER(?),LOWER(CONCAT_WS(' ',c.display_name,c.phone,c.email,l.external_lead_id,l.notes))) > 0`;
+    params.push(String(search).trim().slice(0,200));
+  }
+  params.push(safeLimit+1,policy.boundedInt(offset,0,1000000));
   const [rows] = await db.query(
-    `SELECT l.*, c.display_name, c.phone, c.email, ch.channel_type
+    `SELECT l.*, c.display_name, c.phone, c.email, ch.channel_type, u.username AS assigned_name
      FROM meta_leads l
      LEFT JOIN meta_contacts c ON c.id = l.contact_id
      LEFT JOIN meta_channels ch ON ch.id = l.channel_id
-     ${clause} ORDER BY l.received_at DESC LIMIT ?`,
+     LEFT JOIN app_auth_users u ON u.id = l.assigned_to
+     ${clause} ORDER BY l.received_at DESC,l.id DESC LIMIT ? OFFSET ?`,
     params
   );
-  return { leads: serializeRows(rows) };
+  return { leads: serializeRows(rows.slice(0,safeLimit)), hasMore: rows.length > safeLimit };
 }
 
 async function updateLead(leadId, input, actor) {
@@ -1349,135 +1125,97 @@ async function deleteMessage(conversationId, messageId, actor) {
   try {
     await conn.beginTransaction();
     const [[message]] = await conn.query(
-      `SELECT m.id, m.direction, m.status, m.deleted_at, cv.integration_id
-       FROM meta_messages m
-       JOIN meta_conversations cv ON cv.id = m.conversation_id
-       WHERE m.id = ? AND m.conversation_id = ? LIMIT 1 FOR UPDATE`,
-      [messageId, conversationId]
-    );
-    if (!message) throw httpError(404, "Messaggio non trovato", "META_MESSAGE_NOT_FOUND");
-    if (message.deleted_at) {
-      await conn.commit();
-      return { ok: true, alreadyDeleted: true };
+      `SELECT m.*,cv.integration_id,cv.contact_id FROM meta_messages m
+       JOIN meta_conversations cv ON cv.id=m.conversation_id
+       WHERE m.id=? AND m.conversation_id=? FOR UPDATE`,[messageId,conversationId]);
+    if(!message)throw httpError(404,"Messaggio non trovato","META_MESSAGE_NOT_FOUND");
+    if(message.deleted_at){await conn.commit();return {ok:true,alreadyDeleted:true};}
+    const [[running]]=await conn.query("SELECT id FROM meta_outbound_jobs WHERE message_id=? AND state='PROCESSING'",[messageId]);
+    if(running)throw httpError(409,"Attendi la conclusione dell'invio prima di eliminare.","META_MESSAGE_IN_FLIGHT");
+    await conn.query(`UPDATE meta_outbound_jobs SET state='CANCELLED',last_error='Contenuto eliminato'
+      WHERE message_id=? AND state IN ('READY','RETRY','WAITING_APPROVAL','FAILED','UNCERTAIN')`,[messageId]);
+    await conn.query(`UPDATE meta_messages SET body_text=NULL,payload_json=NULL,request_json=NULL,status_payload_json=NULL,error_message=NULL,
+      deleted_at=CURRENT_TIMESTAMP(3),deleted_by=? WHERE id=?`,[actor.sub,messageId]);
+    await conn.query("DELETE FROM meta_attachments WHERE message_id=?",[messageId]);
+    await conn.query("UPDATE meta_contacts SET profile_json=NULL WHERE id=?",[message.contact_id]);
+    if(message.external_message_id){
+      const [events]=await conn.query("SELECT id,payload_json FROM meta_webhook_events WHERE JSON_SEARCH(payload_json,'one',?) IS NOT NULL FOR UPDATE",[message.external_message_id]);
+      for(const event of events) await conn.query("UPDATE meta_webhook_events SET payload_json=? WHERE id=?",
+        [JSON.stringify(policy.redactPayload(parseJson(event.payload_json),new Set([message.external_message_id]))||{}),event.id]);
     }
-    await conn.query(
-      `UPDATE meta_outbound_jobs SET state = 'CANCELLED', last_error = 'Messaggio eliminato dall’operatore'
-       WHERE message_id = ? AND state IN ('WAITING_APPROVAL', 'READY', 'RETRY')`,
-      [messageId]
-    );
-    await conn.query(
-      `UPDATE meta_messages SET body_text = NULL, payload_json = NULL, error_message = NULL,
-       deleted_at = CURRENT_TIMESTAMP(3), deleted_by = ? WHERE id = ?`,
-      [actor.sub, messageId]
-    );
-    await audit(conn, {
-      integrationId: message.integration_id,
-      actorId: actor.sub,
-      actorKind: "HUMAN",
-      action: "MESSAGE_CONTENT_DELETED",
-      entityType: "MESSAGE",
-      entityId: messageId,
-      details: { conversationId, direction: message.direction, previousStatus: message.status },
-    });
-    await conn.commit();
-    return { ok: true, alreadyDeleted: false };
-  } catch (error) {
-    await conn.rollback();
-    throw error;
-  } finally {
-    conn.release();
-  }
+    await audit(conn,{integrationId:message.integration_id,actorId:actor.sub,actorKind:"HUMAN",action:"MESSAGE_CONTENT_DELETED",entityType:"MESSAGE",entityId:messageId});
+    await conn.commit();return {ok:true};
+  }catch(error){await conn.rollback();throw error;}finally{conn.release();}
+}
+
+async function messageContext(conversationId, conn = db) {
+  const [[row]] = await conn.query(
+    `SELECT cv.*, cv.status AS conversation_status, c.consent_status, c.external_contact_id,
+       ch.channel_type, ch.status AS channel_status, ch.token_expires_at,
+       i.status AS integration_status, i.ai_mode
+     FROM meta_conversations cv JOIN meta_contacts c ON c.id = cv.contact_id
+     JOIN meta_channels ch ON ch.id = cv.channel_id JOIN meta_integrations i ON i.id = cv.integration_id
+     WHERE cv.id = ?`, [conversationId]);
+  if (!row) throw httpError(404, "Conversazione non trovata", "META_CONVERSATION_NOT_FOUND");
+  return row;
 }
 
 async function queueMessage(conversationId, input, actor) {
-  const text = String(input.text || "").trim();
+  const key = policy.requestKey(conversationId, input.idempotencyKey);
+  const existingResult = async (conn) => {
+    const [[found]] = await conn.query(
+      `SELECT m.id AS messageId, j.id AS jobId, j.state FROM meta_messages m
+       JOIN meta_outbound_jobs j ON j.message_id = m.id WHERE m.idempotency_key = ?`, [key]);
+    return found ? { ...found, duplicate: true, awaitingApproval: found.state === "WAITING_APPROVAL" } : null;
+  };
+  const previous = await existingResult(db);
+  if (previous) return previous;
+  const conversation = await messageContext(conversationId);
   const senderKind = String(input.senderKind || "HUMAN").toUpperCase();
-  if (!text || text.length > 4096) {
-    throw httpError(400, "Messaggio vuoto o troppo lungo", "META_MESSAGE_INVALID");
+  if (!["HUMAN","AI"].includes(senderKind)) throw httpError(400, "Mittente non valido", "META_SENDER_INVALID");
+  let request = { type: "text" };
+  let text = String(input.text || "").trim();
+  if (input.template) {
+    request = await assets.prepareTemplate(conversation.channel_id, input.template);
+    text = request.preview;
+  } else if (input.attachmentId) {
+    request = await assets.prepareMedia(conversation.channel_id, input.attachmentId, actor);
+    text = request.filename;
+  } else if (!text || text.length > 4096 || (conversation.channel_type === "INSTAGRAM" && Buffer.byteLength(text,"utf8") > 1000)) {
+    throw httpError(400, "Messaggio vuoto o troppo lungo (Instagram: massimo 1000 byte).", "META_MESSAGE_INVALID");
   }
-  if (!new Set(["HUMAN", "AI"]).has(senderKind)) {
-    throw httpError(400, "Mittente non valido", "META_SENDER_INVALID");
-  }
-
-  const [[conversation]] = await db.query(
-    `SELECT cv.*, ch.channel_type, ch.status AS channel_status,
-            i.status AS integration_status, i.ai_mode
-     FROM meta_conversations cv
-     JOIN meta_channels ch ON ch.id = cv.channel_id
-     JOIN meta_integrations i ON i.id = cv.integration_id
-     WHERE cv.id = ? LIMIT 1`,
-    [conversationId]
-  );
-  if (!conversation) throw httpError(404, "Conversazione non trovata", "META_CONVERSATION_NOT_FOUND");
-  if (conversation.status === "ARCHIVED") {
-    throw httpError(409, "Ripristina la conversazione prima di rispondere", "META_CONVERSATION_ARCHIVED");
-  }
-  if (conversation.channel_type === "INSTAGRAM" && Buffer.byteLength(text, "utf8") > 1000) {
-    throw httpError(
-      400,
-      "Instagram accetta messaggi di massimo 1000 byte",
-      "META_INSTAGRAM_MESSAGE_TOO_LONG"
-    );
-  }
-  if (conversation.integration_status !== "CONNECTED" || conversation.channel_status !== "ACTIVE") {
-    throw httpError(409, "Canale Meta non connesso", "META_CHANNEL_NOT_CONNECTED");
-  }
-  if (!conversation.reply_window_expires_at || new Date(conversation.reply_window_expires_at) < new Date()) {
-    throw httpError(
-      409,
-      "Finestra di risposta Meta scaduta: utilizzare un template approvato",
-      "META_REPLY_WINDOW_EXPIRED"
-    );
-  }
-  if (senderKind === "AI" && (conversation.ai_mode === "OFF" || conversation.ai_paused)) {
-    throw httpError(409, "Assistente AI disattivato", "META_AI_DISABLED");
-  }
-
   const requiresApproval = senderKind === "AI" && conversation.ai_mode !== "AUTO";
-  const messageId = crypto.randomUUID();
-  const jobId = crypto.randomUUID();
+  // Approval state is checked again at dispatch; drafts may be created for review.
+  policy.assertCanSend({ ...conversation, requester_kind: senderKind, approval_status: "APPROVED" }, request);
+  const messageId = crypto.randomUUID(), jobId = crypto.randomUUID();
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+    const current = await messageContext(conversationId, conn);
+    policy.assertCanSend({ ...current, requester_kind: senderKind, approval_status: "APPROVED" }, request);
     await conn.query(
       `INSERT INTO meta_messages
-         (id, conversation_id, channel_id, direction, sender_kind, sender_user_id,
-          body_text, status, occurred_at)
-       VALUES (?, ?, ?, 'OUTBOUND', ?, ?, ?, ?, CURRENT_TIMESTAMP(3))`,
-      [messageId, conversationId, conversation.channel_id, senderKind, actor?.sub || null, text,
-       requiresApproval ? "DRAFT" : "QUEUED"]
-    );
+       (id,conversation_id,channel_id,direction,sender_kind,sender_user_id,message_type,body_text,request_json,idempotency_key,status,occurred_at)
+       VALUES (?,?,?,'OUTBOUND',?,?,?,?,?,?,?,CURRENT_TIMESTAMP(3))`,
+      [messageId,conversationId,conversation.channel_id,senderKind,actor.sub,request.type.toUpperCase(),text,JSON.stringify(request),key,requiresApproval ? "DRAFT" : "QUEUED"]);
+    if (request.type === "media") {
+      const [attached] = await conn.query("UPDATE meta_attachments SET message_id = ? WHERE id = ? AND message_id IS NULL AND created_by = ?",
+        [messageId,request.attachmentId,actor.sub]);
+      if (!attached.affectedRows) throw httpError(409,"Allegato già utilizzato.","META_MEDIA_IN_USE");
+    }
     await conn.query(
-      `INSERT INTO meta_outbound_jobs
-         (id, message_id, integration_id, requested_by, requester_kind, approval_status, state)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        jobId,
-        messageId,
-        conversation.integration_id,
-        actor?.sub || null,
-        senderKind,
-        requiresApproval ? "PENDING" : "APPROVED",
-        requiresApproval ? "WAITING_APPROVAL" : "READY",
-      ]
-    );
-    await audit(conn, {
-      integrationId: conversation.integration_id,
-      actorId: actor?.sub,
-      actorKind: senderKind,
-      action: requiresApproval ? "MESSAGE_APPROVAL_REQUESTED" : "MESSAGE_QUEUED",
-      entityType: "MESSAGE",
-      entityId: messageId,
-      details: { conversationId },
-    });
+      `INSERT INTO meta_outbound_jobs (id,message_id,integration_id,requested_by,requester_kind,approval_status,state)
+       VALUES (?,?,?,?,?,?,?)`,
+      [jobId,messageId,conversation.integration_id,actor.sub,senderKind,requiresApproval ? "PENDING" : "APPROVED",requiresApproval ? "WAITING_APPROVAL" : "READY"]);
+    await conn.query("UPDATE meta_conversations SET last_message_at = CURRENT_TIMESTAMP(3) WHERE id = ?", [conversationId]);
+    await audit(conn,{integrationId:conversation.integration_id,actorId:actor.sub,actorKind:senderKind,action:"MESSAGE_QUEUED",entityType:"MESSAGE",entityId:messageId});
     await conn.commit();
     return { messageId, jobId, awaitingApproval: requiresApproval };
-  } catch (error) {
+  } catch(error) {
     await conn.rollback();
+    if (error.code === "ER_DUP_ENTRY") { const found = await existingResult(db); if (found) return found; }
     throw error;
-  } finally {
-    conn.release();
-  }
+  } finally { conn.release(); }
 }
 
 async function approveJob(jobId, approved, actor) {
@@ -1519,155 +1257,83 @@ async function approveJob(jobId, approved, actor) {
 }
 
 async function processNextOutbound({ jobId = null, force = false } = {}) {
-  const conn = await db.getConnection();
+  const claim = await db.getConnection();
   let job;
   try {
-    await conn.beginTransaction();
-    await conn.query(
-      `UPDATE meta_outbound_jobs SET state = 'RETRY', locked_at = NULL,
-       next_attempt_at = NULL,
-       last_error = COALESCE(last_error, 'Invio interrotto: recuperato automaticamente')
-       WHERE state = 'PROCESSING'
-         AND locked_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 2 MINUTE)`
-    );
-    if (force) {
-      const forceClause = jobId ? "AND id = ?" : "";
-      await conn.query(
-        `UPDATE meta_outbound_jobs SET next_attempt_at = NULL
-         WHERE state = 'RETRY' ${forceClause}`,
-        jobId ? [String(jobId)] : []
-      );
-    }
-    const jobClause = jobId ? "AND j.id = ?" : "";
-    const params = jobId ? [String(jobId)] : [];
-    const [rows] = await conn.query(
-      `SELECT j.*, m.body_text, m.conversation_id, cv.contact_id,
-              c.external_contact_id, ch.channel_type, ch.external_account_id,
-              ch.credential_mode, ch.api_sender_id,
-              i.graph_api_version,
-              COALESCE(ch.encrypted_access_token, i.encrypted_access_token) AS encrypted_access_token,
-              COALESCE(ch.token_iv, i.token_iv) AS token_iv,
-              COALESCE(ch.token_auth_tag, i.token_auth_tag) AS token_auth_tag
-       FROM meta_outbound_jobs j
-       JOIN meta_messages m ON m.id = j.message_id
-       JOIN meta_conversations cv ON cv.id = m.conversation_id
-       JOIN meta_contacts c ON c.id = cv.contact_id
-       JOIN meta_channels ch ON ch.id = m.channel_id
-       JOIN meta_integrations i ON i.id = j.integration_id
-       WHERE j.state IN ('READY', 'RETRY')
-         AND (j.next_attempt_at IS NULL OR j.next_attempt_at <= CURRENT_TIMESTAMP(3))
-         AND i.status = 'CONNECTED' AND ch.status = 'ACTIVE'
-         ${jobClause}
-       ORDER BY j.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`,
-      params
-    );
-    job = rows[0];
-    if (!job) {
-      const diagnosticClause = jobId ? "AND j.id = ?" : "";
-      const [diagnosticRows] = await conn.query(
-        `SELECT j.id, j.state, j.next_attempt_at, j.locked_at, j.last_error,
-                i.status AS integration_status, i.last_error AS integration_error,
-                ch.status AS channel_status, m.status AS message_status
-         FROM meta_outbound_jobs j
-         JOIN meta_messages m ON m.id = j.message_id
-         JOIN meta_conversations cv ON cv.id = m.conversation_id
-         JOIN meta_channels ch ON ch.id = m.channel_id
-         JOIN meta_integrations i ON i.id = j.integration_id
-         WHERE j.state IN ('READY', 'PROCESSING', 'RETRY') ${diagnosticClause}
-         ORDER BY j.created_at LIMIT 1`,
-        jobId ? [String(jobId)] : []
-      );
-      const candidate = diagnosticRows[0] || null;
-      await conn.commit();
-      if (!candidate) return { processed: false, reason: "NO_PENDING_JOB" };
-      if (candidate.integration_status !== "CONNECTED") {
-        return {
-          processed: false,
-          reason: "INTEGRATION_NOT_CONNECTED",
-          detail: candidate.integration_error || `Stato integrazione: ${candidate.integration_status}`,
-        };
-      }
-      if (candidate.channel_status !== "ACTIVE") {
-        return {
-          processed: false,
-          reason: "CHANNEL_NOT_ACTIVE",
-          detail: `Stato canale: ${candidate.channel_status}`,
-        };
-      }
-      if (candidate.state === "PROCESSING") {
-        return {
-          processed: false,
-          reason: "ALREADY_PROCESSING",
-          detail: "Il messaggio è già in elaborazione. Riprova tra due minuti se lo stato non cambia.",
-        };
-      }
-      if (candidate.state === "RETRY") {
-        return {
-          processed: false,
-          reason: "RETRY_SCHEDULED",
-          detail: candidate.last_error || "Messaggio in attesa del prossimo tentativo.",
-        };
-      }
-      return { processed: false, reason: "NOT_ELIGIBLE", detail: candidate.last_error || null };
-    }
-    await conn.query(
-      `UPDATE meta_outbound_jobs SET state = 'PROCESSING', locked_at = CURRENT_TIMESTAMP(3),
-       attempt_count = attempt_count + 1 WHERE id = ?`,
-      [job.id]
-    );
-    await conn.commit();
-  } catch (error) {
-    await conn.rollback();
-    throw error;
-  } finally {
-    conn.release();
-  }
-
+    await claim.beginTransaction();
+    await claim.query(
+      `UPDATE meta_outbound_jobs SET state = 'UNCERTAIN', locked_at = NULL,
+       last_error = 'Invio interrotto: verificare con il destinatario prima di riprovare.'
+       WHERE state = 'PROCESSING' AND (locked_at IS NULL OR locked_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE))`);
+    if (force) await claim.query("UPDATE meta_outbound_jobs SET next_attempt_at = NULL WHERE state = 'RETRY'" + (jobId ? " AND id = ?" : ""), jobId ? [jobId] : []);
+    const [[selected]] = await claim.query(
+      `SELECT j.*, m.channel_id, m.body_text, m.request_json, m.conversation_id,
+       c.external_contact_id, ch.channel_type, ch.external_account_id, ch.credential_mode, ch.api_sender_id,
+       ch.encrypted_access_token, ch.token_iv, ch.token_auth_tag, i.graph_api_version
+       FROM meta_outbound_jobs j JOIN meta_messages m ON m.id = j.message_id
+       JOIN meta_conversations cv ON cv.id = m.conversation_id JOIN meta_contacts c ON c.id = cv.contact_id
+       JOIN meta_channels ch ON ch.id = m.channel_id JOIN meta_integrations i ON i.id = j.integration_id
+       WHERE j.state IN ('READY','RETRY') AND (j.next_attempt_at IS NULL OR j.next_attempt_at <= CURRENT_TIMESTAMP(3))
+       AND ch.status = 'ACTIVE' AND i.status = 'CONNECTED' ${jobId ? "AND j.id = ?" : ""}
+       ORDER BY j.created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, jobId ? [jobId] : []);
+    job = selected;
+    if (!job) { await claim.commit(); return { processed: false, reason: "NO_ELIGIBLE_JOB", detail: "Nessun invio pronto. Controlla canali, errori e prossimi tentativi nel centro attività." }; }
+    await claim.query("UPDATE meta_outbound_jobs SET state = 'PROCESSING', attempt_count = attempt_count + 1, locked_at = CURRENT_TIMESTAMP(3) WHERE id = ?", [job.id]);
+    await claim.commit();
+  } catch(error) { await claim.rollback(); throw error; } finally { claim.release(); }
+  let phase = "prepare", sendConn, externalId;
   try {
-    const token = decryptSecret({
-      encrypted: job.encrypted_access_token,
-      iv: job.token_iv,
-      authTag: job.token_auth_tag,
-    });
+    const request = parseJson(job.request_json) || { type: "text" };
+    policy.assertCanSend({ ...(await messageContext(job.conversation_id)), ...job }, request);
+    const token = decryptSecret({ encrypted: job.encrypted_access_token, iv: job.token_iv, authTag: job.token_auth_tag });
     const version = job.graph_api_version || process.env.META_GRAPH_API_VERSION;
-    if (!token || !version) throw new Error("Credenziali o versione Graph API mancanti");
-    const instagramTarget = job.channel_type === "INSTAGRAM" ? instagramApiTarget(job) : null;
-    if (job.channel_type === "INSTAGRAM" && !instagramTarget) {
-      throw new Error("Canale Instagram da verificare nuovamente prima dell'invio");
+    if (!token || !/^v\d+\.\d+$/.test(version || "")) throw policy.problem("Token o versione API mancanti.", "META_CONFIGURATION");
+    const delivery = await assets.buildSendBody(job, request, token, version);
+    // Serialize the final dispatch with archive/consent/delete/credential edits.
+    sendConn = await db.getConnection();
+    await sendConn.beginTransaction();
+    const [[currentJob]] = await sendConn.query(
+      `SELECT j.state, m.deleted_at, ch.encrypted_access_token FROM meta_outbound_jobs j
+       JOIN meta_messages m ON m.id = j.message_id JOIN meta_conversations cv ON cv.id = m.conversation_id
+       JOIN meta_contacts c ON c.id = cv.contact_id JOIN meta_channels ch ON ch.id = m.channel_id
+       JOIN meta_integrations i ON i.id = j.integration_id WHERE j.id = ? FOR UPDATE`, [job.id]);
+    if (currentJob?.state !== "PROCESSING" || currentJob.encrypted_access_token !== job.encrypted_access_token) {
+      throw policy.problem("Invio sospeso: messaggio o credenziali modificati.", "META_SEND_CHANGED");
     }
-    const graphHost = instagramTarget?.host || "https://graph.facebook.com";
-    const senderId = instagramTarget?.senderId || job.external_account_id;
-    const url = `${graphHost}/${version}/${encodeURIComponent(senderId)}/messages`;
-    const body = job.channel_type === "WHATSAPP"
-      ? { messaging_product: "whatsapp", to: job.external_contact_id, type: "text", text: { body: job.body_text } }
-      : job.channel_type === "MESSENGER"
-        ? { recipient: { id: job.external_contact_id }, messaging_type: "RESPONSE", message: { text: job.body_text } }
-        : { recipient: { id: job.external_contact_id }, message: { text: job.body_text } };
-    const response = await axios.post(url, body, {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
-    });
-    const externalId = response.data?.messages?.[0]?.id || response.data?.message_id || response.data?.message_id || null;
-    await db.query(
-      `UPDATE meta_messages SET status = 'SENT', external_message_id = COALESCE(?, external_message_id),
-       payload_json = ? WHERE id = ?`,
-      [externalId, JSON.stringify(response.data || {}), job.message_id]
-    );
-    await db.query(`UPDATE meta_outbound_jobs SET state = 'SENT', last_error = NULL WHERE id = ?`, [job.id]);
-    return { processed: true, jobId: job.id, sent: true };
-  } catch (error) {
-    const message = metaApiErrorMessage(error);
-    const retry = Number(job.attempt_count || 0) + 1 < 5;
-    const delayMinutes = Math.min(60, 2 ** Math.max(0, Number(job.attempt_count || 0)));
-    await db.query(
-      `UPDATE meta_outbound_jobs SET state = ?, last_error = ?,
-       next_attempt_at = IF(?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ? MINUTE), NULL)
-       WHERE id = ?`,
-      [retry ? "RETRY" : "FAILED", message, retry, delayMinutes, job.id]
-    );
-    await db.query(`UPDATE meta_messages SET status = ?, error_message = ? WHERE id = ?`, [retry ? "QUEUED" : "FAILED", message, job.message_id]);
-    return { processed: true, jobId: job.id, sent: false, retry, error: message };
-  }
+    policy.assertCanSend({ ...(await messageContext(job.conversation_id, sendConn)), ...job, deleted_at: currentJob.deleted_at }, request);
+    phase = "send";
+    const response = await axios.post(delivery.url, delivery.body, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type":"application/json" },
+      timeout: 15000, maxRedirects: 0 });
+    externalId = response.data?.messages?.[0]?.id || response.data?.message_id || null;
+    if (!externalId) throw new Error("Meta returned no message id");
+    await sendConn.query(
+      `UPDATE meta_messages SET status = IF(status IN ('DELIVERED','READ'),status,'SENT'),
+       external_message_id = ?, payload_json = ?, error_message = NULL WHERE id = ?`,
+      [externalId, JSON.stringify(response.data || {}), job.message_id]);
+    await sendConn.query("UPDATE meta_outbound_jobs SET state = 'SENT', locked_at = NULL, last_error = NULL WHERE id = ?", [job.id]);
+    await sendConn.commit();
+    return { processed:true,jobId:job.id,sent:true };
+  } catch(error) {
+    if (sendConn) await sendConn.rollback();
+    const failure = policy.deliveryFailure(error, phase);
+    let state = failure.state;
+    if (state === "RETRY" && Number(job.attempt_count) + 1 >= 5) state = "FAILED";
+    const message = state === "UNCERTAIN" ? "Esito non confermato. Verifica con il destinatario prima di riprovare." : policy.safeError(error);
+    const [updated] = await db.query(
+      `UPDATE meta_outbound_jobs SET state = ?, last_error = ?, locked_at = NULL,
+       next_attempt_at = IF(? = 'RETRY',DATE_ADD(CURRENT_TIMESTAMP(3),INTERVAL ? MINUTE),NULL)
+       WHERE id = ? AND state = 'PROCESSING'`,
+      [state,message,state,Math.min(60,2 ** Number(job.attempt_count || 0)),job.id]);
+    if (updated.affectedRows) await db.query(
+      `UPDATE meta_messages SET status = ?, error_message = ?, external_message_id = COALESCE(?,external_message_id)
+       WHERE id = ? AND status NOT IN ('DELIVERED','READ')`,
+      [state === "RETRY" ? "QUEUED" : "FAILED",message,externalId || null,job.message_id]);
+    if (failure.credentialError) await db.query(
+      "UPDATE meta_channels SET status = 'ERROR', last_error = ? WHERE id = ? AND encrypted_access_token = ?",
+      [message,job.channel_id,job.encrypted_access_token]);
+    return { processed:true,jobId:job.id,sent:false,retry:state === "RETRY",state,error:message };
+  } finally { if(sendConn) sendConn.release(); }
 }
 
 function leadFieldMap(fieldData) {
@@ -1684,17 +1350,16 @@ async function processNextLead() {
   let lead;
   try {
     await conn.beginTransaction();
+    await conn.query("UPDATE meta_leads SET hydration_status='RETRY',hydration_locked_at=NULL,hydration_next_attempt_at=NULL WHERE hydration_status='PROCESSING' AND (hydration_locked_at IS NULL OR hydration_locked_at<DATE_SUB(CURRENT_TIMESTAMP(3),INTERVAL 5 MINUTE))");
     const [rows] = await conn.query(
       `SELECT l.*, i.graph_api_version,
-              COALESCE(ch.encrypted_access_token, i.encrypted_access_token) AS encrypted_access_token,
-              COALESCE(ch.token_iv, i.token_iv) AS token_iv,
-              COALESCE(ch.token_auth_tag, i.token_auth_tag) AS token_auth_tag
+              ch.encrypted_access_token, ch.token_iv, ch.token_auth_tag
        FROM meta_leads l
        JOIN meta_integrations i ON i.id = l.integration_id
        LEFT JOIN meta_channels ch ON ch.id = l.channel_id
        WHERE l.hydration_status IN ('PENDING', 'RETRY')
          AND (l.hydration_next_attempt_at IS NULL OR l.hydration_next_attempt_at <= CURRENT_TIMESTAMP(3))
-         AND i.status = 'CONNECTED'
+         AND i.status = 'CONNECTED' AND ch.status = 'ACTIVE' AND ch.leads_enabled = 1
        ORDER BY l.received_at LIMIT 1 FOR UPDATE SKIP LOCKED`
     );
     lead = rows[0];
@@ -1704,7 +1369,7 @@ async function processNextLead() {
     }
     await conn.query(
       `UPDATE meta_leads SET hydration_status = 'PROCESSING',
-       hydration_attempt_count = hydration_attempt_count + 1 WHERE id = ?`,
+       hydration_locked_at = CURRENT_TIMESTAMP(3), hydration_attempt_count = hydration_attempt_count + 1 WHERE id = ?`,
       [lead.id]
     );
     await conn.commit();
@@ -1722,13 +1387,14 @@ async function processNextLead() {
       authTag: lead.token_auth_tag,
     });
     const version = lead.graph_api_version || process.env.META_GRAPH_API_VERSION;
-    if (!token || !version) throw new Error("Credenziali o versione Graph API mancanti");
+    if (!token || !/^v\d+\.\d+$/.test(version || "")) throw policy.problem("Credenziali o versione Graph API mancanti", "META_CONFIGURATION");
     const response = await axios.get(
       `https://graph.facebook.com/${version}/${encodeURIComponent(lead.external_lead_id)}`,
       {
-        params: { fields: "id,created_time,ad_id,form_id,field_data,platform" },
+        params: { fields: "id,created_time,ad_id,form_id,field_data,platform,custom_disclaimer_responses" },
         headers: { Authorization: `Bearer ${token}` },
         timeout: Number(process.env.META_GRAPH_TIMEOUT_MS || 15000),
+        maxRedirects: 0,
       }
     );
     const data = response.data || {};
@@ -1741,6 +1407,8 @@ async function processNextLead() {
     const updateConn = await db.getConnection();
     try {
       await updateConn.beginTransaction();
+      const [[stillPresent]] = await updateConn.query("SELECT id FROM meta_leads WHERE id = ? AND hydration_status = 'PROCESSING' FOR UPDATE",[lead.id]);
+      if (!stillPresent) throw httpError(409,"Lead eliminato o modificato durante il recupero.","META_LEAD_CHANGED");
       await updateConn.query(
         `INSERT INTO meta_contacts
            (id, integration_id, channel_type, external_contact_id, display_name, phone, email, profile_json)
@@ -1757,7 +1425,7 @@ async function processNextLead() {
       await updateConn.query(
         `UPDATE meta_leads SET contact_id = ?, form_id = COALESCE(?, form_id),
          ad_id = COALESCE(?, ad_id), field_data_json = ?, raw_payload_json = ?,
-         hydration_status = 'COMPLETE', hydration_last_error = NULL,
+         hydration_status = 'COMPLETE', hydration_locked_at = NULL, hydration_last_error = NULL,
          hydration_next_attempt_at = NULL WHERE id = ?`,
         [contact.id, data.form_id || null, data.ad_id || null, JSON.stringify(data.field_data || []), JSON.stringify(data), lead.id]
       );
@@ -1778,12 +1446,13 @@ async function processNextLead() {
     return { processed: true, leadId: lead.id, hydrated: true };
   } catch (error) {
     const message = metaApiErrorMessage(error);
-    const retry = Number(lead.hydration_attempt_count || 0) + 1 < 5;
+    const failure = policy.deliveryFailure(error, "prepare");
+    const retry = failure.state === "RETRY" && Number(lead.hydration_attempt_count || 0) + 1 < 5;
     const delayMinutes = Math.min(60, 2 ** Math.max(0, Number(lead.hydration_attempt_count || 0)));
     await db.query(
-      `UPDATE meta_leads SET hydration_status = ?, hydration_last_error = ?,
+      `UPDATE meta_leads SET hydration_status = ?, hydration_locked_at = NULL, hydration_last_error = ?,
        hydration_next_attempt_at = IF(?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ? MINUTE), NULL)
-       WHERE id = ?`,
+       WHERE id = ? AND hydration_status = 'PROCESSING'`,
       [retry ? "RETRY" : "FAILED", message, retry, delayMinutes, lead.id]
     );
     return { processed: true, leadId: lead.id, hydrated: false, retry, error: message };
@@ -1791,6 +1460,8 @@ async function processNextLead() {
 }
 
 module.exports = {
+  assets,
+  operations,
   approveJob,
   deleteMessage,
   getOverview,

@@ -17,6 +17,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 function startServer() {
+  app.locals.metaReady = false;
   const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });
@@ -33,20 +34,29 @@ function startServer() {
   }
 
   if (String(process.env.RUN_META_MIGRATION_ON_STARTUP || "true").toLowerCase() !== "false") {
-    runMetaMigrationWithRetry().catch((error) => {
+    runMetaMigrationWithRetry().then(() => { app.locals.metaReady = true; }).catch((error) => {
       console.error("META MIGRATION FAILED AFTER RETRIES; SERVER REMAINS ONLINE:", error);
     });
   } else {
     console.log("Meta migration on startup disabled by configuration.");
+    require("./scripts/audit-meta-readiness").auditMetaReadiness().then(result => {
+      app.locals.metaReady = result.schema.ready;
+    }).catch(error => console.error("META READINESS CHECK FAILED:", error.code || "DATABASE_UNAVAILABLE"));
   }
 
   if (String(process.env.META_OUTBOX_WORKER_ENABLED || "false").toLowerCase() === "true") {
     let workerRunning = false;
+    let lastMaintenance = 0;
     const intervalMs = Math.max(1000, Number(process.env.META_OUTBOX_INTERVAL_MS || 5000));
     const timer = setInterval(async () => {
-      if (workerRunning) return;
+      if (workerRunning || !app.locals.metaReady) return;
       workerRunning = true;
       try {
+        await metaService.replayUnmatchedEvents({ limit: 10, automatic: true });
+        if (Date.now() - lastMaintenance > 60000) {
+          lastMaintenance = Date.now();
+          await metaService.operations.maintenance();
+        }
         await Promise.all([
           metaService.processNextOutbound(),
           metaService.processNextLead(),

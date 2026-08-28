@@ -35,6 +35,8 @@ async function auditMetaReadiness() {
       "meta_webhook_events",
       "meta_outbound_jobs",
       "meta_audit_log",
+      "meta_leads",
+      "meta_attachments",
     ];
     const existingTables = [];
     for (const table of requiredTables) {
@@ -52,7 +54,30 @@ async function auditMetaReadiness() {
     let integrations = [];
     let channels = [];
     let operations = null;
-    if (existingTables.length === requiredTables.length) {
+    const missingColumns = [];
+    const requiredColumns = {
+      meta_channels: ["leads_enabled","last_token_refresh_at","refresh_error","credential_mode","api_sender_id","last_verified_at","encrypted_access_token"],
+      meta_messages: ["request_json","idempotency_key","status_payload_json","deleted_at"],
+      meta_webhook_events: ["next_attempt_at"],
+      meta_leads: ["hydration_locked_at","notes","follow_up_at"],
+      meta_contacts: ["consent_note"],
+    };
+    for (const [table, required] of Object.entries(requiredColumns)) {
+      if (!existingTables.includes(table)) continue;
+      const [columns] = await connection.query(`SHOW COLUMNS FROM ${table}`);
+      for (const name of required) if (!columns.some(column=>column.Field===name)) missingColumns.push(`${table}.${name}`);
+    }
+    let uncertainState = false, requestIndex = false;
+    if (existingTables.includes("meta_outbound_jobs")) {
+      const [columns] = await connection.query("SHOW COLUMNS FROM meta_outbound_jobs LIKE 'state'");
+      uncertainState = columns.some(column=>String(column.Type).includes("UNCERTAIN"));
+    }
+    if (existingTables.includes("meta_messages")) {
+      const [indexes] = await connection.query("SHOW INDEX FROM meta_messages WHERE Key_name = 'uq_meta_message_request'");
+      requestIndex = indexes.some(index=>Number(index.Non_unique)===0);
+    }
+    const schemaReady = existingTables.length === requiredTables.length && !missingColumns.length && uncertainState && requestIndex;
+    if (schemaReady) {
       [integrations] = await connection.query(
         `SELECT name, status, graph_api_version, ai_mode,
                 encrypted_access_token IS NOT NULL AS has_fallback_token,
@@ -62,7 +87,8 @@ async function auditMetaReadiness() {
       [channels] = await connection.query(
         `SELECT channel_type, display_name, status, credential_mode,
                 encrypted_access_token IS NOT NULL AS has_token,
-                token_expires_at, last_verified_at, last_error IS NOT NULL AS has_error
+                token_expires_at, last_verified_at, last_error IS NOT NULL AS has_error,
+                leads_enabled, refresh_error IS NOT NULL AS has_refresh_error
          FROM meta_channels ORDER BY channel_type, created_at`
       );
       const [[summary]] = await connection.query(
@@ -72,6 +98,8 @@ async function auditMetaReadiness() {
           (SELECT MAX(received_at) FROM meta_webhook_events) AS last_webhook_at,
           (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state IN ('READY', 'PROCESSING', 'RETRY')) AS queued_outbound,
           (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state = 'FAILED') AS failed_outbound,
+          (SELECT COUNT(*) FROM meta_outbound_jobs WHERE state = 'UNCERTAIN') AS uncertain_outbound,
+          (SELECT COUNT(*) FROM meta_leads WHERE hydration_status IN ('FAILED','RETRY','PROCESSING')) AS leads_needing_recovery,
           (SELECT COALESCE(SUM(unread_count), 0) FROM meta_conversations
            WHERE status IN ('OPEN', 'PENDING')) AS unread_messages`
       );
@@ -86,11 +114,15 @@ async function auditMetaReadiness() {
         graphApiVersion: String(process.env.META_GRAPH_API_VERSION || "") || null,
         instagramAppId: configured("META_INSTAGRAM_APP_ID"),
         instagramAppSecret: configured("META_INSTAGRAM_APP_SECRET"),
+        publicMediaUrl: configured("META_PUBLIC_BASE_URL") || configured("RENDER_EXTERNAL_URL"),
         outboxWorkerEnabled:
           String(process.env.META_OUTBOX_WORKER_ENABLED || "false").toLowerCase() === "true",
       },
       schema: {
-        ready: existingTables.length === requiredTables.length,
+        ready: schemaReady,
+        missingColumns,
+        uncertainState,
+        requestIndex,
         missingTables: requiredTables.filter((table) => !existingTables.includes(table)),
         migrations,
       },

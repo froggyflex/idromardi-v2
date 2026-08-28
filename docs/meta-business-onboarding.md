@@ -16,7 +16,12 @@ below is complete.
 - Human vs AI attribution, per-business and per-conversation AI kill switches,
   and mandatory review unless a future administrator explicitly selects AUTO.
 - Meta's 24-hour reply-window guard for free-form messages. Approved templates
-  should be implemented before any business-initiated WhatsApp messaging.
+  can now be selected and parameterized for business-initiated WhatsApp messaging,
+  with recorded opt-in required. Advanced/media templates remain unsupported.
+- Private attachments, searchable/paginated history, per-conversation text drafts,
+  lead notes/follow-ups, an activity queue and explicit uncertain-delivery review.
+- Durable webhook recovery, interrupted lead recovery and eligible Instagram
+  long-lived token renewal while the worker is running.
 - A global unread-message badge in the desktop navigation and mobile header.
   Opening a visible conversation clears its unread state transactionally;
   background refreshes on Leads/Settings or while reading older messages do not.
@@ -32,7 +37,7 @@ npm run audit:meta
 The command is read-only and never prints access tokens or secrets. Before live
 traffic, confirm:
 
-- `schema.ready` is `true` and migrations `004`, `005`, and `006` are listed.
+- `schema.ready` is `true` and migrations `004`, `005`, `006`, and `007` are listed.
 - The environment flags for app secret, verify token, encryption key and the
   Instagram app are `true`.
 - Every intended channel has a token, is `ACTIVE`, has a recent
@@ -73,6 +78,7 @@ META_OUTBOX_WORKER_ENABLED=false
 META_OUTBOX_INTERVAL_MS=5000
 META_GRAPH_TIMEOUT_MS=15000
 RUN_META_MIGRATION_ON_STARTUP=true
+META_PUBLIC_BASE_URL=https://idromardi-v2.onrender.com
 ```
 
 Generate the encryption key in PowerShell:
@@ -110,8 +116,8 @@ META_INSTAGRAM_APP_SECRET=<copy the hidden Instagram secret from the same Meta s
 Keep the general Meta App ID `1965478457453791`, `META_APP_SECRET`, webhook verify
 token and encryption key unchanged. Never put secrets in frontend variables,
 source control, screenshots or chat. Redeploy both backend and frontend. No new
-database migration is required by this fix; the existing `006` connection-mode
-migration must already be applied (`RUN_META_MIGRATION_ON_STARTUP=true`).
+database migration was required by the earlier native-token fix; the operations
+upgrade now also requires `007` (`RUN_META_MIGRATION_ON_STARTUP=true`).
 
 In **Meta Business → Impostazioni → Instagram Direct**:
 
@@ -163,8 +169,9 @@ account errors. Share only that redacted error, not an access token.
   messages must persist. Confirm archive/restore does not lose the conversation.
 - Enable `META_OUTBOX_WORKER_ENABLED=true` for queued retries. Keep AI OFF until
   the separate AI rollout checks below have been approved.
-- Enter/track the token's actual expiry and replace it before expiry. Native
-  token refresh is not automated by this fix.
+- Enter the actual expiry of a long-lived native token. The worker attempts
+  renewal within the last seven days while it remains valid. A manual renewal
+  button is also available. Expired tokens must be replaced in Meta.
 
 The local regression suite uses mocked Meta responses and tests signature
 verification; it is not a live Meta acceptance test. ACTIVE means the technical
@@ -214,8 +221,10 @@ implementation-specific draft, not a legal compliance certification. Confirm:
   The current deployment's provider contracts and data regions were not audited.
 - The business must assign someone to handle deletion requests and examine
   linked contacts, leads, raw webhook payloads, outbox content, audit records and
-  backups where applicable. Existing message deletion is not full data-subject
-  erasure; this change adds neither scheduled purging nor a deletion API.
+  backups where applicable. Message deletion is not full data-subject erasure.
+  The operations upgrade adds an ADMIN-only contact-erasure tool for the active
+  database, with explicit confirmation. Backups, other channels and Meta copies
+  still require separate handling. No general retention period is imposed.
 - Keep AI off until its data flow, providers and notice have been reviewed. The
   notice does not advertise the future assistant as an active feature.
 
@@ -226,7 +235,8 @@ be used; this page does not process signed deletion callbacks.
 Verification before publication:
 
 1. Confirm the business-approved wording and both contact/address details.
-2. Deploy the frontend; no backend migration or environment change is required.
+2. Deploy the frontend. The privacy page alone needs no backend change; the
+   operations upgrade separately requires migration `007`.
 3. Open /privacy without logging in and inspect its HTML source: the complete
    notice must be present. Check the CSS, navigation and deletion email link.
 4. Check that /admin/meta-business and /condomini still redirect to /login when
@@ -295,11 +305,13 @@ Meta App Review may also require a privacy policy URL, data-deletion instruction
 a review screencast, and test credentials. Prepare these before requesting
 advanced access.
 
-Instagram tokens generated in the App Dashboard are normally long-lived for 60
-days. Record their expiry in the channel card and rotate them before expiry. A
-future multi-customer OAuth rollout should exchange and refresh these tokens
-automatically; manual encrypted storage is appropriate for the operator's own
-single production account.
+Record the actual expiry of the Instagram token, rather than assuming its type.
+Eligible long-lived Instagram Login tokens can now be renewed manually or by the
+worker. Tokens must still be valid and at least 24 hours old. A future
+multi-customer OAuth onboarding flow is separate from this own-account setup.
+
+See [operations rollout and remaining production gates](meta-business-production-checklist.md)
+for migration, recovery, attachment limits and acceptance tests.
 
 ## AI rollout guardrails
 

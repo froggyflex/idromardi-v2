@@ -6,6 +6,7 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
+  if (config.url?.startsWith("/meta/") && !config.timeout) config.timeout = 60000;
   const token = getAuthToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
