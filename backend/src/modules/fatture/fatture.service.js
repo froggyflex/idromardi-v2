@@ -28,6 +28,14 @@ const {
   listGeneratedDocuments,
   saveGeneratedDocument,
 } = require("../../utils/generatedDocuments");
+const {
+  deleteImportedDocumentFile,
+  getImportedDocument,
+  localImportedDocumentExists,
+  parseStoredReference,
+  removeUploadTempFile,
+  saveImportedDocument,
+} = require("../../utils/importedDocuments");
 // const db = require(... your existing db helper ...)
 
 const DEFAULT_AI_PARSER_BASE_URL =
@@ -1015,15 +1023,18 @@ function enrichImportedDocumentWithStoredTxtSummary(doc) {
   const originalName = doc.original_filename || doc.stored_filename;
   if (path.extname(originalName).toLowerCase() !== ".txt") return doc;
 
+  const reference = parseStoredReference(doc.stored_filename);
+  if (reference.provider === "r2") return doc;
+
   const filePath = path.join(
     process.cwd(),
     "..",
     "runtime_uploads",
     "fatture-import",
-    doc.stored_filename
+    reference.key
   );
 
-  if (!fs1.existsSync(filePath)) return doc;
+  if (!localImportedDocumentExists(doc.stored_filename)) return doc;
 
   try {
     const parsedPayload =
@@ -1989,20 +2000,6 @@ exports.parseImportedDocument = async (id) => {
     throw err;
   }
 
-  const filePath = path.join(
-    process.cwd(),
-    "..",
-    "runtime_uploads",
-    "fatture-import",
-    doc.stored_filename
-  );
-
-  if (!fs1.existsSync(filePath)) {
-    const err = new Error("File non trovato sul server");
-    err.statusCode = 500;
-    throw err;
-  }
-
   const originalName = doc.original_filename || doc.stored_filename;
   const extension = path.extname(originalName).toLowerCase();
 
@@ -2027,15 +2024,16 @@ exports.parseImportedDocument = async (id) => {
   let parserResponse;
   let parsedPayload;
   let rawTxtContent = null;
+  const storedDocument = await getImportedDocument(doc.stored_filename);
 
   try {
     const form = new FormData();
 
     if (documentType === "txt") {
-      rawTxtContent = fs1.readFileSync(filePath, "utf8");
+      rawTxtContent = storedDocument.buffer.toString("utf8");
     }
 
-    form.append("file", fs1.createReadStream(filePath), {
+    form.append("file", storedDocument.buffer, {
       filename: originalName,
       contentType,
     });
@@ -2198,43 +2196,63 @@ exports.uploadImportedDocument = async ({ file, body }) => {
     throw err;
   }
 
-  const form = new FormData();
-  form.append("file", fs1.createReadStream(file.path), file.originalname);
-  
-  const sql = `
-    INSERT INTO imported_invoice_documents (
-      condominio_id,
-      provider_id,
-      original_filename,
-      stored_filename,
-      mime_type,
-      file_size_bytes,
-      parse_status,
-      validation_status
-    ) VALUES (?, ?, ?, ?, ?, ?, 'uploaded', 'pending')
-  `;
+  let storedDocument = null;
+  let insertedDocumentId = null;
 
-  const params = [
-    body.condominioId,
-    body.providerId || null,
-    file.originalname || null,
-    file.filename || file.stored_filename || null,
-    file.mimetype || null,
-    file.size || null,
-  ];
+  try {
+    storedDocument = await saveImportedDocument({
+      sourcePath: file.path,
+      condominioId: body.condominioId,
+      originalFilename: file.originalname,
+      mimeType: file.mimetype,
+    });
 
-  const result = await db.query(sql, params);
+    const sql = `
+      INSERT INTO imported_invoice_documents (
+        condominio_id,
+        provider_id,
+        original_filename,
+        stored_filename,
+        mime_type,
+        file_size_bytes,
+        parse_status,
+        validation_status
+      ) VALUES (?, ?, ?, ?, ?, ?, 'uploaded', 'pending')
+    `;
 
-  const rows = await db.query(
-    `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
-    [result.insertId]
-  );
+    const params = [
+      body.condominioId,
+      body.providerId || null,
+      file.originalname || null,
+      storedDocument.storedFilename,
+      file.mimetype || null,
+      file.size || null,
+    ];
 
-  return {
-    ok: true,
-    document: rows[0] || null,
-    // parsedData: aiData,
-  };
+    const result = await db.query(sql, params);
+    insertedDocumentId = result.insertId;
+
+    const rows = await db.query(
+      `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+      [insertedDocumentId]
+    );
+
+    return {
+      ok: true,
+      document: rows[0] || null,
+    };
+  } catch (error) {
+    if (storedDocument?.storedFilename && !insertedDocumentId) {
+      await deleteImportedDocumentFile(storedDocument.storedFilename).catch(() => {});
+    }
+    throw error;
+  } finally {
+    if (storedDocument?.provider === "r2" || !insertedDocumentId) {
+      await removeUploadTempFile(file.path).catch((error) => {
+        console.warn("Pulizia file temporaneo importato non riuscita:", error?.message);
+      });
+    }
+  }
 };
 
 
@@ -6014,18 +6032,10 @@ exports.deleteImportedDocument = async function (id) {
   let deletedFile = false;
 
   if (doc?.stored_filename) {
-    const uploadDir = path.resolve(process.cwd(), "..", "runtime_uploads", "fatture-import");
-    const filePath = path.resolve(uploadDir, doc.stored_filename);
-    const isInsideUploadDir =
-      filePath.toLowerCase().startsWith(`${uploadDir.toLowerCase()}${path.sep}`);
-
-    if (isInsideUploadDir && fs1.existsSync(filePath)) {
-      try {
-        fs1.unlinkSync(filePath);
-        deletedFile = true;
-      } catch (fileErr) {
-        console.error("Errore eliminazione file importato:", fileErr);
-      }
+    try {
+      deletedFile = await deleteImportedDocumentFile(doc.stored_filename);
+    } catch (fileErr) {
+      console.error("Errore eliminazione file importato:", fileErr);
     }
   }
 
