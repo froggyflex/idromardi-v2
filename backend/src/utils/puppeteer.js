@@ -1,6 +1,8 @@
 // utils/puppeteer.js
 const puppeteer = require("puppeteer");
 
+let browserSlot = Promise.resolve();
+
 function getBrowserConfig() {
   const isRender = Boolean(process.env.RENDER);
 
@@ -25,7 +27,50 @@ function getBrowserConfig() {
 }
 
 async function launchBrowser() {
-  return puppeteer.launch(getBrowserConfig());
+  let releaseSlot;
+  const currentSlot = new Promise((resolve) => {
+    releaseSlot = resolve;
+  });
+  const previousSlot = browserSlot;
+  browserSlot = previousSlot.then(() => currentSlot);
+
+  await previousSlot;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch(getBrowserConfig());
+  } catch (error) {
+    releaseSlot();
+    throw error;
+  }
+
+  const originalClose = browser.close.bind(browser);
+  let released = false;
+  let closing = false;
+  let closePromise = null;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseSlot();
+  };
+
+  browser.close = () => {
+    if (closePromise) return closePromise;
+    closing = true;
+    closePromise = (async () => {
+      try {
+        return await originalClose();
+      } finally {
+        release();
+      }
+    })();
+    return closePromise;
+  };
+  browser.once("disconnected", () => {
+    if (!closing) release();
+  });
+
+  return browser;
 }
 
 module.exports = { launchBrowser };

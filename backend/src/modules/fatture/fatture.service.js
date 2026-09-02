@@ -8,6 +8,7 @@ const e = require("express");
 const fs = require("fs").promises;
 const fs1 = require("fs");
 const { launchBrowser } = require("../../utils/puppeteer");
+const { PDFDocument } = require("pdf-lib");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
@@ -1718,6 +1719,24 @@ exports.startRipartizionePdfJob = async ({
   const total = Math.ceil(renderRowCount / getRipartizionePdfChunkSize());
   const periodKey = makeSafeDateFolder(dataLettura);
 
+  const [activeJobs] = await db.query(
+    `
+    SELECT id, status, total
+    FROM ripartizione_pdf_jobs
+    WHERE condominio_id <=> ?
+      AND period_key = ?
+      AND status IN ('pending', 'processing')
+      AND updated_at >= DATE_SUB(NOW(), INTERVAL 20 MINUTE)
+    ORDER BY id DESC
+    LIMIT 1
+    `,
+    [condominioId || null, periodKey]
+  );
+
+  if (activeJobs[0]) {
+    return activeJobs[0];
+  }
+
   const [result] = await db.query(
     `
     INSERT INTO ripartizione_pdf_jobs
@@ -1922,18 +1941,32 @@ async function generateRipartizioneCompletePdfBuffer({
   onChunkComplete,
 }) {
   const rows = Array.isArray(righe) ? righe : [];
-  const buffer = Buffer.from(
-    await generateRipartizionePdfBuffer({
+  const chunkSize = getRipartizionePdfChunkSize();
+  const chunks = [];
+
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    chunks.push(rows.slice(index, index + chunkSize));
+  }
+
+  const mergedPdf = await PDFDocument.create();
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunkBuffer = Buffer.from(await generateRipartizionePdfBuffer({
       browser,
-      righe: rows,
+      righe: chunks[index],
       dettaglioByUtenza,
       trimestreLabel,
       dataLettura,
       logoUrl,
-    })
-  );
-  if (onChunkComplete) await onChunkComplete(0, 1);
-  return buffer;
+    }));
+    const chunkPdf = await PDFDocument.load(chunkBuffer);
+    const copiedPages = await mergedPdf.copyPages(chunkPdf, chunkPdf.getPageIndices());
+    copiedPages.forEach((page) => mergedPdf.addPage(page));
+
+    if (onChunkComplete) await onChunkComplete(index, chunks.length);
+  }
+
+  return Buffer.from(await mergedPdf.save({ useObjectStreams: true }));
 }
 
 exports.parseImportedDocument = async (id) => {
@@ -2910,6 +2943,15 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     const session = sRows[0];
 
     const linkedImportedDocument = await getImportedDocumentLinkedToSession(conn, session);
+    const resolvedImportedDocumentId = linkedImportedDocument?.id || null;
+
+    if (String(session.imported_document_id || "") !== String(resolvedImportedDocumentId || "")) {
+      await conn.query(
+        `UPDATE fatture_sessioni SET imported_document_id = ? WHERE id = ?`,
+        [resolvedImportedDocumentId, session.id]
+      );
+      session.imported_document_id = resolvedImportedDocumentId;
+    }
 
     // Period sessions
     const [paRows] = await conn.query(
@@ -5527,8 +5569,12 @@ exports.getByCondominio = async function ({ condominioId }) {
         fs.*,
         pa.period_year AS periodo_attuale_anno,
         pa.period_month AS periodo_attuale_mese,
+        pa.data_lettura_operatore AS periodo_attuale_data_operatore,
+        pa.data_lettura_casa_idrica AS periodo_attuale_data_casa_idrica,
         pp.period_year AS periodo_precedente_anno,
         pp.period_month AS periodo_precedente_mese,
+        pp.data_lettura_operatore AS periodo_precedente_data_operatore,
+        pp.data_lettura_casa_idrica AS periodo_precedente_data_casa_idrica,
         COALESCE(iid.id, iid_legacy.id) AS linked_imported_document_id,
         COALESCE(iid.original_filename, iid_legacy.original_filename) AS linked_imported_original_filename,
         COALESCE(iid.numero_bolletta, iid_legacy.numero_bolletta) AS linked_imported_numero_bolletta,
@@ -5555,7 +5601,10 @@ exports.getByCondominio = async function ({ condominioId }) {
       [condominioId]
     );
 
-    return rows;
+    return rows.map((row) => ({
+      ...row,
+      imported_document_id: row.linked_imported_document_id || null,
+    }));
   } finally {
     conn.release();
   }
@@ -5943,6 +5992,11 @@ exports.deleteImportedDocument = async function (id) {
       err.statusCode = 404;
       throw err;
     }
+
+    await conn.query(
+      `UPDATE fatture_sessioni SET imported_document_id = NULL WHERE imported_document_id = ?`,
+      [id]
+    );
 
     await conn.query(
       `DELETE FROM imported_invoice_documents WHERE id = ?`,

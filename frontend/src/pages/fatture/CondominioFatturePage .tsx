@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
 import {
   AlertTriangle,
+  ArrowRight,
   ChevronDown,
   ChevronUp,
   FileDown,
@@ -352,6 +353,10 @@ export default function CondominioFatturePage() {
     const [importedDocs, setImportedDocs] = useState<ImportedInvoiceDocument[]>([]);
     const [selectedImportedId, setSelectedImportedId] = useState<string | null>(null);
     const [selectedImportedDoc, setSelectedImportedDoc] = useState<ImportedInvoiceDocument | null>(null);
+    const importedDocumentRequestsRef = useRef<
+      Map<string, Promise<ImportedInvoiceDocument | null>>
+    >(new Map());
+    const missingImportedDocumentIdsRef = useRef<Set<string>>(new Set());
     const [loadingImportedDocs, setLoadingImportedDocs] = useState(false);
     const [loadingImportedDetail, setLoadingImportedDetail] = useState(false);
     const [editingImportedDoc, setEditingImportedDoc] = useState(false);
@@ -412,8 +417,10 @@ export default function CondominioFatturePage() {
 
       const linkedDoc = getSessionLinkedImportedDocument(s);
       const periodLabel = getImportedDocumentPeriodLabel(linkedDoc);
+      const sessionPeriodLabel = getSessionPeriodPairLabel(s);
 
       return [
+        sessionPeriodLabel,
         periodLabel,
         getImportedDocumentName(linkedDoc || ({} as ImportedInvoiceDocument)),
         s.id,
@@ -715,6 +722,27 @@ export default function CondominioFatturePage() {
     return `${String(period.period_month).padStart(2, "0")}/${period.period_year}`;
   }
 
+  function getSessionPeriodLabel(sessionRow: any, kind: "attuale" | "precedente") {
+    const fullDate =
+      sessionRow?.[`periodo_${kind}_data_operatore`] ||
+      sessionRow?.[`periodo_${kind}_data_casa_idrica`];
+    const formattedDate = formatImportedDocDate(fullDate);
+
+    if (formattedDate) return formattedDate;
+
+    const month = Number(sessionRow?.[`periodo_${kind}_mese`]);
+    const year = Number(sessionRow?.[`periodo_${kind}_anno`]);
+    if (Number.isFinite(month) && month > 0 && Number.isFinite(year) && year > 0) {
+      return `${String(month).padStart(2, "0")}/${year}`;
+    }
+
+    return "Non disponibile";
+  }
+
+  function getSessionPeriodPairLabel(sessionRow: any) {
+    return `${getSessionPeriodLabel(sessionRow, "precedente")} - ${getSessionPeriodLabel(sessionRow, "attuale")}`;
+  }
+
   function getImportedDocumentPeriodLabel(doc?: ImportedInvoiceDocument | null) {
     if (!doc) return "Periodo TXT non disponibile";
 
@@ -797,7 +825,7 @@ export default function CondominioFatturePage() {
 
     const sessionRow = findSessionById(sessionId);
     const sessionDocumentId =
-      sessionRow?.imported_document_id || sessionRow?.linked_imported_document_id || null;
+      sessionRow?.linked_imported_document_id || sessionRow?.imported_document_id || null;
 
     const fromList =
       importedDocs.find((doc: any) => String(doc?.linked_session_id || "") === String(sessionId)) ||
@@ -1170,7 +1198,11 @@ export default function CondominioFatturePage() {
     try {
       setLoadingImportedDocs(true);
       const res = await api.get(`/fatture/imported-documents/condominio/${condominioId}`);
-      setImportedDocs(normalizeImportedDocuments(res.data?.items));
+      const documents = normalizeImportedDocuments(res.data?.items);
+      documents.forEach((document) => {
+        missingImportedDocumentIdsRef.current.delete(String(document.id));
+      });
+      setImportedDocs(documents);
       console.log("Imported documents loaded:", res.data?.items || []);
 
     } catch (err: any) {
@@ -2602,52 +2634,96 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     }
   }
 
-    async function loadImportedDocumentDetail(id: string) {
-      try {
-        setLoadingImportedDetail(true);
-
-        const res = await api.get(`/fatture/imported-documents/${id}`);
-
-        const rawDocument = res.data?.document;
-        const document = Array.isArray(rawDocument) ? rawDocument[0] || null : rawDocument || null;
-
-        setSelectedImportedDoc(document);
-        setSelectedImportedId(id);
-        setEditingImportedDoc(false);
-        setImportedDocEdit(document ? buildImportedDocumentEditForm(document) : null);
-
-        if (!document) {
-          setSelectedDoc(null);
-          setAnnoTariffa("");
-          setImportedDocYear(null);
-          return;
-        }
-
-        const payload =
-          typeof document.parsed_payload_json === "string"
-            ? JSON.parse(document.parsed_payload_json)
-            : document.parsed_payload_json;
-
-        const year = document.data_fine_periodo
-          ? new Date(document.data_fine_periodo).getFullYear()
-          : new Date().getFullYear();
-
-        setImportedDocYear(year);
-        setAnnoTariffa(String(year));
-
-        setSelectedDoc(document.importo_totale_da_pagare);
-
-        assignStateFromParsedPayload(document.parsed_payload_json);
-
-        console.log("Imported document detail loaded:", document);
-        console.log("Parsed payload:", payload);
-        return document;
-      } catch (err: any) {
-        setError(err?.response?.data?.error || "Errore caricamento documento importato");
-        return null;
-      } finally {
-        setLoadingImportedDetail(false);
+    function loadImportedDocumentDetail(id: string): Promise<ImportedInvoiceDocument | null> {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId || missingImportedDocumentIdsRef.current.has(normalizedId)) {
+        return Promise.resolve(null);
       }
+
+      const pendingRequest = importedDocumentRequestsRef.current.get(normalizedId);
+      if (pendingRequest) return pendingRequest;
+
+      const request = (async () => {
+        try {
+          setLoadingImportedDetail(true);
+
+          const res = await api.get(`/fatture/imported-documents/${normalizedId}`);
+          const rawDocument = res.data?.document;
+          const document = Array.isArray(rawDocument) ? rawDocument[0] || null : rawDocument || null;
+
+          setSelectedImportedDoc(document);
+          setSelectedImportedId(normalizedId);
+          setEditingImportedDoc(false);
+          setImportedDocEdit(document ? buildImportedDocumentEditForm(document) : null);
+
+          if (!document) {
+            setSelectedDoc(null);
+            setAnnoTariffa("");
+            setImportedDocYear(null);
+            return null;
+          }
+
+          missingImportedDocumentIdsRef.current.delete(normalizedId);
+          const payload =
+            typeof document.parsed_payload_json === "string"
+              ? JSON.parse(document.parsed_payload_json)
+              : document.parsed_payload_json;
+
+          const year = document.data_fine_periodo
+            ? new Date(document.data_fine_periodo).getFullYear()
+            : new Date().getFullYear();
+
+          setImportedDocYear(year);
+          setAnnoTariffa(String(year));
+          setSelectedDoc(document.importo_totale_da_pagare);
+          assignStateFromParsedPayload(document.parsed_payload_json);
+
+          console.log("Imported document detail loaded:", document);
+          console.log("Parsed payload:", payload);
+          return document;
+        } catch (err: any) {
+          if (err?.response?.status === 404) {
+            missingImportedDocumentIdsRef.current.add(normalizedId);
+            setSelectedImportedId((current) => current === normalizedId ? null : current);
+            setSelectedImportedDoc((current) =>
+              String(current?.id || "") === normalizedId ? null : current
+            );
+            setSessions((current) => current.map((item: any) => {
+              const linkedId = item?.linked_imported_document_id || item?.imported_document_id;
+              return String(linkedId || "") === normalizedId
+                ? { ...item, imported_document_id: null, linked_imported_document_id: null }
+                : item;
+            }));
+            setCurrentSession((current: any) =>
+              String(current?.imported_document_id || "") === normalizedId
+                ? { ...current, imported_document_id: null }
+                : current
+            );
+            setDetail((current: any) =>
+              String(current?.session?.imported_document_id || "") === normalizedId
+                ? {
+                    ...current,
+                    session: { ...current.session, imported_document_id: null },
+                    linkedImportedDocument: null,
+                  }
+                : current
+            );
+            setError("Il documento TXT collegato non esiste piu. Seleziona un nuovo documento per questa sessione.");
+            return null;
+          }
+
+          setError(err?.response?.data?.error || "Errore caricamento documento importato");
+          return null;
+        } finally {
+          importedDocumentRequestsRef.current.delete(normalizedId);
+          if (importedDocumentRequestsRef.current.size === 0) {
+            setLoadingImportedDetail(false);
+          }
+        }
+      })();
+
+      importedDocumentRequestsRef.current.set(normalizedId, request);
+      return request;
     }
 
   async function loadImportedDocumentForSession(id: string) {
@@ -3081,13 +3157,11 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         }
 
         if (calculationDocument?.id && !calculationDocument?.parsed_payload_json) {
-          const docRes = await api.get(`/fatture/imported-documents/${calculationDocument.id}`);
-          const rawDocument = docRes.data?.document;
-          calculationDocument = Array.isArray(rawDocument)
-            ? rawDocument[0] || calculationDocument
-            : rawDocument || calculationDocument;
-          setSelectedImportedDoc(calculationDocument);
-          setSelectedImportedId(calculationDocument.id);
+          const loadedDocument = await loadImportedDocumentDetail(String(calculationDocument.id));
+          if (!loadedDocument) {
+            throw new Error("Il documento TXT collegato non e piu disponibile. Seleziona un nuovo documento.");
+          }
+          calculationDocument = loadedDocument;
         }
 
         if (calculationDocument?.id) {
@@ -4416,11 +4490,8 @@ const appliedTariffPeriods = Array.isArray(persistedAppliedTariff?.periods)
 const activeSessionSummary = sessions.find(
   (item: any) => String(item?.id || "") === String(fatturaId || "")
 );
-const activeSessionDocument = activeSessionSummary
-  ? getSessionLinkedImportedDocument(activeSessionSummary)
-  : null;
-const activeSessionPeriod = activeSessionDocument
-  ? getImportedDocumentPeriodLabel(activeSessionDocument)
+const activeSessionPeriod = activeSessionSummary
+  ? getSessionPeriodPairLabel(activeSessionSummary)
   : "";
 const formatTariffNumber = (value: any, decimals = 4) => {
   const num = Number(value);
@@ -4493,7 +4564,7 @@ return (
                 <h1 className="text-base font-bold text-slate-900">Fatturazione</h1>
                 {activeSessionPeriod && (
                   <span className="truncate text-xs font-medium text-slate-500">
-                    Periodo {activeBillingProviderCode} {activeSessionPeriod}
+                    Periodo fatturato {activeSessionPeriod}
                   </span>
                 )}
                 <span className="text-sm font-bold text-slate-900">
@@ -4656,6 +4727,8 @@ return (
                   const linkedDoc = getSessionLinkedImportedDocument(s);
                   const linkedDocName = linkedDoc ? getImportedDocumentName(linkedDoc) : "Nessun documento collegato";
                   const linkedDocPeriod = getImportedDocumentPeriodLabel(linkedDoc);
+                  const previousPeriodLabel = getSessionPeriodLabel(s, "precedente");
+                  const currentPeriodLabel = getSessionPeriodLabel(s, "attuale");
                   const isAutoLoading = String(autoCalculatingSessionId || pendingAutoCalculateSessionId || "") === String(s.id);
 
                   return (
@@ -4683,16 +4756,36 @@ return (
                       </span>
 
                       <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold text-slate-800">
-                          Periodo {getBillingProviderCode(linkedDoc, s)}: {linkedDocPeriod}
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="min-w-0">
+                            <span className="block text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                              Periodo precedente
+                            </span>
+                            <span className="block truncate text-sm font-semibold text-slate-700">
+                              {previousPeriodLabel}
+                            </span>
+                          </span>
+                          <ArrowRight
+                            size={15}
+                            className="mt-3 shrink-0 text-slate-400"
+                            aria-hidden="true"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-[9px] font-bold uppercase tracking-wide text-blue-500">
+                              Periodo attuale
+                            </span>
+                            <span className="block truncate text-sm font-bold text-blue-700">
+                              {currentPeriodLabel}
+                            </span>
+                          </span>
                         </span>
                         <span
-                            className={`mt-0.5 block break-words text-[11px] leading-4 ${
+                          className={`mt-1 block truncate text-[11px] leading-4 ${
                             linkedDoc ? "text-slate-500" : "text-amber-600"
                           }`}
-                          title={linkedDocName}
+                          title={`${getBillingProviderCode(linkedDoc, s)} TXT: ${linkedDocPeriod} - ${linkedDocName}`}
                         >
-                          Doc: {linkedDocName}
+                          TXT {getBillingProviderCode(linkedDoc, s)}: {linkedDocPeriod} - {linkedDocName}
                         </span>
                       </span>
 

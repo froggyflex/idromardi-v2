@@ -418,8 +418,11 @@ exports.getImportedDocumentById = async (req, res) => {
     const result = await service.getImportedDocumentById(id);
     res.json(result);
   } catch (err) {
-    console.error("getImportedDocumentById error:", err);
-    res.status(err.statusCode || 500).json({ error: err.message });
+    const statusCode = err.statusCode || 500;
+    if (statusCode >= 500) {
+      console.error("getImportedDocumentById error:", err);
+    }
+    res.status(statusCode).json({ error: err.message });
   }
 };
 

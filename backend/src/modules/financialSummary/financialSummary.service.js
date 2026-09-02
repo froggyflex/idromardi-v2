@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const path = require("path");
 const pdf = require("pdf-parse");
 const db = require("../../config/db");
-const puppeteer = require("puppeteer");
+const { launchBrowser } = require("../../utils/puppeteer");
 
 const BASE_URL = process.env.BASE_URL;
 
@@ -3404,30 +3404,12 @@ async function getFatturaPrintData(id) {
   return rows[0];
 }
 
-let browserPromise = null;
-
-async function getBrowser() {
-  if (!browserPromise) {
-    browserPromise = puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
-    });
-  }
-
-  return browserPromise;
-}
-
-
 async function htmlToPdfBuffer(html, mode = "color") {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  const browser = await launchBrowser();
+  let page;
 
   try {
+    page = await browser.newPage();
     page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(60000);
 
@@ -3522,7 +3504,8 @@ async function htmlToPdfBuffer(html, mode = "color") {
       },
     });
   } finally {
-    await page.close();
+    if (page) await page.close();
+    await browser.close();
   }
 }
 
