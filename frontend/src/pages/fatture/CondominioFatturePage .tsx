@@ -126,6 +126,26 @@ type LegacyAccontoEntry = {
   periodoOrigine?: string | null;
 };
 
+const italianNumberFormatters = new Map<string, Intl.NumberFormat>();
+
+function formatDecimalIt(value: unknown, decimals = 2) {
+  const numeric = Number(value ?? 0);
+  const safeValue = Number.isFinite(numeric) ? numeric : 0;
+  const key = String(decimals);
+  let formatter = italianNumberFormatters.get(key);
+
+  if (!formatter) {
+    formatter = new Intl.NumberFormat("it-IT", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+      useGrouping: true,
+    });
+    italianNumberFormatters.set(key, formatter);
+  }
+
+  return formatter.format(safeValue);
+}
+
 
 export default function CondominioFatturePage() {
 
@@ -4207,7 +4227,7 @@ const getMinimumPayableBreakdown = (row: any) => {
     oneri,
     ivaQf,
     minimum,
-    label: `Minimo: oneri EUR ${oneri.toFixed(2)} + QF EUR ${qf.toFixed(2)} + IVA QF EUR ${ivaQf.toFixed(2)} = EUR ${minimum.toFixed(2)}`,
+    label: `Minimo: oneri EUR ${formatDecimalIt(oneri)} + QF EUR ${formatDecimalIt(qf)} + IVA QF EUR ${formatDecimalIt(ivaQf)} = EUR ${formatDecimalIt(minimum)}`,
   };
 };
 
@@ -4477,7 +4497,7 @@ return (
                   </span>
                 )}
                 <span className="text-sm font-bold text-slate-900">
-                  Totale € {Number(selectedDoc || 0).toFixed(2)}
+                  Totale € {formatDecimalIt(selectedDoc)}
                 </span>
               </div>
             </div>
@@ -4677,7 +4697,7 @@ return (
                       </span>
 
                       {/* <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
-                        € {Number(s.grand_total ?? 0).toFixed(2)}
+                        € {formatDecimalIt(s.grand_total)}
                       </span> */}
 
                       <span className="col-span-2 flex items-center justify-end gap-2 sm:col-span-1">
@@ -5002,7 +5022,7 @@ return (
                           </div>
 
                           <div className="mt-0.5 text-[11px] font-semibold text-slate-700">
-                            € {Number(doc.importo_totale_da_pagare || 0).toFixed(2)}
+                            € {formatDecimalIt(doc.importo_totale_da_pagare)}
                           </div>
                         </td>
 
@@ -5216,7 +5236,7 @@ return (
             ["Bolletta", selectedImportedDoc.numero_bolletta || "-"],
             ["Fornitura", selectedImportedDoc.codice_fornitura || "-"],
             ["Periodo", `${selectedImportedDoc.data_inizio_periodo?.slice(0, 10) || "-"} → ${selectedImportedDoc.data_fine_periodo?.slice(0, 10) || "-"}`],
-            ["Totale", `€ ${Number(selectedImportedDoc.importo_totale_da_pagare || 0).toFixed(2)}`],
+            ["Totale", `€ ${formatDecimalIt(selectedImportedDoc.importo_totale_da_pagare)}`],
           ].map(([label, value]) => (
             <div key={label}>
               <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
@@ -5411,7 +5431,7 @@ return (
                           Acquedotto
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {Number(impConsumo ?? 0).toFixed(2)}
+                          € {formatDecimalIt(impConsumo)}
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
                           Importo lettura a giro
@@ -5423,7 +5443,7 @@ return (
                           Quota fissa
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {Number(quotaFissa ?? 0).toFixed(2)}
+                          € {formatDecimalIt(quotaFissa)}
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
                           {quotaFissaSession > 0 ? "Ripartizione quota fissa" : "Quota fissa da TXT"}
@@ -5435,7 +5455,7 @@ return (
                           Oneri perequazione
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {Number(oneriPerequazione ?? 0).toFixed(2)}
+                          € {formatDecimalIt(oneriPerequazione)}
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
                           Oneri attribuiti alla lettura a giro
@@ -5447,7 +5467,7 @@ return (
                           IVA lettura a giro
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {Number(ivaAGiro ?? 0).toFixed(2)}
+                          € {formatDecimalIt(ivaAGiro)}
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
                           {manualIvaAGiro !== null
@@ -5470,7 +5490,7 @@ return (
                           />
                         </div>
                         <div className="mt-2 text-xs text-slate-400">
-                          Valore attuale: € {Number(varieValue ?? 0).toFixed(2)}
+                          Valore attuale: € {formatDecimalIt(varieValue)}
                         </div>
                       </article>
 
@@ -5479,7 +5499,7 @@ return (
                           Totale lettura a giro
                         </div>
                         <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {Number(totaleLetturaAGiro ?? 0).toFixed(2)}
+                          € {formatDecimalIt(totaleLetturaAGiro)}
                         </div>
                         <div className="mt-1 text-xs text-emerald-700/80">
                           {totaleFornituraAGiro > 0
@@ -5510,7 +5530,7 @@ return (
                             Consumo acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            {Number(mcAcconto ?? 0).toFixed(2)} mc
+                            {formatDecimalIt(mcAcconto)} mc
                           </div>
                         </article>
 
@@ -5519,7 +5539,7 @@ return (
                             Acquedotto acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(eurAcconto ?? 0).toFixed(2)}
+                            € {formatDecimalIt(eurAcconto)}
                           </div>
                         </article>
 
@@ -5528,7 +5548,7 @@ return (
                             Dep./Fog. acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(depfogAcconto ?? 0).toFixed(2)}
+                            € {formatDecimalIt(depfogAcconto)}
                           </div>
                         </article>
 
@@ -5537,7 +5557,7 @@ return (
                             Quota fissa acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {quotaFissaAccontoValue.toFixed(2)}
+                            € {formatDecimalIt(quotaFissaAccontoValue)}
                           </div>
                         </article>
 
@@ -5546,7 +5566,7 @@ return (
                             IVA acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(ivaAcconto ?? 0).toFixed(2)}
+                            € {formatDecimalIt(ivaAcconto)}
                           </div>
                         </article>
 
@@ -5555,7 +5575,7 @@ return (
                             Oneri perequazione acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(oneriPerequazioneAcconto ?? 0).toFixed(2)}
+                            € {formatDecimalIt(oneriPerequazioneAcconto)}
                            </div>
                          </article>
 
@@ -5565,7 +5585,7 @@ return (
                                Altri importi acconto
                              </div>
                              <div className="mt-2 text-xl font-bold text-slate-900">
-                               EUR {accontoOtherValue.toFixed(2)}
+                               EUR {formatDecimalIt(accontoOtherValue)}
                              </div>
                              <div className="mt-1 text-xs text-amber-800">
                                Differenza inclusa nel totale acconto del documento.
@@ -5578,7 +5598,7 @@ return (
                             Totale acconto
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(totaleAcconto ?? 0).toFixed(2)}
+                            € {formatDecimalIt(totaleAcconto)}
                           </div>
                         </article>
                       </div>
@@ -5603,7 +5623,7 @@ return (
                             Consumo storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            {Number(mcStorno ?? 0).toFixed(2)} mc
+                            {formatDecimalIt(mcStorno)} mc
                           </div>
                         </article>
 
@@ -5612,7 +5632,7 @@ return (
                             Acquedotto storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(acquedottoStorno ?? 0).toFixed(2)}
+                            € {formatDecimalIt(acquedottoStorno)}
                           </div>
                         </article>
 
@@ -5621,7 +5641,7 @@ return (
                             Dep./Fog. storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(depfogStorno ?? 0).toFixed(2)}
+                            € {formatDecimalIt(depfogStorno)}
                           </div>
                         </article>
 
@@ -5630,7 +5650,7 @@ return (
                             Quota fissa storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {quotaFissaStornoValue.toFixed(2)}
+                            € {formatDecimalIt(quotaFissaStornoValue)}
                           </div>
                         </article>
 
@@ -5639,7 +5659,7 @@ return (
                             IVA storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(ivaStorno ?? 0).toFixed(2)}
+                            € {formatDecimalIt(ivaStorno)}
                           </div>
                         </article>
 
@@ -5648,7 +5668,7 @@ return (
                             Oneri perequazione storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(oneriPerequazioneStorno ?? 0).toFixed(2)}
+                            € {formatDecimalIt(oneriPerequazioneStorno)}
                           </div>
                         </article>
 
@@ -5657,7 +5677,7 @@ return (
                             Totale storno
                           </div>
                           <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {Number(totaleStorno || eurStorno || 0).toFixed(2)}
+                            € {formatDecimalIt(Number(totaleStorno || eurStorno || 0))}
                           </div>
                         </article>
                       </div>
@@ -5682,7 +5702,7 @@ return (
                         Totale documento {activeBillingProviderCode}
                       </div>
                       <div className="mt-2 text-2xl font-bold text-slate-900">
-                        € {totaleDocumento.toFixed(2)}
+                        € {formatDecimalIt(totaleDocumento)}
                       </div>
                     </div>
 
@@ -5691,10 +5711,10 @@ return (
                         Dovuto incasso
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        {activeBillingProviderCode} € {totaleDocumento.toFixed(2)} + oneri condominio € {totaleOneri.toFixed(2)}
+                        {activeBillingProviderCode} € {formatDecimalIt(totaleDocumento)} + oneri condominio € {formatDecimalIt(totaleOneri)}
                       </div>
                       <div className="mt-2 text-2xl font-bold text-slate-900">
-                        € {totaleDocumentoConOneri.toFixed(2)}
+                        € {formatDecimalIt(totaleDocumentoConOneri)}
                       </div>
                     </div>
 
@@ -5703,7 +5723,7 @@ return (
                         Totale interni
                       </div>
                       <div className="mt-2 text-3xl font-bold">
-                        € {totaleInterni.toFixed(2)}
+                        € {formatDecimalIt(totaleInterni)}
                       </div>
                     </div>
 
@@ -5726,12 +5746,12 @@ return (
                           deltaOk ? "text-emerald-700" : "text-amber-700"
                         }`}
                       >
-                        € {deltaTotali.toFixed(2)}
+                        € {formatDecimalIt(deltaTotali)}
                       </div>
                       <div className="mt-2 text-xs text-slate-500">
                         {deltaOk
-                          ? `Il delta corrisponde agli oneri condominio (€ ${totaleOneri.toFixed(2)}).`
-                          : `Delta atteso: oneri condominio € ${totaleOneri.toFixed(2)}. Scostamento residuo € ${deltaRispettoOneri.toFixed(2)}.`}
+                          ? `Il delta corrisponde agli oneri condominio (€ ${formatDecimalIt(totaleOneri)}).`
+                          : `Delta atteso: oneri condominio € ${formatDecimalIt(totaleOneri)}. Scostamento residuo € ${formatDecimalIt(deltaRispettoOneri)}.`}
                       </div>
                     </div>
                   </div>
@@ -5983,7 +6003,7 @@ return (
     <div className="px-4 py-2">
       <span className="font-bold text-slate-500">Totale interni:</span>{" "}
       <span className={`font-semibold ${isGreen ? "text-emerald-600" : "text-red-600"}`}>
-        € {totals.totaleInterni.toFixed(2)}
+        € {formatDecimalIt(totals.totaleInterni)}
       </span>
     </div>
 
@@ -6022,15 +6042,15 @@ return (
                         <div className="grid grid-cols-2 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50/70 sm:grid-cols-4">
                           <div className="px-4 py-2.5">
                             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Storno nel TXT</div>
-                            <div className="mt-0.5 font-semibold text-slate-900">EUR {Math.abs(Number(eurStorno || 0)).toFixed(2)}</div>
+                            <div className="mt-0.5 font-semibold text-slate-900">EUR {formatDecimalIt(Math.abs(Number(eurStorno || 0)))}</div>
                           </div>
                           <div className="px-4 py-2.5">
                             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Saldo legacy inserito</div>
-                            <div className="mt-0.5 font-semibold text-slate-900">EUR {legacyDraftTotal.toFixed(2)}</div>
+                            <div className="mt-0.5 font-semibold text-slate-900">EUR {formatDecimalIt(legacyDraftTotal)}</div>
                           </div>
                           <div className="px-4 py-2.5">
                             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Residuo disponibile</div>
-                            <div className="mt-0.5 font-semibold text-slate-900">EUR {legacyResidualTotal.toFixed(2)}</div>
+                            <div className="mt-0.5 font-semibold text-slate-900">EUR {formatDecimalIt(legacyResidualTotal)}</div>
                           </div>
                           <div className="px-4 py-2.5">
                             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Esito previsto</div>
@@ -6136,7 +6156,7 @@ return (
                       <div
                         title={
                           totalAudit.hasControlTarget
-                            ? `Totale righe: EUR ${totalAudit.displayedRowsTotal.toFixed(2)} | Totale atteso (ABC + oneri): EUR ${totalAudit.controlTarget.toFixed(2)} | Differenza: EUR ${totalAudit.controlDifference.toFixed(2)}`
+                            ? `Totale righe: EUR ${formatDecimalIt(totalAudit.displayedRowsTotal)} | Totale atteso (ABC + oneri): EUR ${formatDecimalIt(totalAudit.controlTarget)} | Differenza: EUR ${formatDecimalIt(totalAudit.controlDifference)}`
                             : "Totale atteso non disponibile: impossibile verificare la riconciliazione."
                         }
                         className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
@@ -6158,7 +6178,7 @@ return (
                               ? "NON CORRETTO (somma righe discordante)"
                               : !totalAudit.displayedTotalOk
                                 ? "NON CORRETTO (totale visualizzato discordante)"
-                                : `NON CORRETTO (delta EUR ${totalAudit.controlDifference.toFixed(2)})`}
+                                : `NON CORRETTO (delta EUR ${formatDecimalIt(totalAudit.controlDifference)})`}
                       </div>
                     </div>
                       <div className="max-h-[68vh] overflow-auto rounded-lg border border-slate-200 bg-white">
@@ -6313,53 +6333,53 @@ return (
                                               Number(getLiveRowConsumption(r) ?? 0).toFixed(0)
                                             )}
                                           </td>
-                                          <td className="p-2 text-center">{r.riga?.imp_acquedotto ?? 0}</td>
-                                          <td className="p-2 text-center">{r.riga?.imp_fognatura ?? 0}</td>
-                                          <td className="p-2 text-center">{r.riga?.imp_depurazione ?? 0}</td>
-                                          <td className="p-2 text-center">{r.riga?.imp_qf ?? 0}</td>
-                                          <td className="p-2 text-center">{r.riga?.conguaglio ?? 0}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.imp_acquedotto)}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.imp_fognatura)}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.imp_depurazione)}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.imp_qf)}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.conguaglio)}</td>
                                           <td className="p-2 text-center">
-                                            {getRowOneri(r).toFixed(2)}
+                                            {formatDecimalIt(getRowOneri(r))}
                                           </td>
                                           <td className="p-2 text-center">
-                                            {getRowOneriPerequazione(r).toFixed(2)}
+                                            {formatDecimalIt(getRowOneriPerequazione(r))}
                                           </td>
-                                          <td className="p-2 text-center">{r.riga?.imp_iva ?? 0}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.imp_iva)}</td>
                                           <td className="p-2 text-center">
-                                            {Number(r.riga?.consumo_acconto ?? 0).toFixed(2)}mc
+                                            {formatDecimalIt(r.riga?.consumo_acconto)}mc
                                             <br />
-                                            {Number(r.riga?.imp_acconto ?? 0).toFixed(2)}
+                                            {formatDecimalIt(r.riga?.imp_acconto)}
                                           </td>
                                            <td className="p-2 text-center">
-                                             {Number(r.riga?.depfog_acconto ?? 0).toFixed(2)}
+                                             {formatDecimalIt(r.riga?.depfog_acconto)}
                                            </td>
                                            <td className="p-2 text-center">
-                                             {getRowAccontoExtra(r).toFixed(2)}
+                                             {formatDecimalIt(getRowAccontoExtra(r))}
                                            </td>
                                            <td className="p-2 text-center">
-                                            {getRowStornoMc(r).toFixed(2)}mc
+                                            {formatDecimalIt(getRowStornoMc(r))}mc
                                             <br />
-                                            <span className="font-bold">{Number(r.riga?.storno_acconto ?? 0).toFixed(2)}</span>
+                                            <span className="font-bold">{formatDecimalIt(r.riga?.storno_acconto)}</span>
                                             {r.riga?.storno_transition_status && (
                                               <div className="mt-1 space-y-0.5 text-[9px] leading-tight text-slate-500">
-                                                <div>TXT rich. {Number(r.riga?.storno_txt_richiesto || 0).toFixed(2)}</div>
+                                                <div>TXT rich. {formatDecimalIt(r.riga?.storno_txt_richiesto)}</div>
                                                 {Math.abs(Number(r.riga?.storno_legacy || 0)) > 0.004 && (
-                                                  <div>Legacy {Number(r.riga?.storno_legacy || 0).toFixed(2)}</div>
+                                                  <div>Legacy {formatDecimalIt(r.riga?.storno_legacy)}</div>
                                                 )}
                                                 {Math.abs(Number(r.riga?.storno_pregresso || 0)) > 0.004 && (
-                                                  <div>Residuo {Number(r.riga?.storno_pregresso || 0).toFixed(2)}</div>
+                                                  <div>Residuo {formatDecimalIt(r.riga?.storno_pregresso)}</div>
                                                 )}
                                                 {Number(r.riga?.credito_storno_differito || 0) > 0.004 && (
                                                   <div className="font-semibold text-amber-700">
-                                                    Rinviato +{Number(r.riga?.credito_storno_differito || 0).toFixed(2)}
+                                                    Rinviato +{formatDecimalIt(r.riga?.credito_storno_differito)}
                                                   </div>
                                                 )}
                                               </div>
                                             )}
                                           </td>
-                                          <td className="p-2 text-center">{r.riga?.imp_arr ?? 0}</td>
+                                          <td className="p-2 text-center">{formatDecimalIt(r.riga?.imp_arr)}</td>
                                           <td className="p-2 text-center font-semibold">
-                                            {getDisplayedRowTotal(r).toFixed(2)}
+                                            {formatDecimalIt(getDisplayedRowTotal(r))}
                                           </td>
                                         </tr>
 
@@ -6407,10 +6427,10 @@ return (
                                                           >
                                                             <span className="font-medium">{uiLabel}</span>
                                                             <span className="text-center">
-                                                              {Number(tier.mc_allocati ?? 0).toFixed(2)} mc
+                                                              {formatDecimalIt(tier.mc_allocati)} mc
                                                             </span>
                                                             <span className="text-right">
-                                                              {Number(tier.importo ?? 0).toFixed(2)} €
+                                                              {formatDecimalIt(tier.importo)} €
                                                             </span>
                                                           </div>
                                                         );
@@ -6420,7 +6440,7 @@ return (
                                                     <div className="mt-2 border-t pt-2 flex items-center justify-between text-base font-bold text-slate-900">
 
                                                       <span>Totale Consumo</span>
-                                                      <span>{Number(r.riga?.imp_acquedotto ?? 0).toFixed(2)} €</span>
+                                                      <span>{formatDecimalIt(r.riga?.imp_acquedotto)} €</span>
                                                     </div>
                                                     {(Math.abs(Number(r.riga?.storno_acconto || 0)) > 0.004 ||
                                                       minimumCreditEuro > 0 ||
@@ -6433,19 +6453,19 @@ return (
                                                           {getStornoTransitionLabel(r.riga?.storno_transition_status)}
                                                         </div>
                                                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                                                          <span>TXT richiesto: EUR {Number(r.riga?.storno_txt_richiesto || 0).toFixed(2)}</span>
-                                                          <span>TXT applicato direttamente: EUR {Number(r.riga?.storno_txt_aggiuntivo || 0).toFixed(2)}</span>
-                                                          <span>TXT compensato dal legacy: EUR {Number(r.riga?.storno_txt_compensato_legacy || 0).toFixed(2)}</span>
+                                                          <span>TXT richiesto: EUR {formatDecimalIt(r.riga?.storno_txt_richiesto)}</span>
+                                                          <span>TXT applicato direttamente: EUR {formatDecimalIt(r.riga?.storno_txt_aggiuntivo)}</span>
+                                                          <span>TXT compensato dal legacy: EUR {formatDecimalIt(r.riga?.storno_txt_compensato_legacy)}</span>
                                                           <span>
                                                             Acconto legacy applicato
-                                                            {r.riga?.storno_legacy_periodo ? ` (${r.riga.storno_legacy_periodo})` : ""}: EUR {Number(r.riga?.storno_legacy || 0).toFixed(2)}
+                                                            {r.riga?.storno_legacy_periodo ? ` (${r.riga.storno_legacy_periodo})` : ""}: EUR {formatDecimalIt(r.riga?.storno_legacy)}
                                                           </span>
-                                                          <span>Differenza legacy assorbita: EUR {Number(r.riga?.storno_carenza_assorbita || 0).toFixed(2)}</span>
-                                                          <span>Residuo precedente disponibile: EUR {Number(r.riga?.credito_storno_ingresso || 0).toFixed(2)}</span>
-                                                          <span>Residuo precedente assorbito: EUR {Number(r.riga?.credito_storno_assorbito || 0).toFixed(2)}</span>
-                                                          <span>Nuovo residuo rinviato: EUR {Number(r.riga?.credito_storno_differito || 0).toFixed(2)}</span>
-                                                          <span>Totale applicato: EUR {Number(r.riga?.storno_acconto || 0).toFixed(2)}</span>
-                                                          <span>Residuo totale disponibile: EUR {Number(r.riga?.credito_storno_residuo || 0).toFixed(2)}</span>
+                                                          <span>Differenza legacy assorbita: EUR {formatDecimalIt(r.riga?.storno_carenza_assorbita)}</span>
+                                                          <span>Residuo precedente disponibile: EUR {formatDecimalIt(r.riga?.credito_storno_ingresso)}</span>
+                                                          <span>Residuo precedente assorbito: EUR {formatDecimalIt(r.riga?.credito_storno_assorbito)}</span>
+                                                          <span>Nuovo residuo rinviato: EUR {formatDecimalIt(r.riga?.credito_storno_differito)}</span>
+                                                          <span>Totale applicato: EUR {formatDecimalIt(r.riga?.storno_acconto)}</span>
+                                                          <span>Residuo totale disponibile: EUR {formatDecimalIt(r.riga?.credito_storno_residuo)}</span>
                                                         </div>
                                                       </div>
                                                     )}
@@ -6459,8 +6479,8 @@ return (
                                                         </div>
                                                         {(minimumCreditEuro > 0 || minimumCreditMc > 0) && (
                                                           <div className="mt-1 font-semibold">
-                                                            Credito residuo salvato: EUR {minimumCreditEuro.toFixed(2)}
-                                                            {minimumCreditMc > 0 ? ` / ${minimumCreditMc.toFixed(2)} mc` : ""}
+                                                            Credito residuo salvato: EUR {formatDecimalIt(minimumCreditEuro)}
+                                                            {minimumCreditMc > 0 ? ` / ${formatDecimalIt(minimumCreditMc)} mc` : ""}
                                                           </div>
                                                         )}
                                                       </div>
@@ -6498,51 +6518,51 @@ return (
                                       TOTALE
                                     </td>
                                     <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
-                                    <td className="p-2 text-center">{totals.acq.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totals.fog.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totals.dep.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totals.qf.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totals.cong.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totaleOneriVisibile.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totaleOneriPereqVisibile.toFixed(2)}</td>
-                                    <td className="p-2 text-center">{totals.iva.toFixed(2)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.acq)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.fog)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.dep)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.qf)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.cong)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totaleOneriVisibile)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totaleOneriPereqVisibile)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.iva)}</td>
                                     <td colSpan={3} className="p-2 text-center align-middle">
                                       <div className="mx-auto max-w-[230px] rounded-md border border-slate-300 bg-white/70 px-2 py-1.5 shadow-sm">
                                         <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                                           Tot. acconto
                                         </div>
                                         <div className="text-sm font-extrabold text-slate-900">
-                                          {totals.acconto.toFixed(2)}
+                                          {formatDecimalIt(totals.acconto)}
                                         </div>
                                         <div className="mt-1 grid grid-cols-2 gap-2 border-t border-slate-200 pt-1 text-[11px] leading-tight text-slate-700">
                                           <div>
                                             <div className="font-bold text-slate-900">
-                                              {totals.totConsAcc.toFixed(2)}mc
+                                              {formatDecimalIt(totals.totConsAcc)}mc
                                             </div>
-                                            <div>Acq {totals.accontoAcq.toFixed(2)}</div>
+                                            <div>Acq {formatDecimalIt(totals.accontoAcq)}</div>
                                           </div>
                                           <div>
                                             <div className="font-bold text-slate-900">
                                               Dep/Fog
                                             </div>
-                                            <div>{totals.accontoDepFog.toFixed(2)}</div>
+                                            <div>{formatDecimalIt(totals.accontoDepFog)}</div>
                                           </div>
                                         </div>
                                         <div className="mt-1 border-t border-slate-200 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                          QF/IVA/Pereq. + altri {totals.accontoExtra.toFixed(2)}
+                                          QF/IVA/Pereq. + altri {formatDecimalIt(totals.accontoExtra)}
                                         </div>
                                       </div>
                                     </td>
                                     <td className="p-2 text-center">
-                                      {Number(mcStorno || 0).toFixed(2)}mc
+                                      {formatDecimalIt(mcStorno)}mc
                                       <br />
-                                      {totals.storno.toFixed(2)}
+                                      {formatDecimalIt(totals.storno)}
                                     </td>
-                                    <td className="p-2 text-center">{totals.arr.toFixed(2)}</td>
+                                    <td className="p-2 text-center">{formatDecimalIt(totals.arr)}</td>
                                     <td
                                       className={`p-2 text-center font-bold ${isGreen ? "text-green-600" : "text-red-600"}`}
                                     >
-                                      {totaleInterniVisibile.toFixed(2)}
+                                      {formatDecimalIt(totaleInterniVisibile)}
                                     </td>
                                   </tr>
                                 </tfoot>

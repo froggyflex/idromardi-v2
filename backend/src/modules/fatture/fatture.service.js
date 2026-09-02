@@ -16,6 +16,7 @@ const {
   addUtcDays,
   allocateTariffConsumption,
   buildTariffDateSegments,
+  calculateRowVat,
   effectiveNucleus,
   toIsoDate,
 } = require("./tariff-allocation");
@@ -3820,8 +3821,7 @@ async function calculateInterni(
   parsedOneriPerequazioneAcconto = null,
   parsedAccontoImporto = null,
   parsedAccontoDepFog = null,
-  parsedAccontoTotale = null,
-  parsedIvaNormale = null
+  parsedAccontoTotale = null
 ) {
   await ensureFattureRigheRecuperoColumns();
   await ensureFattureAccontiTransitionColumns();
@@ -4300,8 +4300,12 @@ async function calculateInterni(
 
       totaleOneri += impOneri;
 
-      const baseIva = round2(impAcq + impFog + impDep + impQf);
-      const impIva = round2(baseIva * 0.10);
+      const impIva = calculateRowVat({
+        acquedotto: impAcq,
+        fognatura: impFog,
+        depurazione: impDep,
+        quotaFissa: impQf,
+      });
       const baseTot = round2(impAcq + impFog + impDep + impQf + impOneri + impIva);
 
       rows.push({
@@ -4476,32 +4480,6 @@ async function calculateInterni(
     const moneyWeightFn = (r) => Math.max(0, round2(n2(r.base_totale) - n2(r.imp_oneri)));
     const mcWeightFn = (r) => Math.max(0, n2(r.consumo_normale));
     const consumptionWeightFn = (r) => Math.max(0, n2(r.consumo_totale));
-
-    const hasParsedIvaNormale =
-      parsedIvaNormale !== null &&
-      parsedIvaNormale !== undefined &&
-      parsedIvaNormale !== "" &&
-      Number.isFinite(Number(parsedIvaNormale));
-    if (hasParsedIvaNormale) {
-      const manualIvaTotal = round2(Number(parsedIvaNormale));
-      const ivaShares = allocateByWeight(
-        manualIvaTotal,
-        primaries,
-        moneyWeightFn,
-        2
-      );
-
-      for (let i = 0; i < primaries.length; i++) {
-        const row = primaries[i];
-        const previousIva = round2(n2(row.imp_iva));
-        const manualIvaShare = round2(ivaShares[i] || 0);
-        row.imp_iva = manualIvaShare;
-        row.base_totale = round2(
-          n2(row.base_totale) - previousIva + manualIvaShare
-        );
-      }
-      generale.iva = manualIvaTotal;
-    }
 
     if (hasParsedOneri) {
       const perequazioneRows = primaries.filter(
@@ -5416,8 +5394,7 @@ exports.calculateSession = async function ({
       parsedOneriPerequazioneAcconto,
       parsedAccontoImporto,
       parsedAccontoDepFog,
-      parsedAccontoTotale,
-      calculationContext?.parsedIvaNormale ?? null
+      parsedAccontoTotale
     );
 
     if (generaleResult.meta.appliedTariff?.fallback_used) {

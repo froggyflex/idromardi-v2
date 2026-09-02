@@ -12,6 +12,22 @@ function round(value, decimals) {
   return Math.round((numberOrZero(value) + Number.EPSILON) * factor) / factor;
 }
 
+function calculateRowVat({
+  acquedotto = 0,
+  fognatura = 0,
+  depurazione = 0,
+  quotaFissa = 0,
+  rate = 0.1,
+} = {}) {
+  const taxableBase =
+    numberOrZero(acquedotto) +
+    numberOrZero(fognatura) +
+    numberOrZero(depurazione) +
+    numberOrZero(quotaFissa);
+
+  return round(taxableBase * numberOrZero(rate), 2);
+}
+
 function effectiveNucleus(value, fallback = DEFAULT_NUCLEUS_SIZE) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -216,6 +232,7 @@ function allocateTariffConsumption({
 module.exports = {
   DEFAULT_NUCLEUS_SIZE,
   allocateTariffConsumption,
+  calculateRowVat,
   effectiveNucleus,
   buildTariffDateSegments,
   addUtcDays,

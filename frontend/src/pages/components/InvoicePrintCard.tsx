@@ -6,7 +6,11 @@ type InvoicePrintCardProps = {
 };
 
 function euro(v: any) {
-  return Number(v ?? 0).toFixed(2);
+  const value = Number(v ?? 0);
+  return new Intl.NumberFormat("it-IT", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
 function num(v: any) {

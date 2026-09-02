@@ -12,7 +12,10 @@ function n(v) {
 }
 
 function euro(v) {
-  return n(v).toFixed(2);
+  return new Intl.NumberFormat("it-IT", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n(v));
 }
 
 function intVal(v, fallback = "-") {

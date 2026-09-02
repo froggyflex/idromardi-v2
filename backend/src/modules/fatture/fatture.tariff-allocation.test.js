@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {
   allocateTariffConsumption,
   buildTariffDateSegments,
+  calculateRowVat,
   effectiveNucleus,
   getTierSpan,
 } = require("./tariff-allocation");
@@ -19,6 +20,30 @@ test("uses the legacy household fallback only when nucleus is missing", () => {
   assert.equal(effectiveNucleus(0), 3);
   assert.equal(effectiveNucleus(null), 3);
   assert.equal(effectiveNucleus(2), 2);
+});
+
+test("calculates row IVA only from taxable row services", () => {
+  assert.equal(
+    calculateRowVat({
+      acquedotto: 0,
+      fognatura: 0,
+      depurazione: 0,
+      quotaFissa: 1.44,
+    }),
+    0.14
+  );
+  assert.equal(
+    calculateRowVat({
+      acquedotto: 0,
+      fognatura: 0,
+      depurazione: 0,
+      quotaFissa: 1.44,
+      oneri: 2.5,
+      oneriPerequazione: 3.73,
+      acconto: 8.65,
+    }),
+    0.14
+  );
 });
 
 test("interprets configured integer bands without losing cubic metres", () => {
