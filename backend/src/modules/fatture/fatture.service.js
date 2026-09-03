@@ -5900,6 +5900,172 @@ exports.createImportedDocument = async function (payload) {
     throw new Error("originalFilename mancante");
   }
 
+  if (payload.manualEntry === true) {
+    const invalidManualEntry = (message) => {
+      const err = new Error(message);
+      err.statusCode = 400;
+      return err;
+    };
+    const manualConsumption = Number(payload.consumoGlobaleMc);
+    const manualTotal = Number(payload.importoTotaleDaPagare);
+
+    if (!payload.providerId) {
+      throw invalidManualEntry("providerId mancante per l'inserimento manuale");
+    }
+    if (!payload.dataInizioPeriodo || !payload.dataFinePeriodo) {
+      throw invalidManualEntry("Periodo fatturato incompleto per l'inserimento manuale");
+    }
+    if (payload.dataInizioPeriodo > payload.dataFinePeriodo) {
+      throw invalidManualEntry("La data iniziale non puo essere successiva alla data finale");
+    }
+    if (
+      payload.consumoGlobaleMc === null ||
+      payload.consumoGlobaleMc === undefined ||
+      payload.consumoGlobaleMc === "" ||
+      !Number.isFinite(manualConsumption) ||
+      manualConsumption < 0
+    ) {
+      throw invalidManualEntry("Consumo globale non valido per l'inserimento manuale");
+    }
+    if (
+      payload.importoTotaleDaPagare === null ||
+      payload.importoTotaleDaPagare === undefined ||
+      payload.importoTotaleDaPagare === "" ||
+      !Number.isFinite(manualTotal) ||
+      manualTotal < 0
+    ) {
+      throw invalidManualEntry("Totale documento non valido per l'inserimento manuale");
+    }
+
+    const allowedBillTypes = new Set(["estimated", "actual", "mixed", "unknown"]);
+    const billType = allowedBillTypes.has(payload.billType) ? payload.billType : "unknown";
+    if (payload.sessionId) {
+      await ensureFattureSessionContextColumns();
+    }
+    const conn = await db.getConnection();
+
+    try {
+      await conn.beginTransaction();
+
+      if (payload.sessionId) {
+        const [sessionRows] = await conn.query(
+          `
+          SELECT id
+          FROM fatture_sessioni
+          WHERE id = ? AND id_condominio = ?
+          LIMIT 1
+          FOR UPDATE
+          `,
+          [payload.sessionId, payload.condominioId]
+        );
+
+        if (!sessionRows.length) {
+          const err = new Error("Sessione fatturazione non trovata per il condominio indicato");
+          err.statusCode = 404;
+          throw err;
+        }
+      }
+
+      const parseStatus = payload.sessionId ? "imported" : "reviewed";
+      const [insertResult] = await conn.query(
+        `
+        INSERT INTO imported_invoice_documents (
+          condominio_id,
+          provider_id,
+          original_filename,
+          stored_filename,
+          mime_type,
+          file_size_bytes,
+          numero_bolletta,
+          codice_fornitura,
+          codice_cliente,
+          punto_erogazione,
+          matricola_contatore,
+          intestatario,
+          indirizzo_fornitura,
+          fornitore_servizi,
+          bill_type,
+          data_inizio_periodo,
+          data_fine_periodo,
+          consumo_globale_mc,
+          importo_totale_da_pagare,
+          parser_version,
+          parser_confidence,
+          parse_status,
+          validation_status,
+          parsed_payload_json,
+          validation_json,
+          parser_error_text,
+          linked_session_id,
+          parsed_at,
+          reviewed_at,
+          imported_at
+        ) VALUES (
+          ?, ?, ?, NULL, 'application/x-idromardi-manual', 0,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          'manual-entry-v1', 1, ?, 'valid', ?, ?, NULL, ?, NOW(), NOW(),
+          CASE WHEN ? IS NULL THEN NULL ELSE NOW() END
+        )
+        `,
+        [
+          payload.condominioId,
+          payload.providerId ?? null,
+          payload.originalFilename,
+          payload.numeroBolletta ?? null,
+          payload.codiceFornitura ?? null,
+          payload.codiceCliente ?? null,
+          payload.puntoErogazione ?? null,
+          payload.matricolaContatore ?? null,
+          payload.intestatario ?? null,
+          payload.indirizzoFornitura ?? null,
+          payload.fornitoreServizi ?? null,
+          billType,
+          payload.dataInizioPeriodo ?? null,
+          payload.dataFinePeriodo ?? null,
+          payload.consumoGlobaleMc ?? null,
+          payload.importoTotaleDaPagare ?? null,
+          parseStatus,
+          payload.parsedPayload !== undefined ? JSON.stringify(payload.parsedPayload) : null,
+          payload.validation !== undefined ? JSON.stringify(payload.validation) : null,
+          payload.sessionId ?? null,
+          payload.sessionId ?? null,
+        ]
+      );
+
+      const documentId = insertResult.insertId;
+
+      if (payload.sessionId) {
+        await conn.query(
+          `UPDATE imported_invoice_documents SET linked_session_id = NULL WHERE linked_session_id = ? AND id <> ?`,
+          [payload.sessionId, documentId]
+        );
+        await conn.query(
+          `
+          UPDATE fatture_sessioni
+          SET
+            imported_document_id = ?,
+            id_casa_idrica = COALESCE(?, id_casa_idrica)
+          WHERE id = ?
+          `,
+          [documentId, payload.providerId ?? null, payload.sessionId]
+        );
+      }
+
+      const [rows] = await conn.query(
+        `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
+        [documentId]
+      );
+
+      await conn.commit();
+      return { ok: true, document: rows[0] || null };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
   const sql = `
     INSERT INTO imported_invoice_documents (
       condominio_id,

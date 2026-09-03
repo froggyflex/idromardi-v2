@@ -712,6 +712,13 @@ export default function CondominioFatturePage() {
     return cleanImportedFilename(doc.original_filename);
   }
 
+  function isManualImportedDocument(doc: ImportedInvoiceDocument) {
+    return (
+      doc.parser_version === "manual-entry-v1" ||
+      String(doc.original_filename || "").startsWith("Inserimento manuale")
+    );
+  }
+
   function formatAvailablePeriodLabel(period: Periodo) {
     const fullDate =
       period.data_lettura_operatore || period.data_lettura_casa_idrica;
@@ -1152,6 +1159,7 @@ export default function CondominioFatturePage() {
         setSelectedImportedId(null);
         setImportedDocEdit(null);
         setEditingImportedDoc(false);
+        setCreatingImport(false);
         setSelectedDoc(null);
         setAnnoTariffa("");
         setImportedDocYear(null);
@@ -1763,6 +1771,7 @@ function resetParsedDocumentState() {
   setSelectedImportedDoc(null);
   setImportedDocEdit(null);
   setEditingImportedDoc(false);
+  setCreatingImport(false);
   setSelectedDoc(null);
   setImportedDocYear(null);
   setParsedImpCons(0);
@@ -2410,6 +2419,72 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     return value === null || value === undefined ? "" : String(value);
   }
 
+  function toDateInputValue(value?: string | null): string {
+    const parsed = parseItalianDate(value);
+    if (!parsed) return "";
+
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function buildEmptyImportedDocumentEditForm(): ImportedDocumentEditForm {
+    const previousReading = contatoreGenerale?.precedente ?? valPrec;
+    const currentReading = contatoreGenerale?.attuale ?? valAtt;
+    const hasReadings =
+      previousReading !== "" &&
+      currentReading !== "" &&
+      Number.isFinite(Number(previousReading)) &&
+      Number.isFinite(Number(currentReading));
+    const resolvedProviderId =
+      session?.id_casa_idrica || providerId || importProviderId || "";
+
+    return {
+      providerId: editValue(resolvedProviderId),
+      numeroBolletta: "",
+      codiceFornitura: "",
+      codiceCliente: "",
+      puntoErogazione: "",
+      matricolaContatore: "",
+      intestatario: "",
+      indirizzoFornitura: "",
+      fornitoreServizi: "",
+      billType: "unknown",
+      dataInizioPeriodo: toDateInputValue(getInternalPeriodDate(periodoPrecedente)),
+      dataFinePeriodo: toDateInputValue(getInternalPeriodDate(periodoAttuale)),
+      consumoGlobaleMc: editValue(
+        hasReadings ? Math.max(0, Number(currentReading) - Number(previousReading)) : ""
+      ),
+      importoTotaleDaPagare: "",
+      letturaPrecedente: editValue(previousReading),
+      letturaAttuale: editValue(currentReading),
+      giorniQF: editValue(giorniQf),
+      giorniConsumi: editValue(giorniConsumi),
+      acquedotto: "",
+      depFog: "",
+      quotaFissa: "",
+      oneri: "",
+      iva: "",
+      totaleLettura: "",
+      giorniAcconto: editValue(giorniAcconto),
+      mcAcconto: "",
+      acquedottoAcconto: "",
+      depFogAcconto: "",
+      quotaFissaAcconto: "",
+      oneriAcconto: "",
+      ivaAcconto: "",
+      totaleAcconto: "",
+      mcStorno: "",
+      acquedottoStorno: "",
+      depFogStorno: "",
+      quotaFissaStorno: "",
+      oneriStorno: "",
+      ivaStorno: "",
+      totaleStorno: "",
+    };
+  }
+
   function buildImportedDocumentEditForm(document: ImportedInvoiceDocument): ImportedDocumentEditForm {
     const payloadJson =
       typeof document.parsed_payload_json === "string"
@@ -2486,7 +2561,15 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
   }
 
   function openImportedDocumentEditor(document: ImportedInvoiceDocument) {
+    setCreatingImport(false);
     setImportedDocEdit(buildImportedDocumentEditForm(document));
+    setEditingImportedDoc(true);
+    setError(null);
+  }
+
+  function openManualDocumentEditor() {
+    setCreatingImport(true);
+    setImportedDocEdit(buildEmptyImportedDocumentEditForm());
     setEditingImportedDoc(true);
     setError(null);
   }
@@ -2496,7 +2579,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
   }
 
   async function saveImportedDocumentManualEdit() {
-    if (!selectedImportedDoc?.id || !importedDocEdit) return;
+    if (!importedDocEdit) return;
 
     const optionalNumber = (value: string, label: string) => {
       if (value.trim() === "") return null;
@@ -2511,11 +2594,25 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       setSavingImportedDoc(true);
       setError(null);
       const form = importedDocEdit;
+      const isNewManualDocument = creatingImport || !selectedImportedDoc?.id;
+
+      if (isNewManualDocument && !condominioId) {
+        throw new Error("Condominio non disponibile per l'inserimento manuale.");
+      }
+      if (isNewManualDocument && !fatturaId) {
+        throw new Error("Apri prima un periodo di fatturazione.");
+      }
+      if (isNewManualDocument && !form.providerId) {
+        throw new Error("Seleziona il provider della bolletta.");
+      }
+      if (isNewManualDocument && (!form.dataInizioPeriodo || !form.dataFinePeriodo)) {
+        throw new Error("Inserisci la data iniziale e finale del periodo fatturato.");
+      }
       if (form.dataInizioPeriodo && form.dataFinePeriodo && form.dataInizioPeriodo > form.dataFinePeriodo) {
         throw new Error("La data di inizio periodo non può essere successiva alla data di fine.");
       }
 
-      const currentPayload = getParsedPayloadObject(selectedImportedDoc.parsed_payload_json) || {};
+      const currentPayload = getParsedPayloadObject(selectedImportedDoc?.parsed_payload_json) || {};
       const mainConsumption = optionalNumber(form.consumoGlobaleMc, "Consumo globale");
       const previousReading = optionalNumber(form.letturaPrecedente, "Lettura precedente");
       const currentReading = optionalNumber(form.letturaAttuale, "Lettura attuale");
@@ -2525,6 +2622,15 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           : mainConsumption;
       if (inferredConsumption !== null && inferredConsumption < 0) {
         throw new Error("La lettura attuale non può essere inferiore alla lettura precedente.");
+      }
+      const resolvedMainConsumption = inferredConsumption;
+      const documentTotal = optionalNumber(form.importoTotaleDaPagare, "Totale documento");
+
+      if (isNewManualDocument && resolvedMainConsumption === null) {
+        throw new Error("Inserisci il consumo globale oppure entrambe le letture del contatore generale.");
+      }
+      if (isNewManualDocument && documentTotal === null) {
+        throw new Error("Inserisci il totale del documento.");
       }
 
       const manualOverrides = {
@@ -2570,8 +2676,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         punto_erogazione: form.puntoErogazione.trim() || null,
         fornitore_servizi: form.fornitoreServizi.trim() || null,
         bill_type: form.billType || "unknown",
-        consumo_globale_mc: mainConsumption,
-        importo_totale_da_pagare: optionalNumber(form.importoTotaleDaPagare, "Totale documento"),
+        consumo_globale_mc: resolvedMainConsumption,
+        importo_totale_da_pagare: documentTotal,
         anagrafica: {
           ...(currentPayload?.anagrafica || {}),
           codice_cliente: form.codiceCliente.trim() || null,
@@ -2581,47 +2687,108 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         },
         manual_overrides: manualOverrides,
       };
-      const existingValidation = getParsedPayloadObject(selectedImportedDoc.validation_json) || {};
-      const response = await api.put(
-        `/fatture/imported-documents/${selectedImportedDoc.id}/parsed-result`,
-        {
-          providerId: form.providerId || null,
-          numeroBolletta: form.numeroBolletta.trim() || null,
-          codiceFornitura: form.codiceFornitura.trim() || null,
-          codiceCliente: form.codiceCliente.trim() || null,
-          puntoErogazione: form.puntoErogazione.trim() || null,
-          matricolaContatore: form.matricolaContatore.trim() || null,
-          intestatario: form.intestatario.trim() || null,
-          indirizzoFornitura: form.indirizzoFornitura.trim() || null,
-          fornitoreServizi: form.fornitoreServizi.trim() || null,
-          billType: form.billType || "unknown",
-          dataInizioPeriodo: form.dataInizioPeriodo || null,
-          dataFinePeriodo: form.dataFinePeriodo || null,
-          consumoGlobaleMc: mainConsumption,
-          importoTotaleDaPagare: optionalNumber(form.importoTotaleDaPagare, "Totale documento"),
-          parserVersion: selectedImportedDoc.parser_version || "manual-entry-v1",
-          parserConfidence: 1,
-          parseStatus: selectedImportedDoc.parse_status === "imported" ? "imported" : "reviewed",
-          validationStatus: "valid",
-          parsedPayload,
-          validation: {
-            ...existingValidation,
-            manual_review: { edited_at: manualOverrides.edited_at, source: "fatturazione" },
+      const existingValidation = getParsedPayloadObject(selectedImportedDoc?.validation_json) || {};
+      const savePayload = {
+        providerId: form.providerId || null,
+        numeroBolletta: form.numeroBolletta.trim() || null,
+        codiceFornitura: form.codiceFornitura.trim() || null,
+        codiceCliente: form.codiceCliente.trim() || null,
+        puntoErogazione: form.puntoErogazione.trim() || null,
+        matricolaContatore: form.matricolaContatore.trim() || null,
+        intestatario: form.intestatario.trim() || null,
+        indirizzoFornitura: form.indirizzoFornitura.trim() || null,
+        fornitoreServizi: form.fornitoreServizi.trim() || null,
+        billType: form.billType || "unknown",
+        dataInizioPeriodo: form.dataInizioPeriodo || null,
+        dataFinePeriodo: form.dataFinePeriodo || null,
+        consumoGlobaleMc: resolvedMainConsumption,
+        importoTotaleDaPagare: documentTotal,
+        parserVersion: selectedImportedDoc?.parser_version || "manual-entry-v1",
+        parserConfidence: 1,
+        parseStatus: selectedImportedDoc?.parse_status === "imported" ? "imported" : "reviewed",
+        validationStatus: "valid",
+        parsedPayload,
+        validation: {
+          ...existingValidation,
+          manual_review: {
+            edited_at: manualOverrides.edited_at,
+            source: isNewManualDocument ? "fatturazione_manual_entry" : "fatturazione",
           },
-          parserErrorText: null,
-        }
-      );
+        },
+        parserErrorText: null,
+      };
+      const manualPeriodLabel = [form.dataInizioPeriodo, form.dataFinePeriodo]
+        .filter(Boolean)
+        .join(" - ");
+      const response = isNewManualDocument
+        ? await api.post("/fatture/imported-documents", {
+            ...savePayload,
+            manualEntry: true,
+            condominioId,
+            sessionId: fatturaId,
+            originalFilename: `Inserimento manuale${manualPeriodLabel ? ` ${manualPeriodLabel}` : ""}`,
+            validation: {
+              ...savePayload.validation,
+              manual_entry: {
+                created_at: manualOverrides.edited_at,
+                source: "fatturazione",
+              },
+            },
+          })
+        : await api.put(
+            `/fatture/imported-documents/${selectedImportedDoc!.id}/parsed-result`,
+            savePayload
+          );
       const rawDocument = response.data?.document;
       const savedDocument = (Array.isArray(rawDocument) ? rawDocument[0] : rawDocument) || selectedImportedDoc;
+      if (!savedDocument?.id) {
+        throw new Error("Il documento manuale non è stato salvato correttamente.");
+      }
       setSelectedImportedDoc(savedDocument);
       setSelectedImportedId(savedDocument.id);
-      setImportedDocs((previous) => previous.map((item) =>
-        String(item.id) === String(savedDocument.id) ? { ...item, ...savedDocument } : item
-      ));
+      setImportedDocs((previous) => {
+        const documentExists = previous.some(
+          (item) => String(item.id) === String(savedDocument.id)
+        );
+        if (!documentExists) return [savedDocument, ...previous];
+        return previous.map((item) =>
+          String(item.id) === String(savedDocument.id) ? { ...item, ...savedDocument } : item
+        );
+      });
+      if (fatturaId) {
+        const sessionId = String(fatturaId);
+        setSessions((previous) => previous.map((item: any) =>
+          String(item.id) === sessionId
+            ? {
+                ...item,
+                imported_document_id: savedDocument.id,
+                linked_imported_document_id: savedDocument.id,
+                linked_imported_original_filename: savedDocument.original_filename,
+                linked_imported_numero_bolletta: savedDocument.numero_bolletta,
+                linked_imported_data_inizio_periodo: savedDocument.data_inizio_periodo,
+                linked_imported_data_fine_periodo: savedDocument.data_fine_periodo,
+                linked_imported_importo_totale_da_pagare: savedDocument.importo_totale_da_pagare,
+              }
+            : item
+        ));
+        setCurrentSession((previous: any) => previous
+          ? { ...previous, imported_document_id: savedDocument.id }
+          : previous
+        );
+        setDetail((previous: any) => previous
+          ? {
+              ...previous,
+              session: { ...previous.session, imported_document_id: savedDocument.id },
+              linkedImportedDocument: savedDocument,
+            }
+          : previous
+        );
+      }
       setSelectedDoc(savedDocument.importo_totale_da_pagare ?? null);
       assignStateFromParsedPayload(savedDocument.parsed_payload_json);
       setImportedDocEdit(buildImportedDocumentEditForm(savedDocument));
       setEditingImportedDoc(false);
+      setCreatingImport(false);
       if (savedDocument.data_fine_periodo) {
         const year = new Date(savedDocument.data_fine_periodo).getFullYear();
         setImportedDocYear(year);
@@ -2654,6 +2821,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           setSelectedImportedDoc(document);
           setSelectedImportedId(normalizedId);
           setEditingImportedDoc(false);
+          setCreatingImport(false);
           setImportedDocEdit(document ? buildImportedDocumentEditForm(document) : null);
 
           if (!document) {
@@ -5116,7 +5284,9 @@ return (
                           </button>
 
                           <div className="mt-0.5 w-full truncate text-[10px] text-slate-500">
-                            File: {doc.original_filename || "-"}
+                            {isManualImportedDocument(doc)
+                              ? "Origine: inserimento manuale"
+                              : `File: ${doc.original_filename || "-"}`}
                           </div>
 
                           <div className="mt-0.5 text-[11px] font-semibold text-slate-700">
@@ -5302,46 +5472,73 @@ return (
             <h4 className="text-sm font-bold text-slate-900">Inserimento e correzione manuale</h4>
           </div>
           <p className="mt-1 text-xs text-slate-600">
-            Correggi i campi normalmente estratti dal PDF. I valori salvati sostituiscono quelli del parser nel calcolo.
+            Inserisci i dati anche senza file, oppure correggi quelli estratti. I valori salvati saranno usati nel calcolo.
           </p>
         </div>
         <button
           type="button"
-          disabled={!selectedImportedDoc || loadingImportedDetail}
+          disabled={loadingImportedDetail || savingImportedDoc}
           onClick={() => {
-            if (!selectedImportedDoc) return;
             if (editingImportedDoc) {
-              setImportedDocEdit(buildImportedDocumentEditForm(selectedImportedDoc));
+              setImportedDocEdit(
+                selectedImportedDoc && !creatingImport
+                  ? buildImportedDocumentEditForm(selectedImportedDoc)
+                  : null
+              );
               setEditingImportedDoc(false);
-            } else {
+              setCreatingImport(false);
+            } else if (selectedImportedDoc) {
               openImportedDocumentEditor(selectedImportedDoc);
+            } else {
+              openManualDocumentEditor();
             }
           }}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 text-sm font-bold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Pencil className="h-4 w-4" />
-          {editingImportedDoc ? "Annulla modifica" : "Modifica dati estratti"}
+          {editingImportedDoc
+            ? creatingImport
+              ? "Annulla inserimento"
+              : "Annulla modifica"
+            : selectedImportedDoc
+            ? "Modifica dati estratti"
+            : "Inserisci manualmente"}
         </button>
       </div>
 
-      {!selectedImportedDoc ? (
-        <div className="px-4 py-6 text-center text-sm text-slate-500">
-          Seleziona un documento caricato per inserire o correggere i dati.
-        </div>
-      ) : !editingImportedDoc || !importedDocEdit ? (
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-4 text-sm sm:grid-cols-4">
-          {[
-            ["Bolletta", selectedImportedDoc.numero_bolletta || "-"],
-            ["Fornitura", selectedImportedDoc.codice_fornitura || "-"],
-            ["Periodo", `${selectedImportedDoc.data_inizio_periodo?.slice(0, 10) || "-"} → ${selectedImportedDoc.data_fine_periodo?.slice(0, 10) || "-"}`],
-            ["Totale", `€ ${formatDecimalIt(selectedImportedDoc.importo_totale_da_pagare)}`],
-          ].map(([label, value]) => (
-            <div key={label}>
-              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
-              <div className="mt-0.5 truncate font-semibold text-slate-800">{value}</div>
+      {!editingImportedDoc || !importedDocEdit ? (
+        selectedImportedDoc ? (
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-4 text-sm sm:grid-cols-4">
+            {[
+              ["Bolletta", selectedImportedDoc.numero_bolletta || "-"],
+              ["Fornitura", selectedImportedDoc.codice_fornitura || "-"],
+              ["Periodo", `${selectedImportedDoc.data_inizio_periodo?.slice(0, 10) || "-"} → ${selectedImportedDoc.data_fine_periodo?.slice(0, 10) || "-"}`],
+              ["Totale", `€ ${formatDecimalIt(selectedImportedDoc.importo_totale_da_pagare)}`],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
+                <div className="mt-0.5 truncate font-semibold text-slate-800">{value}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3 px-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-slate-800">Nessun documento associato</div>
+              <p className="mt-1 text-xs text-slate-500">
+                Puoi caricare e analizzare un file oppure compilare direttamente i dati necessari alla fatturazione.
+              </p>
             </div>
-          ))}
-        </div>
+            <button
+              type="button"
+              onClick={openManualDocumentEditor}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 text-sm font-bold text-amber-800 transition hover:bg-amber-100"
+            >
+              <Pencil className="h-4 w-4" />
+              Compila senza file
+            </button>
+          </div>
+        )
       ) : (
         <div className="space-y-5 p-4">
           <section>
@@ -5463,7 +5660,9 @@ return (
 
           <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-slate-500">
-              Il documento verrà marcato come corretto manualmente; i dati originali del file restano disponibili nel payload.
+              {creatingImport
+                ? "Verrà creato un documento manuale e associato a questo periodo di fatturazione."
+                : "Il documento verrà marcato come corretto manualmente; i dati originali del file restano disponibili."}
             </p>
             <button
               type="button"
@@ -5472,7 +5671,11 @@ return (
               className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {savingImportedDoc ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {savingImportedDoc ? "Salvataggio..." : "Salva correzioni"}
+              {savingImportedDoc
+                ? "Salvataggio..."
+                : creatingImport
+                ? "Salva e associa"
+                : "Salva correzioni"}
             </button>
           </div>
         </div>
