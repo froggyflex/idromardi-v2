@@ -3010,7 +3010,12 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       setSelectedImportedDoc(linkedDoc);
       setSelectedImportedId(String(linkedDoc.id));
     }
-    setPendingAutoCalculateSessionId(String(s.id));
+    // Calculated sessions are immutable snapshots when opened. Re-running them
+    // here would alter the credit/storno chain and is forbidden when later
+    // billing periods already exist. Draft sessions can still be prepared
+    // automatically for the operator.
+    const shouldAutoCalculate = String(s?.stato || "").toUpperCase() === "BOZZA";
+    setPendingAutoCalculateSessionId(shouldAutoCalculate ? String(s.id) : null);
     navigate(`/condomini/${condominioId}/fatture/${s.id}`);
   }
 
