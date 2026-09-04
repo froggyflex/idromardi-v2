@@ -404,7 +404,10 @@ exports.createImportedDocument = async (req, res) => {
 exports.listImportedDocumentsByCondominio = async (req, res) => {
   try {
     const { condominioId } = req.params;
-    const result = await service.listImportedDocumentsByCondominio(condominioId);
+    const result = await service.listImportedDocumentsByCondominio(
+      condominioId,
+      req.query.sessionId || null
+    );
     res.json(result);
   } catch (err) {
     console.error("listImportedDocumentsByCondominio error:", err);

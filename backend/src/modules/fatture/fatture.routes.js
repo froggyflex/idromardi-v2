@@ -20,7 +20,19 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (path.extname(String(file.originalname || "")).toLowerCase() !== ".txt") {
+      const error = new Error("Per il momento e possibile caricare solo file TXT");
+      error.statusCode = 415;
+      cb(error);
+      return;
+    }
+
+    cb(null, true);
+  },
+});
 
 router.post("/sessioni", controller.createOrLoadSession);
 router.get( "/condomini/:condominioId/fatture/:id", controller.getSessionDetail);

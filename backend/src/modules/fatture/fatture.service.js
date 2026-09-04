@@ -13,6 +13,7 @@ const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
 const { buildAccontoAccountingCheck } = require("./acconto-accounting");
+const { roundPayableToTenth } = require("./accounting-rounding");
 const {
   addUtcDays,
   allocateTariffConsumption,
@@ -2200,6 +2201,32 @@ exports.uploadImportedDocument = async ({ file, body }) => {
   let insertedDocumentId = null;
 
   try {
+    if (path.extname(String(file.originalname || "")).toLowerCase() !== ".txt") {
+      const err = new Error("Per il momento e possibile caricare solo file TXT");
+      err.statusCode = 415;
+      throw err;
+    }
+
+    if (body.sessionId) {
+      await ensureFattureSessionContextColumns();
+      const [sessionRows] = await db.query(
+        `
+        SELECT id
+        FROM fatture_sessioni
+        WHERE BINARY id = BINARY ?
+          AND BINARY id_condominio = BINARY ?
+        LIMIT 1
+        `,
+        [body.sessionId, body.condominioId]
+      );
+
+      if (!sessionRows.length) {
+        const err = new Error("Periodo di fatturazione non trovato per il condominio indicato");
+        err.statusCode = 404;
+        throw err;
+      }
+    }
+
     storedDocument = await saveImportedDocument({
       sourcePath: file.path,
       condominioId: body.condominioId,
@@ -2216,8 +2243,9 @@ exports.uploadImportedDocument = async ({ file, body }) => {
         mime_type,
         file_size_bytes,
         parse_status,
-        validation_status
-      ) VALUES (?, ?, ?, ?, ?, ?, 'uploaded', 'pending')
+        validation_status,
+        linked_session_id
+      ) VALUES (?, ?, ?, ?, ?, ?, 'uploaded', 'pending', ?)
     `;
 
     const params = [
@@ -2227,6 +2255,7 @@ exports.uploadImportedDocument = async ({ file, body }) => {
       storedDocument.storedFilename,
       file.mimetype || null,
       file.size || null,
+      body.sessionId || null,
     ];
 
     const result = await db.query(sql, params);
@@ -2318,7 +2347,7 @@ function yearDaysCount(year) {
   const leap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
   return leap ? 366 : 365;
 }
-async function loadOpenAccontoCredits(conn, idUtenza) {
+async function loadOpenAccontoCredits(conn, idUtenza, excludedFatturaId = null) {
   await ensureFattureAccontiTransitionColumns();
 
   const [rows] = await conn.query(
@@ -2339,8 +2368,14 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
     LEFT JOIN fatture_acconti_movimenti s
       ON s.source_movimento_id = m.id
      AND s.tipo_movimento = 'STORNO_APPLICATO'
+     AND (? IS NULL OR BINARY s.id_fattura <> BINARY ?)
     WHERE m.id_utenza = ?
       AND m.tipo_movimento IN ('ACCONTO_CARICATO', 'RETTIFICA_POS')
+      AND (
+        ? IS NULL
+        OR BINARY m.id_fattura <> BINARY ?
+        OR COALESCE(m.origine_credito, '') = 'LEGACY'
+      )
     GROUP BY
       m.id, m.id_utenza, m.id_fattura, m.id_riga_fattura,
       m.created_at, m.origine_credito, m.periodo_origine,
@@ -2350,7 +2385,13 @@ async function loadOpenAccontoCredits(conn, idUtenza) {
       OR ROUND(m.importo_mc - COALESCE(SUM(s.importo_mc), 0), 3) > 0
     ORDER BY m.created_at ASC, m.id ASC
     `,
-    [idUtenza]
+    [
+      excludedFatturaId,
+      excludedFatturaId,
+      idUtenza,
+      excludedFatturaId,
+      excludedFatturaId,
+    ]
   );
 
   return rows.map((r) => ({
@@ -4126,15 +4167,6 @@ async function calculateInterni(
     const totNuae = condo?.nuae != null ? Math.max(1, n2(condo.nuae)) : 1;
     const qfPerNuae = totNuae > 0 ? n2(generale.qfTot) / totNuae : 0;
 
-    // ---------- Clear snapshot ----------
-    await conn.query(
-      `DELETE FROM fatture_acconti_movimenti
-       WHERE id_fattura = ?
-         AND COALESCE(origine_credito, '') <> 'LEGACY'`,
-      [session.id]
-    );
-    await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
-
     // ---------- Group by UNIT (billing_group_id for doppio) ----------
     const byUnit = new Map();
 
@@ -4611,7 +4643,11 @@ async function calculateInterni(
           : [row.id_utenza];
         const credits = [];
         for (const idUtenza of memberIds) {
-          const memberCredits = await loadOpenAccontoCredits(conn, idUtenza);
+          const memberCredits = await loadOpenAccontoCredits(
+            conn,
+            idUtenza,
+            session.id
+          );
           credits.push(...memberCredits);
           for (const credit of memberCredits) {
             const openEuro = Math.max(0, n2(credit.open_euro));
@@ -4889,9 +4925,10 @@ async function calculateInterni(
     // Keep the TF conguaglio value visible as calculated; the minimum correction
     // is carried by ARR so TF2 remains equal across eligible rows.
     for (const r of rows) {
+      const minimumPayable = getMinimumPayableForRow(r);
       const beforeMinimum = round2(n2(r.base_totale) + n2(r.conguaglio));
       const beforeRound = round2(beforeMinimum + n2(r._minimum_payable_adjustment));
-      const rounded = roundToNearestTenth(beforeRound);
+      const rounded = roundPayableToTenth(beforeRound, minimumPayable);
       const arr = round2(n2(r._minimum_payable_adjustment) + rounded - beforeRound);
 
       r.imp_arr = arr;
@@ -5046,6 +5083,16 @@ async function calculateInterni(
             },
           ]
         : [];
+
+    // Replace the previous snapshot only after every accounting check passes.
+    // This keeps the last valid rows intact when a recalculation is rejected.
+    await conn.query(
+      `DELETE FROM fatture_acconti_movimenti
+       WHERE id_fattura = ?
+         AND COALESCE(origine_credito, '') <> 'LEGACY'`,
+      [session.id]
+    );
+    await conn.query(`DELETE FROM fatture_righe WHERE id_fattura = ?`, [session.id]);
 
     // ------------------------------------------------------------
     // Persist fatture_righe
@@ -6099,33 +6146,70 @@ exports.createImportedDocument = async function (payload) {
   return { ok: true, document: rows[0] || null };
 }
 
-exports.listImportedDocumentsByCondominio = async function (condominioId) {
+exports.listImportedDocumentsByCondominio = async function (condominioId, sessionId = null) {
+  if (sessionId) {
+    const [sessionRows] = await db.query(
+      `
+      SELECT id
+      FROM fatture_sessioni
+      WHERE BINARY id = BINARY ?
+        AND BINARY id_condominio = BINARY ?
+      LIMIT 1
+      `,
+      [sessionId, condominioId]
+    );
+
+    if (!sessionRows.length) {
+      const err = new Error("Periodo di fatturazione non trovato per il condominio indicato");
+      err.statusCode = 404;
+      throw err;
+    }
+  }
+
   const sql = `
     SELECT
-      id,
-      condominio_id,
-      provider_id,
-      original_filename,
-      numero_bolletta,
-      codice_fornitura,
-      fornitore_servizi,
-      bill_type,
-      data_inizio_periodo,
-      data_fine_periodo,
-      consumo_globale_mc,
-      importo_totale_da_pagare,
-      parse_status,
-      validation_status,
-      linked_session_id,
-      uploaded_at,
-      parsed_at,
-      imported_at
-    FROM imported_invoice_documents
-    WHERE condominio_id = ?
-    ORDER BY created_at DESC
+      iid.id,
+      iid.condominio_id,
+      iid.provider_id,
+      iid.original_filename,
+      iid.numero_bolletta,
+      iid.codice_fornitura,
+      iid.fornitore_servizi,
+      iid.bill_type,
+      iid.data_inizio_periodo,
+      iid.data_fine_periodo,
+      iid.consumo_globale_mc,
+      iid.importo_totale_da_pagare,
+      iid.parse_status,
+      iid.validation_status,
+      iid.linked_session_id,
+      iid.uploaded_at,
+      iid.parsed_at,
+      iid.imported_at
+    FROM imported_invoice_documents iid
+    WHERE BINARY iid.condominio_id = BINARY ?
+      AND (
+        ? IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM fatture_sessioni fs
+          WHERE BINARY fs.id = BINARY ?
+            AND BINARY fs.id_condominio = BINARY ?
+            AND (
+              iid.id = fs.imported_document_id
+              OR BINARY iid.linked_session_id = BINARY fs.id
+            )
+        )
+      )
+    ORDER BY iid.created_at DESC
   `;
 
-  const rows = await db.query(sql, [condominioId]);
+  const [rows] = await db.query(sql, [
+    condominioId,
+    sessionId,
+    sessionId,
+    condominioId,
+  ]);
   return { ok: true, items: rows };
 }
 

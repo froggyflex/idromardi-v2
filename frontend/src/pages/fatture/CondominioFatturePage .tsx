@@ -374,6 +374,8 @@ export default function CondominioFatturePage() {
     const [deletingImportId, setDeletingImportId] = useState<string | null>(null);
     const [dettaglioByUtenza, setDettaglioByUtenza]  = useState<Record<string, any[]>>({})
     const [importedDocYear, setImportedDocYear] = useState<number | null>(null);
+    const activeFatturaIdRef = useRef<string | null>(fatturaId || null);
+    activeFatturaIdRef.current = fatturaId || null;
  
     const [exportJob, setExportJob] = useState<any>(null);
 
@@ -396,6 +398,23 @@ export default function CondominioFatturePage() {
     const importedPageSize = 3;
 
     const filteredImportedDocs = importedDocs.filter((doc: any) => {
+      const activeSession = sessions.find(
+        (item: any) => String(item.id) === String(fatturaId || "")
+      );
+      const activeDocumentId =
+        currentSession?.imported_document_id ||
+        activeSession?.imported_document_id ||
+        activeSession?.linked_imported_document_id;
+      const belongsToActiveSnapshot = Boolean(
+        fatturaId &&
+          (
+            String(doc.linked_session_id || "") === String(fatturaId) ||
+            String(doc.id || "") === String(activeDocumentId || "")
+          )
+      );
+
+      if (!belongsToActiveSnapshot) return false;
+
       const status = doc.parse_status || "uploaded";
 
       const search = importedSearch.toLowerCase().trim();
@@ -1174,7 +1193,13 @@ export default function CondominioFatturePage() {
   }
 
   async function uploadImportedInvoice() {
-    if (!condominioId || !importFile) return;
+    if (!condominioId || !fatturaId || !importFile) return;
+
+    if (!importFile.name.toLowerCase().endsWith(".txt")) {
+      setError("Per il momento e possibile caricare solo file TXT.");
+      setImportFile(null);
+      return;
+    }
 
     try {
       setUploadingImport(true);
@@ -1183,6 +1208,7 @@ export default function CondominioFatturePage() {
       const formData = new FormData();
       formData.append("file", importFile);
       formData.append("condominioId", String(condominioId));
+      formData.append("sessionId", String(fatturaId));
       if (importProviderId) {
         formData.append("providerId", String(importProviderId));
       }
@@ -1203,12 +1229,20 @@ export default function CondominioFatturePage() {
       setUploadingImport(false);
     }
   }
-  async function loadImportedDocuments() {
-    if (!condominioId) return;
+  async function loadImportedDocuments(sessionIdOverride: string | null = fatturaId || null) {
+    if (!condominioId || !sessionIdOverride) {
+      setImportedDocs([]);
+      return;
+    }
+
+    const requestedSessionId = String(sessionIdOverride);
     try {
       setLoadingImportedDocs(true);
-      const res = await api.get(`/fatture/imported-documents/condominio/${condominioId}`);
+      const res = await api.get(`/fatture/imported-documents/condominio/${condominioId}`, {
+        params: { sessionId: requestedSessionId },
+      });
       const documents = normalizeImportedDocuments(res.data?.items);
+      if (String(activeFatturaIdRef.current || "") !== requestedSessionId) return;
       documents.forEach((document) => {
         missingImportedDocumentIdsRef.current.delete(String(document.id));
       });
@@ -3037,18 +3071,15 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     setError(null);
 
     try {
-      const [pRes, perRes, sRes, iRes] = await Promise.all([
+      const [pRes, perRes, sRes] = await Promise.all([
         api.get("/fatture/providers"),
         api.get(`/fatture/periodi/${condominioId}`),
         api.get(`/fatture/condominio/${condominioId}`),  
-        api.get(`/fatture/imported-documents/condominio/${condominioId}`),
       ]);
 
       setProviders(pRes.data || []);
       setPeriodi(perRes.data || []);
       setSessions(sRes.data || []);
-      setImportedDocs(normalizeImportedDocuments(iRes.data?.items));
-      loadImportedDocuments();
 
        
       console.log(sRes.data)
@@ -3754,6 +3785,13 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
   }, [condominioId, fatturaId]);
 
   useEffect(() => {
+    setImportedDocs([]);
+    setSelectedImportedDoc(null);
+    setSelectedImportedId(null);
+    loadImportedDocuments(fatturaId || null);
+  }, [condominioId, fatturaId]);
+
+  useEffect(() => {
     if (contatoreGenerale) {
       setValPrec(contatoreGenerale.precedente ?? "");
       setValAtt(contatoreGenerale.attuale ?? "");
@@ -4191,7 +4229,16 @@ const impConsumo = Number(parsedImpCons ?? 0);
 const depFogValue = Number(depfog ?? 0);
 const parsedQuotaFissaFromPayload = getParsedQuotaFissaFromPayload(selectedParsedPayload);
 const quotaFissaSession = Number(session?.tot_qf ?? 0);
-const quotaFissa = quotaFissaSession > 0 ? quotaFissaSession : parsedQuotaFissaFromPayload;
+const hasManualQuotaFissaSections = [
+  selectedParsedPayload?.manual_overrides?.main?.quota_fissa,
+  selectedParsedPayload?.manual_overrides?.acconto?.quota_fissa,
+  selectedParsedPayload?.manual_overrides?.storno?.quota_fissa,
+].some((value) => manualNumber(value) !== null);
+const quotaFissa = hasManualQuotaFissaSections
+  ? parsedQuotaFissaFromPayload
+  : quotaFissaSession > 0
+  ? quotaFissaSession
+  : parsedQuotaFissaFromPayload;
 const quotaFissaAccontoValue = Number(
   selectedParsedPayload?.manual_overrides?.acconto?.quota_fissa ?? 0
 );
@@ -5183,9 +5230,19 @@ return (
 
           <input
             type="file"
-            accept=".pdf,.txt"
+            accept=".txt,text/plain"
             className="hidden"
-            onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+            onChange={(e) => {
+              const file = e.target.files?.[0] || null;
+              if (file && !file.name.toLowerCase().endsWith(".txt")) {
+                setImportFile(null);
+                setError("Per il momento e possibile caricare solo file TXT.");
+                e.target.value = "";
+                return;
+              }
+              setError(null);
+              setImportFile(file);
+            }}
           />
         </div>
       </label>
@@ -5211,7 +5268,7 @@ return (
 
       <button
         onClick={uploadImportedInvoice}
-        disabled={!importFile || uploadingImport}
+        disabled={!fatturaId || !importFile || uploadingImport}
         className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Upload className="h-4 w-4" />
@@ -5230,7 +5287,7 @@ return (
             Documenti caricati
           </h4>
           <p className="mt-0.5 text-[11px] text-slate-500">
-            Analisi e associazione dei documenti provider.
+            Solo documenti TXT associati al periodo selezionato.
           </p>
         </div>
 
@@ -5266,9 +5323,9 @@ return (
         <div className="px-4 py-8 text-center text-sm text-slate-500">
           Caricamento documenti...
         </div>
-      ) : importedDocs.length === 0 ? (
+      ) : filteredImportedDocs.length === 0 ? (
         <div className="px-4 py-8 text-center text-sm text-slate-500">
-          Nessun documento caricato.
+          Nessun documento TXT associato a questo periodo.
         </div>
       ) : (
         <>
