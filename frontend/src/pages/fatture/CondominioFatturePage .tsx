@@ -84,6 +84,8 @@ type ImportedDocumentEditForm = {
   giorniQF: string;
   giorniConsumi: string;
   acquedotto: string;
+  depurazione: string;
+  fognatura: string;
   depFog: string;
   quotaFissa: string;
   oneri: string;
@@ -2142,6 +2144,11 @@ function getParsedBuckets(payload: any, parsedSummary: any[] | undefined) {
   const manualMain = payload?.manual_overrides?.main;
   const hasManualMain =
     manualMain && Object.values(manualMain).some((value) => manualNumber(value) !== null);
+  const manualDepurazione = manualNumber(manualMain?.depurazione);
+  const manualFognatura = manualNumber(manualMain?.fognatura);
+  const manualDepFog = manualNumber(manualMain?.dep_fog);
+  const hasSeparateManualDepFog =
+    manualDepurazione !== null || manualFognatura !== null;
 
   return {
     aGiro: hasManualMain
@@ -2150,7 +2157,12 @@ function getParsedBuckets(payload: any, parsedSummary: any[] | undefined) {
           hasPeriod: true,
           consumoMc: manualNumber(manualMain.consumo_mc) ?? aGiro.consumoMc,
           acquedotto: manualNumber(manualMain.acquedotto) ?? aGiro.acquedotto,
-          depFog: manualNumber(manualMain.dep_fog) ?? aGiro.depFog,
+          depurazione: manualDepurazione ?? aGiro.depurazione,
+          fognatura: manualFognatura ?? aGiro.fognatura,
+          depFog: hasSeparateManualDepFog
+            ? Number(manualDepurazione ?? aGiro.depurazione) +
+              Number(manualFognatura ?? aGiro.fognatura)
+            : manualDepFog ?? aGiro.depFog,
           oneri: manualNumber(manualMain.oneri) ?? aGiro.oneri,
         }
       : aGiro,
@@ -2462,6 +2474,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       giorniQF: editValue(giorniQf),
       giorniConsumi: editValue(giorniConsumi),
       acquedotto: "",
+      depurazione: "",
+      fognatura: "",
       depFog: "",
       quotaFissa: "",
       oneri: "",
@@ -2511,6 +2525,10 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     const mainSupplyTotal =
       manualNumber(main.totale) ??
       (parsedMainSupply ? Number(parsedMainSupply.totale_fornitura || 0) : null);
+    const hasCombinedOnlyDepFogOverride =
+      manualNumber(main.dep_fog) !== null &&
+      manualNumber(main.depurazione) === null &&
+      manualNumber(main.fognatura) === null;
     const hasStornoValues = storno?.source && storno.source !== "none";
     const positiveStornoEditValue = (value: any) => {
       const parsed = manualNumber(value);
@@ -2537,6 +2555,16 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       giorniQF: editValue(manualNumber(manual.giorni_qf) ?? params?.giorniQF),
       giorniConsumi: editValue(manualNumber(manual.giorni_consumi) ?? params?.giorniConsumi),
       acquedotto: editValue(manualNumber(main.acquedotto) ?? buckets.aGiro.acquedotto),
+      depurazione: editValue(
+        hasCombinedOnlyDepFogOverride
+          ? null
+          : manualNumber(main.depurazione) ?? buckets.aGiro.depurazione
+      ),
+      fognatura: editValue(
+        hasCombinedOnlyDepFogOverride
+          ? null
+          : manualNumber(main.fognatura) ?? buckets.aGiro.fognatura
+      ),
       depFog: editValue(manualNumber(main.dep_fog) ?? buckets.aGiro.depFog),
       quotaFissa: editValue(mainQuotaFissa),
       oneri: editValue(manualNumber(main.oneri) ?? buckets.aGiro.oneri),
@@ -2633,6 +2661,14 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         throw new Error("Inserisci il totale del documento.");
       }
 
+      const hasSeparateDepFogInput =
+        form.depurazione.trim() !== "" || form.fognatura.trim() !== "";
+      const manualDepurazione = optionalNumber(form.depurazione, "Depurazione");
+      const manualFognatura = optionalNumber(form.fognatura, "Fognatura");
+      const manualDepFog = hasSeparateDepFogInput
+        ? Number(manualDepurazione ?? 0) + Number(manualFognatura ?? 0)
+        : optionalNumber(form.depFog, "Depurazione e fognatura");
+
       const manualOverrides = {
         schema_version: 2,
         edited_at: new Date().toISOString(),
@@ -2643,7 +2679,9 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           lettura_attuale: currentReading,
           consumo_mc: inferredConsumption,
           acquedotto: optionalNumber(form.acquedotto, "Acquedotto"),
-          dep_fog: optionalNumber(form.depFog, "Depurazione e fognatura"),
+          depurazione: manualDepurazione,
+          fognatura: manualFognatura,
+          dep_fog: manualDepFog,
           quota_fissa: optionalNumber(form.quotaFissa, "Quota fissa"),
           oneri: optionalNumber(form.oneri, "Oneri"),
           iva: optionalNumber(form.iva, "IVA lettura a giro"),
@@ -4131,6 +4169,22 @@ const selectedParsedPayload = useMemo(() => {
   }
 }, [activeImportedDocument?.parsed_payload_json]);
 
+const mainParsedBucket = useMemo(() => {
+  if (!selectedParsedPayload) return null;
+  return getParsedBuckets(
+    selectedParsedPayload,
+    summarizePeriodiAndTariffe(selectedParsedPayload)
+  ).aGiro;
+}, [selectedParsedPayload]);
+
+const mainManualOverride = selectedParsedPayload?.manual_overrides?.main;
+const hasCombinedOnlyDepFogValue =
+  manualNumber(mainManualOverride?.dep_fog) !== null &&
+  manualNumber(mainManualOverride?.depurazione) === null &&
+  manualNumber(mainManualOverride?.fognatura) === null;
+const depurazioneMainValue = Number(mainParsedBucket?.depurazione ?? 0);
+const fognaturaMainValue = Number(mainParsedBucket?.fognatura ?? 0);
+
  
 const consumo = Number(valAtt || 0) - Number(valPrec || 0);
 const impConsumo = Number(parsedImpCons ?? 0);
@@ -5614,7 +5668,8 @@ return (
               fields: [
                 ["letturaPrecedente", "Lettura precedente"], ["letturaAttuale", "Lettura attuale"],
                 ["giorniQF", "Giorni QF"], ["giorniConsumi", "Giorni consumi"],
-                ["acquedotto", "Acquedotto (€)"], ["depFog", "Depurazione + fognatura (€)"],
+                ["acquedotto", "Acquedotto (€)"], ["depurazione", "Depurazione (€)"],
+                ["fognatura", "Fognatura (€)"],
                 ["quotaFissa", "Quota fissa (€)"], ["oneri", "Oneri (€)"],
                 ["iva", "IVA (€)"], ["totaleLettura", "Totale lettura (€)"],
               ],
@@ -5714,7 +5769,7 @@ return (
                   </div>
 
                   <div className="p-5 sm:p-6">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
                       <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                           Consumo mc
@@ -5736,6 +5791,38 @@ return (
                         </div>
                         <div className="mt-1 text-xs text-slate-400">
                           Importo lettura a giro
+                        </div>
+                      </article>
+
+                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Fognatura
+                        </div>
+                        <div className="mt-2 text-2xl font-bold text-slate-900">
+                          {hasCombinedOnlyDepFogValue
+                            ? "N/D"
+                            : `€ ${formatDecimalIt(fognaturaMainValue)}`}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {hasCombinedOnlyDepFogValue
+                            ? "Disponibile solo il totale Dep./Fog."
+                            : "Importo lettura a giro"}
+                        </div>
+                      </article>
+
+                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Depurazione
+                        </div>
+                        <div className="mt-2 text-2xl font-bold text-slate-900">
+                          {hasCombinedOnlyDepFogValue
+                            ? "N/D"
+                            : `€ ${formatDecimalIt(depurazioneMainValue)}`}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {hasCombinedOnlyDepFogValue
+                            ? `Totale combinato: € ${formatDecimalIt(depFogValue)}`
+                            : "Importo lettura a giro"}
                         </div>
                       </article>
 
