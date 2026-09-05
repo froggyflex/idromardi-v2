@@ -14,6 +14,7 @@ const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
 const { buildAccontoAccountingCheck } = require("./acconto-accounting");
 const { roundPayableToTenth } = require("./accounting-rounding");
+const { prepareLaterSessionsForReplay } = require("./billing-chain");
 const {
   addUtcDays,
   allocateTariffConsumption,
@@ -23,6 +24,7 @@ const {
   toIsoDate,
 } = require("./tariff-allocation");
 const {
+  deletePdfFromR2,
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
   getPdfFromR2,
@@ -2365,6 +2367,14 @@ async function loadOpenAccontoCredits(conn, idUtenza, excludedFatturaId = null) 
       COALESCE(SUM(s.importo_euro), 0) AS euro_usato,
       COALESCE(SUM(s.importo_mc), 0) AS mc_usato
     FROM fatture_acconti_movimenti m
+    LEFT JOIN fatture_sessioni source_session
+      ON BINARY source_session.id = BINARY m.id_fattura
+    LEFT JOIN letture_sessioni source_period
+      ON source_period.id = source_session.id_periodo_attuale
+    LEFT JOIN fatture_sessioni current_session
+      ON BINARY current_session.id = BINARY ?
+    LEFT JOIN letture_sessioni current_period
+      ON current_period.id = current_session.id_periodo_attuale
     LEFT JOIN fatture_acconti_movimenti s
       ON s.source_movimento_id = m.id
      AND s.tipo_movimento = 'STORNO_APPLICATO'
@@ -2375,6 +2385,14 @@ async function loadOpenAccontoCredits(conn, idUtenza, excludedFatturaId = null) 
         ? IS NULL
         OR BINARY m.id_fattura <> BINARY ?
         OR COALESCE(m.origine_credito, '') = 'LEGACY'
+      )
+      AND (
+        ? IS NULL
+        OR source_period.period_year < current_period.period_year
+        OR (
+          source_period.period_year = current_period.period_year
+          AND source_period.period_month <= current_period.period_month
+        )
       )
     GROUP BY
       m.id, m.id_utenza, m.id_fattura, m.id_riga_fattura,
@@ -2388,7 +2406,9 @@ async function loadOpenAccontoCredits(conn, idUtenza, excludedFatturaId = null) 
     [
       excludedFatturaId,
       excludedFatturaId,
+      excludedFatturaId,
       idUtenza,
+      excludedFatturaId,
       excludedFatturaId,
       excludedFatturaId,
     ]
@@ -5308,15 +5328,21 @@ exports.calculateSession = async function ({
   totaleParsedWithOneri = 0,
   importedDocumentId = null,
   calculationContext = null,
+  _connection = null,
+  _skipLaterPeriodCheck = false,
+  _loadResult = true,
 }) {
 
   assertUUID(sessionId, "sessionId");
 
-  let conn;
+  let conn = _connection;
+  const ownsConnection = !conn;
   try {
-    await ensureFattureSessionContextColumns();
-    conn = await db.getConnection();
-    await conn.beginTransaction();
+    if (ownsConnection) {
+      await ensureFattureSessionContextColumns();
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+    }
 
     const [sRows] = await conn.query(
       `SELECT * FROM fatture_sessioni WHERE id = ? FOR UPDATE`,
@@ -5328,7 +5354,9 @@ exports.calculateSession = async function ({
     if (session.stato === "CONFERMATA") {
       throw new Error("Session is confirmed and cannot be recalculated");
     }
-    await assertNoLaterCalculatedBillingPeriods(conn, session);
+    if (!_skipLaterPeriodCheck) {
+      await assertNoLaterCalculatedBillingPeriods(conn, session);
+    }
     const effectiveTfCode = normalizeTfCode(
       tfCode || calculationContext?.tfCode,
       session.tf_code || "TF1"
@@ -5607,18 +5635,189 @@ exports.calculateSession = async function ({
       hasCalculationContext: !!tfRows[0]?.has_calculation_context,
     });
 
-    await conn.commit();
+    if (ownsConnection) {
+      await conn.commit();
+    }
 
-    
+    if (!_loadResult) {
+      return { sessionId, interniTotals, generaleResult };
+    }
 
     return await loadFullSession(conn, sessionId, interniTotals, generaleResult);
 
 
   } catch (err) {
-    if (conn) await conn.rollback();
+    if (ownsConnection && conn) await conn.rollback();
     throw err;
   } finally {
-    if (conn) conn.release();
+    if (ownsConnection && conn) conn.release();
+  }
+};
+
+exports.recalculateSessionChain = async function (input) {
+  const { sessionId } = input;
+  assertUUID(sessionId, "sessionId");
+
+  await ensureFattureSessionContextColumns();
+  const conn = await db.getConnection();
+  let obsoleteR2Keys = [];
+
+  try {
+    await conn.beginTransaction();
+
+    const [targetRows] = await conn.query(
+      `
+      SELECT
+        fs.*,
+        p.period_year,
+        p.period_month
+      FROM fatture_sessioni fs
+      JOIN letture_sessioni p ON p.id = fs.id_periodo_attuale
+      WHERE fs.id = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [sessionId]
+    );
+    if (!targetRows.length) {
+      const error = new Error("Session not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const target = targetRows[0];
+    if (target.stato === "CONFERMATA") {
+      const error = new Error("Una sessione confermata non puo essere ricalcolata");
+      error.statusCode = 409;
+      error.code = "CHAIN_RECALCULATION_CONFIRMED_PERIOD";
+      throw error;
+    }
+
+    const [laterRows] = await conn.query(
+      `
+      SELECT
+        fs.*,
+        p.period_year,
+        p.period_month
+      FROM fatture_sessioni fs
+      JOIN letture_sessioni p ON p.id = fs.id_periodo_attuale
+      WHERE fs.id_condominio = ?
+        AND fs.id <> ?
+        AND fs.stato IN ('CALCOLATA', 'CONFERMATA')
+        AND (
+          p.period_year > ?
+          OR (p.period_year = ? AND p.period_month > ?)
+        )
+      ORDER BY p.period_year, p.period_month
+      FOR UPDATE
+      `,
+      [
+        target.id_condominio,
+        target.id,
+        target.period_year,
+        target.period_year,
+        target.period_month,
+      ]
+    );
+
+    // Validate every replay input before removing any derived accounting data.
+    const replayPlan = prepareLaterSessionsForReplay(laterRows);
+    const affectedIds = [target.id, ...replayPlan.map((item) => item.session.id)];
+    const placeholders = affectedIds.map(() => "?").join(", ");
+
+    await conn.query(
+      `DELETE FROM fatture_acconti_movimenti
+       WHERE id_fattura IN (${placeholders})
+         AND COALESCE(origine_credito, '') <> 'LEGACY'`,
+      affectedIds
+    );
+    await conn.query(
+      `DELETE FROM fatture_righe WHERE id_fattura IN (${placeholders})`,
+      affectedIds
+    );
+
+    const targetCalculation = await exports.calculateSession({
+      ...input,
+      _connection: conn,
+      _skipLaterPeriodCheck: true,
+      _loadResult: false,
+    });
+
+    for (const replay of replayPlan) {
+      try {
+        await exports.calculateSession({
+          ...replay.input,
+          _connection: conn,
+          _skipLaterPeriodCheck: true,
+          _loadResult: false,
+        });
+      } catch (error) {
+        error.code = error.code || "CHAIN_RECALCULATION_PERIOD_FAILED";
+        error.statusCode = error.statusCode || 422;
+        error.failedSessionId = replay.session.id;
+        error.failedPeriod = replay.period;
+        error.message = `Ricalcolo interrotto al periodo ${replay.period}: ${error.message}`;
+        throw error;
+      }
+    }
+
+    const [generatedRows] = await conn.query(
+      `SELECT id, r2_key
+       FROM generated_documents
+       WHERE fattura_id IN (${placeholders})`,
+      affectedIds
+    );
+    obsoleteR2Keys = generatedRows.map((row) => row.r2_key).filter(Boolean);
+    if (generatedRows.length) {
+      await conn.query(
+        `DELETE FROM generated_documents WHERE fattura_id IN (${placeholders})`,
+        affectedIds
+      );
+    }
+
+    const result = await loadFullSession(
+      conn,
+      target.id,
+      targetCalculation.interniTotals,
+      targetCalculation.generaleResult
+    );
+    result.chainRecalculation = {
+      count: affectedIds.length,
+      recalculated: [
+        {
+          id: target.id,
+          stato: "CALCOLATA",
+          mese: Number(target.period_month),
+          anno: Number(target.period_year),
+          periodo: `${Number(target.period_month)}/${Number(target.period_year)}`,
+        },
+        ...replayPlan.map((item) => ({
+          id: item.session.id,
+          stato: "CALCOLATA",
+          mese: Number(item.session.period_month),
+          anno: Number(item.session.period_year),
+          periodo: item.period,
+        })),
+      ],
+      invalidatedDocuments: generatedRows.length,
+    };
+
+    await conn.commit();
+
+    await Promise.allSettled(
+      obsoleteR2Keys.map((key) =>
+        deletePdfFromR2(key).catch((error) => {
+          console.warn("Impossibile eliminare il PDF obsoleto da R2:", error?.message);
+        })
+      )
+    );
+
+    return result;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
   }
 };
 

@@ -162,6 +162,37 @@ exports.calculateSession = async (req, res) => {
     });
   }
 };
+
+exports.recalculateSessionChain = async (req, res) => {
+  try {
+    const result = await service.recalculateSessionChain({
+      sessionId: req.params.id,
+      tfCode: req.body?.tfCode,
+      annoAtt: req.body?.annoTariffa,
+      eurStorno: req.body?.eurStorno,
+      parsedQF: req.body?.parsedQF,
+      parsedAccontoImporto: req.body?.parsedAccontoImporto,
+      parsedAccontoDepFog: req.body?.parsedAccontoDepFog,
+      parsedAccontoTotale: req.body?.parsedAccontoTotale,
+      parsedOneriPerequazione: req.body?.parsedOneriPerequazione,
+      parsedOneriPerequazioneAcconto: req.body?.parsedOneriPerequazioneAcconto,
+      totaleParsedWithOneri: req.body?.totaleParsedWithOneri,
+      importedDocumentId: req.body?.importedDocumentId,
+      calculationContext: req.body?.calculationContext,
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(err.statusCode || 400).json({
+      error: err.message,
+      ...(err.accountingChecks ? { accountingChecks: err.accountingChecks } : {}),
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.dependencies ? { dependencies: err.dependencies } : {}),
+      ...(err.failedSessionId ? { failedSessionId: err.failedSessionId } : {}),
+      ...(err.failedPeriod ? { failedPeriod: err.failedPeriod } : {}),
+    });
+  }
+};
 exports.getByCondominio = async (req, res) => {
   try {
     const result = await service.getByCondominio({

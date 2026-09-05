@@ -40,6 +40,7 @@ router.get("/sessioni/:id/acconti-legacy", controller.getLegacyAcconti);
 router.put("/sessioni/:id/acconti-legacy", controller.saveLegacyAcconti);
 router.put("/sessioni/:id/parametri", controller.updateSessionParams);
 router.post("/sessioni/:id/calcola", controller.calculateSession);
+router.post("/sessioni/:id/ricalcola-catena", controller.recalculateSessionChain);
 router.get("/condominio/:id", controller.getByCondominio);
 router.get("/periodi/:condominioId", controller.getAvailablePeriods);
 router.get("/providers", controller.getProviders);

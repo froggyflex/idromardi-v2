@@ -461,6 +461,7 @@ async function getLatestGeneratedDocument({
 
 module.exports = {
   DOCUMENT_MIME_TYPE,
+  deletePdfFromR2,
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
   getPdfFromR2,

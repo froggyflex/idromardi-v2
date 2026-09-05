@@ -13,6 +13,7 @@ import {
   Pencil,
   Search,
   ReceiptText,
+  RefreshCw,
   Trash2,
   Upload,
   X,
@@ -128,6 +129,13 @@ type LegacyAccontoEntry = {
   usatoEuro?: number;
   periodoOrigine?: string | null;
 };
+type BillingPeriodDependency = {
+  id: string;
+  stato: string;
+  mese: number;
+  anno: number;
+  periodo?: string;
+};
 
 const italianNumberFormatters = new Map<string, Intl.NumberFormat>();
 
@@ -172,6 +180,8 @@ export default function CondominioFatturePage() {
     const [autoCalculatingSessionId, setAutoCalculatingSessionId] = useState<string | null>(null);
     const [pendingAutoCalculateSessionId, setPendingAutoCalculateSessionId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [recalculationDependencies, setRecalculationDependencies] = useState<BillingPeriodDependency[]>([]);
+    const [recalculationErrorMessage, setRecalculationErrorMessage] = useState<string | null>(null);
     const [calculationNotice, setCalculationNotice] = useState<string | null>(null);
     const [valPrec, setValPrec] = useState<number | string>("");
     const [valAtt, setValAtt] = useState<number | string>("");
@@ -3378,6 +3388,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       tfCodeOverride?: string;
       skipSave?: boolean;
       auto?: boolean;
+      recalculateChain?: boolean;
     } = {}) {
        
       const targetSessionId = options.sessionIdOverride || fatturaId;
@@ -3505,7 +3516,10 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           )
         );
   
-        const res = await api.post(`/fatture/sessioni/${targetSessionId}/calcola`, {
+        const calculationEndpoint = options.recalculateChain
+          ? `/fatture/sessioni/${targetSessionId}/ricalcola-catena`
+          : `/fatture/sessioni/${targetSessionId}/calcola`;
+        const res = await api.post(calculationEndpoint, {
           tfCode: selectedTfCode,
           annoTariffa: Number(annoTariffa) || null,
           eurStorno: parsedPayloadObject
@@ -3593,6 +3607,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         // console.log("Calcolo response:", res.data);
         //await loadDetail();
         await refreshSessionsList();
+        setRecalculationDependencies([]);
+        setRecalculationErrorMessage(null);
         setCurrentSession(res.data.session);
         applyTfCode(selectedTfCode);
         if (manualTfOverrideRef.current.sessionId === targetSessionId) {
@@ -3619,7 +3635,15 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           righe: res.data.righe || [],
           session: res.data.session || prev?.session || null,
         }));
-        setCalculationNotice(res.data?.calculationWarnings?.[0]?.message || null);
+        const chainResult = res.data?.chainRecalculation;
+        const chainNotice = chainResult
+          ? `Ricalcolo cronologico completato per ${Number(chainResult.count || 0)} periodi.${
+              Number(chainResult.invalidatedDocuments || 0) > 0
+                ? ` ${Number(chainResult.invalidatedDocuments)} documenti PDF precedenti sono stati rimossi: rigenera bollette e prospetti.`
+                : ""
+            }`
+          : null;
+        setCalculationNotice(chainNotice || res.data?.calculationWarnings?.[0]?.message || null);
 
         const newDettaglio: Record<string, any[]> = {};
 
@@ -3651,6 +3675,14 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
       } catch (err: any) {
         const responseData = err?.response?.data;
+        if (
+          responseData?.code === "LATER_BILLING_PERIOD_DEPENDENCY" &&
+          Array.isArray(responseData?.dependencies)
+        ) {
+          setRecalculationDependencies(responseData.dependencies);
+        } else if (responseData?.code !== "CHAIN_RECALCULATION_CONFIRMED_PERIOD") {
+          setRecalculationDependencies([]);
+        }
         const checks = responseData?.accountingChecks;
         const checkDetails = checks
           ? [
@@ -3687,13 +3719,48 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         const fullMessage = dependencyDetails
           ? `${baseMessage} Periodi successivi: ${dependencyDetails}.`
           : baseMessage;
-        setError(checkDetails ? `${fullMessage} Dettagli: ${checkDetails}.` : fullMessage);
+        const displayMessage = checkDetails
+          ? `${fullMessage} Dettagli: ${checkDetails}.`
+          : fullMessage;
+        setError(displayMessage);
+        setRecalculationErrorMessage(
+          responseData?.code === "LATER_BILLING_PERIOD_DEPENDENCY"
+            ? displayMessage
+            : null
+        );
       } finally {
         setLoadingCalc(false);
         if (options.auto) {
           setAutoCalculatingSessionId(null);
         }
       }
+    }
+
+    async function confirmAndRecalculateChain() {
+      if (!fatturaId || recalculationDependencies.length === 0 || loadingCalc) return;
+
+      const confirmed = recalculationDependencies.filter(
+        (period) => String(period.stato || "").toUpperCase() === "CONFERMATA"
+      );
+      if (confirmed.length) {
+        setError(
+          `Impossibile ricalcolare: i periodi ${confirmed
+            .map((period) => period.periodo || `${period.mese}/${period.anno}`)
+            .join(", ")} sono confermati.`
+        );
+        return;
+      }
+
+      const affectedPeriods = recalculationDependencies
+        .map((period) => period.periodo || `${period.mese}/${period.anno}`)
+        .join(", ");
+      const confirmedByOperator = window.confirm(
+        `Verranno ricalcolati il periodo selezionato e, in ordine cronologico, i periodi successivi: ${affectedPeriods}. ` +
+          "I dati di origine resteranno invariati; bollette e prospetti gia generati per questi periodi dovranno essere rigenerati. Continuare?"
+      );
+      if (!confirmedByOperator) return;
+
+      await calcola({ recalculateChain: true });
     }
 
 
@@ -4779,7 +4846,8 @@ const formatScaglioneRange = (scaglione: any) => {
   return `${from}-${to}`;
 };
 const isSessionPreparing = Boolean(
-  loadingDetail ||
+  loadingCalc ||
+    loadingDetail ||
     loadingImportedDetail ||
     autoCalculatingSessionId ||
     pendingAutoCalculateSessionId
@@ -4787,6 +4855,47 @@ const isSessionPreparing = Boolean(
 
 return (
     <div className="relative" aria-busy={isSessionPreparing}>
+      {error && (
+        <div
+          className="fixed bottom-4 right-4 z-[120] w-[min(34rem,calc(100vw-2rem))] rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800 shadow-2xl"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-red-600" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-red-900">Operazione non completata</div>
+              <div className="mt-1 max-h-32 overflow-y-auto leading-5">{error}</div>
+              {recalculationDependencies.length > 0 && recalculationErrorMessage === error && (
+                <button
+                  type="button"
+                  onClick={confirmAndRecalculateChain}
+                  disabled={loadingCalc || recalculationDependencies.some(
+                    (period) => String(period.stato || "").toUpperCase() === "CONFERMATA"
+                  )}
+                  className="mt-3 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-red-600 px-3 font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw size={15} />
+                  Ricalcola questo e i successivi
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                setRecalculationDependencies([]);
+                setRecalculationErrorMessage(null);
+              }}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-500 transition hover:bg-red-50"
+              aria-label="Chiudi errore"
+              title="Chiudi"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
       {isSessionPreparing && (
         <div
           className="fixed inset-0 z-[100] flex cursor-wait items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[2px]"
@@ -4796,25 +4905,21 @@ return (
           <div className="flex max-w-sm items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-2xl">
             <Loader2 size={22} className="shrink-0 animate-spin text-blue-600" />
             <div>
-              <div className="font-semibold text-slate-900">Preparazione sessione</div>
+              <div className="font-semibold text-slate-900">
+                {loadingCalc ? "Ricalcolo in corso" : "Preparazione sessione"}
+              </div>
               <div className="mt-0.5 text-sm text-slate-500">
-                Attendere prego, sto caricando documento, tariffa e calcoli.
+                {loadingCalc
+                  ? "Attendere prego, sto verificando e salvando i periodi in ordine cronologico."
+                  : "Attendere prego, sto caricando documento, tariffa e calcoli."}
               </div>
             </div>
           </div>
         </div>
       )}
       <div className="screen-only" inert={isSessionPreparing}>
-      {(error || calculationNotice) && (
+      {calculationNotice && (
         <div className="space-y-2 px-4 pt-3">
-          {error && (
-            <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
-              <div className="min-w-0 flex-1">{error}</div>
-              <button type="button" onClick={() => setError(null)} className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-red-500 transition hover:bg-red-100" aria-label="Chiudi errore" title="Chiudi">
-                <X size={15} />
-              </button>
-            </div>
-          )}
           {calculationNotice && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900">
               <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-600" />
