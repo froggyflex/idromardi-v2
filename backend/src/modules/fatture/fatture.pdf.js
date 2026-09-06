@@ -95,7 +95,7 @@ function qtyMoneyRow(label, qty, amount, extraClass = "") {
   return `
     <tr class="${extraClass}">
       <td>
-        <div class="line-main">${esc(label)}</div>
+        <div>${esc(label)}</div>
         <div class="line-sub">${euro(qty)} mc</div>
       </td>
       <td class="amount">€ ${euro(amount)}</td>
@@ -240,7 +240,7 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
                   ${moneyRow("Oneri", r?.riga?.imp_oneri_base_display ?? r?.riga?.imp_oneri)}
                   ${moneyRow("Oneri perequazione", r?.riga?.imp_oneri_perequazione_display)}
                   ${moneyRow("IVA", r?.riga?.imp_iva)}
-                  ${qtyMoneyRow("Acconto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto)}
+                  ${qtyMoneyRow("Acconto Acquedotto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto, "acconto-row")}
                   ${moneyRow("Acconto dep./fog.", r?.riga?.depfog_acconto)}
                   ${Math.abs(accontoOther) > 0.004 ? moneyRow("Acconto QF/IVA/perequazione/altri", accontoOther) : ""}
                   ${
@@ -633,6 +633,10 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
           text-align: right;
           font-weight: 800;
           white-space: nowrap;
+        }
+
+        .cost-table tbody tr.acconto-row td.amount {
+          font-weight: 400;
         }
 
         .line-main {

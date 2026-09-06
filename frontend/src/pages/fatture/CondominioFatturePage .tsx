@@ -95,6 +95,8 @@ type ImportedDocumentEditForm = {
   giorniAcconto: string;
   mcAcconto: string;
   acquedottoAcconto: string;
+  depurazioneAcconto: string;
+  fognaturaAcconto: string;
   depFogAcconto: string;
   quotaFissaAcconto: string;
   oneriAcconto: string;
@@ -102,6 +104,8 @@ type ImportedDocumentEditForm = {
   totaleAcconto: string;
   mcStorno: string;
   acquedottoStorno: string;
+  depurazioneStorno: string;
+  fognaturaStorno: string;
   depFogStorno: string;
   quotaFissaStorno: string;
   oneriStorno: string;
@@ -1017,7 +1021,14 @@ export default function CondominioFatturePage() {
     if (manual && Object.values(manual).some((value) => manualNumber(value) !== null)) {
       const positiveMagnitude = (value: any) => Math.abs(manualNumber(value) ?? 0);
       const acquedotto = positiveMagnitude(manual.acquedotto);
-      const depFog = positiveMagnitude(manual.dep_fog);
+      const manualDepurazione = manualNumber(manual.depurazione);
+      const manualFognatura = manualNumber(manual.fognatura);
+      const hasSeparateDepFog = manualDepurazione !== null || manualFognatura !== null;
+      const depurazione = hasSeparateDepFog ? Math.abs(manualDepurazione ?? 0) : null;
+      const fognatura = hasSeparateDepFog ? Math.abs(manualFognatura ?? 0) : null;
+      const depFog = hasSeparateDepFog
+        ? money(Number(depurazione || 0) + Number(fognatura || 0))
+        : positiveMagnitude(manual.dep_fog);
       const quotaFissa = positiveMagnitude(manual.quota_fissa);
       const oneri = positiveMagnitude(manual.oneri);
       const iva = positiveMagnitude(manual.iva);
@@ -1025,8 +1036,8 @@ export default function CondominioFatturePage() {
       return {
         mc: positiveMagnitude(manual.mc),
         acquedotto,
-        depurazione: 0,
-        fognatura: 0,
+        depurazione,
+        fognatura,
         depFog,
         quotaFissa,
         oneri,
@@ -2333,7 +2344,12 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     const manual = payload?.manual_overrides?.acconto;
     if (manual && Object.values(manual).some((value) => manualNumber(value) !== null)) {
       const acquedotto = manualNumber(manual.acquedotto) ?? 0;
-      const depFog = manualNumber(manual.dep_fog) ?? 0;
+      const depurazione = manualNumber(manual.depurazione);
+      const fognatura = manualNumber(manual.fognatura);
+      const hasSeparateDepFog = depurazione !== null || fognatura !== null;
+      const depFog = hasSeparateDepFog
+        ? Number(depurazione || 0) + Number(fognatura || 0)
+        : manualNumber(manual.dep_fog) ?? 0;
       const quotaFissa = manualNumber(manual.quota_fissa) ?? 0;
       const oneri = manualNumber(manual.oneri) ?? 0;
       const iva = manualNumber(manual.iva) ?? 0;
@@ -2341,6 +2357,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         giorni: manualNumber(manual.giorni) ?? 0,
         mc: manualNumber(manual.mc) ?? 0,
         acquedotto,
+        depurazione,
+        fognatura,
         depFog,
         quotaFissa,
         oneri,
@@ -2358,6 +2376,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       buckets.acconto.acquedotto || resolvedAcconto.accontoSummary?.totali?.importo_positive || 0
     );
     const depFog = Number(buckets.acconto.depFog || 0);
+    const depurazione = Number(buckets.acconto.depurazione || 0);
+    const fognatura = Number(buckets.acconto.fognatura || 0);
     const oneri = Number(buckets.acconto.oneri || 0);
     const iva = (acquedotto + depFog + oneri) * 0.1;
 
@@ -2365,6 +2385,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       giorni: diffDaysExclusive(resolvedAcconto.dataInizio ?? null, resolvedAcconto.dataFine ?? null) ?? 0,
       mc: Number(resolvedAcconto.consumo ?? 0),
       acquedotto,
+      depurazione,
+      fognatura,
       depFog,
       quotaFissa: 0,
       oneri,
@@ -2528,6 +2550,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       giorniAcconto: editValue(giorniAcconto),
       mcAcconto: "",
       acquedottoAcconto: "",
+      depurazioneAcconto: "",
+      fognaturaAcconto: "",
       depFogAcconto: "",
       quotaFissaAcconto: "",
       oneriAcconto: "",
@@ -2535,6 +2559,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       totaleAcconto: "",
       mcStorno: "",
       acquedottoStorno: "",
+      depurazioneStorno: "",
+      fognaturaStorno: "",
       depFogStorno: "",
       quotaFissaStorno: "",
       oneriStorno: "",
@@ -2617,6 +2643,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       giorniAcconto: editValue(acconto?.giorni),
       mcAcconto: editValue(acconto?.mc),
       acquedottoAcconto: editValue(acconto?.acquedotto),
+      depurazioneAcconto: editValue(acconto?.depurazione),
+      fognaturaAcconto: editValue(acconto?.fognatura),
       depFogAcconto: editValue(acconto?.depFog),
       quotaFissaAcconto: editValue(manualNumber(manual?.acconto?.quota_fissa) ?? acconto?.quotaFissa),
       oneriAcconto: editValue(acconto?.oneri),
@@ -2624,6 +2652,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       totaleAcconto: editValue(acconto?.totale),
       mcStorno: positiveStornoEditValue(hasStornoValues ? storno?.mc : null),
       acquedottoStorno: positiveStornoEditValue(hasStornoValues ? storno?.acquedotto : null),
+      depurazioneStorno: positiveStornoEditValue(hasStornoValues ? storno?.depurazione : null),
+      fognaturaStorno: positiveStornoEditValue(hasStornoValues ? storno?.fognatura : null),
       depFogStorno: positiveStornoEditValue(hasStornoValues ? storno?.depFog : null),
       quotaFissaStorno: positiveStornoEditValue(hasStornoValues ? storno?.quotaFissa : null),
       oneriStorno: positiveStornoEditValue(hasStornoValues ? storno?.oneri : null),
@@ -2712,6 +2742,32 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       const manualDepFog = hasSeparateDepFogInput
         ? Number(manualDepurazione ?? 0) + Number(manualFognatura ?? 0)
         : optionalNumber(form.depFog, "Depurazione e fognatura");
+      const hasSeparateAccontoDepFogInput =
+        form.depurazioneAcconto.trim() !== "" || form.fognaturaAcconto.trim() !== "";
+      const manualDepurazioneAcconto = optionalNumber(
+        form.depurazioneAcconto,
+        "Depurazione acconto"
+      );
+      const manualFognaturaAcconto = optionalNumber(
+        form.fognaturaAcconto,
+        "Fognatura acconto"
+      );
+      const manualDepFogAcconto = hasSeparateAccontoDepFogInput
+        ? Number(manualDepurazioneAcconto ?? 0) + Number(manualFognaturaAcconto ?? 0)
+        : optionalNumber(form.depFogAcconto, "Depurazione e fognatura acconto");
+      const hasSeparateStornoDepFogInput =
+        form.depurazioneStorno.trim() !== "" || form.fognaturaStorno.trim() !== "";
+      const manualDepurazioneStorno = optionalNumber(
+        form.depurazioneStorno,
+        "Depurazione storno"
+      );
+      const manualFognaturaStorno = optionalNumber(
+        form.fognaturaStorno,
+        "Fognatura storno"
+      );
+      const manualDepFogStorno = hasSeparateStornoDepFogInput
+        ? Number(manualDepurazioneStorno ?? 0) + Number(manualFognaturaStorno ?? 0)
+        : optionalNumber(form.depFogStorno, "Depurazione e fognatura storno");
 
       const manualOverrides = {
         schema_version: 2,
@@ -2735,7 +2791,9 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
           giorni: optionalNumber(form.giorniAcconto, "Giorni acconto"),
           mc: optionalNumber(form.mcAcconto, "Consumo acconto"),
           acquedotto: optionalNumber(form.acquedottoAcconto, "Acquedotto acconto"),
-          dep_fog: optionalNumber(form.depFogAcconto, "Depurazione e fognatura acconto"),
+          depurazione: manualDepurazioneAcconto,
+          fognatura: manualFognaturaAcconto,
+          dep_fog: manualDepFogAcconto,
           quota_fissa: optionalNumber(form.quotaFissaAcconto, "Quota fissa acconto"),
           oneri: optionalNumber(form.oneriAcconto, "Oneri acconto"),
           iva: optionalNumber(form.ivaAcconto, "IVA acconto"),
@@ -2744,7 +2802,9 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
         storno: {
           mc: optionalNumber(form.mcStorno, "Consumo storno"),
           acquedotto: optionalNumber(form.acquedottoStorno, "Acquedotto storno"),
-          dep_fog: optionalNumber(form.depFogStorno, "Depurazione e fognatura storno"),
+          depurazione: manualDepurazioneStorno,
+          fognatura: manualFognaturaStorno,
+          dep_fog: manualDepFogStorno,
           quota_fissa: optionalNumber(form.quotaFissaStorno, "Quota fissa storno"),
           oneri: optionalNumber(form.oneriStorno, "Oneri storno"),
           iva: optionalNumber(form.ivaStorno, "IVA storno"),
@@ -5840,7 +5900,8 @@ return (
               title: "Acconto",
               fields: [
                 ["giorniAcconto", "Giorni"], ["mcAcconto", "Consumo (mc)"],
-                ["acquedottoAcconto", "Acquedotto (€)"], ["depFogAcconto", "Depurazione + fognatura (€)"],
+                ["acquedottoAcconto", "Acquedotto (€)"], ["depurazioneAcconto", "Depurazione (€)"],
+                ["fognaturaAcconto", "Fognatura (€)"],
                 ["quotaFissaAcconto", "Quota fissa (€)"], ["oneriAcconto", "Oneri perequazione (€)"],
                 ["ivaAcconto", "IVA (€)"], ["totaleAcconto", "Totale (€)"],
               ],
@@ -5849,7 +5910,8 @@ return (
               title: "Storno",
               fields: [
                 ["mcStorno", "Consumo (mc)"], ["acquedottoStorno", "Acquedotto (€)"],
-                ["depFogStorno", "Depurazione + fognatura (€)"], ["quotaFissaStorno", "Quota fissa (€)"],
+                ["depurazioneStorno", "Depurazione (€)"], ["fognaturaStorno", "Fognatura (€)"],
+                ["quotaFissaStorno", "Quota fissa (€)"],
                 ["oneriStorno", "Oneri perequazione (€)"],
                 ["ivaStorno", "IVA (€)"], ["totaleStorno", "Totale (€)"],
               ],

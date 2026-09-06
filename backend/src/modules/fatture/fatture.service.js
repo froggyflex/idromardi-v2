@@ -588,7 +588,14 @@ function getStornoValuesFromParsedPayload(payload) {
       return magnitude === 0 ? 0 : -round2(magnitude);
     };
     const acquedotto = deduction(manual.acquedotto);
-    const depFog = deduction(manual.dep_fog);
+    const hasSeparateDepFog =
+      manual.depurazione !== null && manual.depurazione !== undefined && manual.depurazione !== "" ||
+      manual.fognatura !== null && manual.fognatura !== undefined && manual.fognatura !== "";
+    const depurazione = hasSeparateDepFog ? deduction(manual.depurazione) : 0;
+    const fognatura = hasSeparateDepFog ? deduction(manual.fognatura) : 0;
+    const depFog = hasSeparateDepFog
+      ? round2(depurazione + fognatura)
+      : deduction(manual.dep_fog);
     const quotaFissa = deduction(manual.quota_fissa);
     const oneri = deduction(manual.oneri);
     const iva = deduction(manual.iva);
@@ -605,8 +612,8 @@ function getStornoValuesFromParsedPayload(payload) {
       euro: totale,
       mc: n2(manual.mc) === 0 ? 0 : -round3(Math.abs(n2(manual.mc))),
       acquedotto,
-      depurazione: 0,
-      fognatura: 0,
+      depurazione,
+      fognatura,
       depFog,
       quotaFissa,
       oneri,

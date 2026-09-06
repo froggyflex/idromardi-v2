@@ -103,8 +103,8 @@ export default function InvoicePrintCard({
         <div className="cell"><div className="label">Oneri</div><div className="value">€ {euro(r?.riga?.imp_oneri_base_display ?? r?.riga?.imp_oneri)}</div></div>
         <div className="cell"><div className="label">Oneri pereq.</div><div className="value">€ {euro(r?.riga?.imp_oneri_perequazione_display)}</div></div>
         <div className="cell"><div className="label">IVA</div><div className="value">€ {euro(r?.riga?.imp_iva)}</div></div>
-        <div className="cell"><div className="label">Acconto mc</div><div className="value">{euro(r?.riga?.consumo_acconto)} mc</div></div>
-        <div className="cell"><div className="label">Acconto €</div><div className="value">€ {euro(r?.riga?.imp_acconto)}</div></div>
+        <div className="cell"><div className="label">Acconto Acquedotto mc</div><div className="value font-normal">{euro(r?.riga?.consumo_acconto)} mc</div></div>
+        <div className="cell"><div className="label">Acconto Acquedotto €</div><div className="value font-normal">€ {euro(r?.riga?.imp_acconto)}</div></div>
         <div className="cell"><div className="label">Storno TXT</div><div className="value">€ {euro(stornoTxt)}</div></div>
         <div className="cell"><div className="label">Storno precedente</div><div className="value">€ {euro(stornoLegacy + stornoPrecedente)}</div></div>
         <div className="cell"><div className="label">Arr.</div><div className="value">€ {euro(r?.riga?.imp_arr)}</div></div>
