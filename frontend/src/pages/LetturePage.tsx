@@ -201,6 +201,7 @@ export default function LetturePage() {
 
   const [loading, setLoading] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [editedRowIds, setEditedRowIds] = useState<Set<string>>(() => new Set());
 
   const [condominioName, setCondominioName] = useState("");
 
@@ -281,6 +282,7 @@ export default function LetturePage() {
     setTriggerDate(null);
 
     setDirty(false);
+    setEditedRowIds(new Set());
 
     lastLoadKeyRef.current = "";
 
@@ -337,6 +339,7 @@ export default function LetturePage() {
         setGrid(gridPayload.grid);
 
         setDirty(false);
+        setEditedRowIds(new Set());
 
       } catch (err:any) {
 
@@ -414,31 +417,42 @@ export default function LetturePage() {
   }
 
   function updateRow(index:number, field:"valore" | "stato", value:string) {
+    const rowId = grid[index].utenza.id;
 
-    const updated = [...grid];
-
-    if (field === "valore") {
-      updated[index].current.valore = value === "" ? null : Number(value);
-    } else {
-      updated[index].current.stato = value;
-    }
-
-    setGrid(updated);
+    setGrid((currentGrid) =>
+      currentGrid.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              current: {
+                ...row.current,
+                [field]: field === "valore" ? (value === "" ? null : Number(value)) : value,
+              },
+            }
+          : row
+      )
+    );
+    setEditedRowIds((currentIds) => new Set(currentIds).add(rowId));
     setDirty(true);
 
   }
 
   function updateConsumption(index: number, value: string) {
-    const updated = [...grid];
-    const previous = latestHistory(updated[index])?.valore_lettura;
+    const rowId = grid[index].utenza.id;
+    const previous = latestHistory(grid[index])?.valore_lettura;
+    const nextValue =
+      previous === null || previous === undefined || value === ""
+        ? null
+        : Number(previous) + Number(value);
 
-    if (previous === null || previous === undefined || value === "") {
-      updated[index].current.valore = null;
-    } else {
-      updated[index].current.valore = Number(previous) + Number(value);
-    }
-
-    setGrid(updated);
+    setGrid((currentGrid) =>
+      currentGrid.map((row, rowIndex) =>
+        rowIndex === index
+          ? { ...row, current: { ...row.current, valore: nextValue } }
+          : row
+      )
+    );
+    setEditedRowIds((currentIds) => new Set(currentIds).add(rowId));
     setDirty(true);
   }
 
@@ -468,18 +482,30 @@ export default function LetturePage() {
         dataCasaIdrica: casaISO
       });
 
-      await saveSessionRows(
-        session.id,
-        grid.map((g) => ({
+      const editedRows = grid.filter((row) => editedRowIds.has(row.utenza.id));
+
+      if (editedRows.length > 0) {
+        await saveSessionRows(
+          session.id,
+          editedRows.map((g) => ({
           idUtenza: g.utenza.id,
           valore: g.current.valore,
           stato: g.current.stato
-        }))
-      );
+          }))
+        );
+      }
 
       setDirty(false);
+      setEditedRowIds(new Set());
 
-      alert("Sessione salvata");
+      const missingReadings = grid.filter(
+        (row) => row.current.valore === null || row.current.valore === undefined
+      ).length;
+      alert(
+        missingReadings > 0
+          ? `Salvataggio parziale completato: ${editedRows.length} righe aggiornate, ${missingReadings} senza lettura.`
+          : "Sessione salvata"
+      );
 
     } catch (err:any) {
 
