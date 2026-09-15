@@ -10,6 +10,10 @@ import {
 import { useParams } from "react-router-dom";
 import type { Stato, GridRow, Session } from "../api/letture_interface";
 import MobileAssignmentControls from "./components/MobileAssignmentControls";
+import {
+  calculateReadingConsumption,
+  readingFromConsumption,
+} from "../utils/readingConsumption";
 
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -397,12 +401,8 @@ export default function LetturePage() {
   function getPossibleConsumption(row: GridRow) {
     const previous = latestHistory(row)?.valore_lettura;
     const current = row.current.valore;
-
-    if (previous === null || previous === undefined || current === null || current === undefined) {
-      return "";
-    }
-
-    return String(Number(current) - Number(previous));
+    const consumption = calculateReadingConsumption(current, previous, row.current.stato);
+    return consumption === null ? "" : String(consumption);
   }
 
   function getHistoryAverage(row: GridRow) {
@@ -440,10 +440,11 @@ export default function LetturePage() {
   function updateConsumption(index: number, value: string) {
     const rowId = grid[index].utenza.id;
     const previous = latestHistory(grid[index])?.valore_lettura;
-    const nextValue =
-      previous === null || previous === undefined || value === ""
-        ? null
-        : Number(previous) + Number(value);
+    const nextValue = readingFromConsumption(
+      value,
+      previous,
+      grid[index].current.stato
+    );
 
     setGrid((currentGrid) =>
       currentGrid.map((row, rowIndex) =>

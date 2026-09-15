@@ -34,6 +34,29 @@ function getMonthBounds(year, month) {
   return { start: toISO(start), end: toISO(end) };
 }
 
+function calculateReadingConsumption(currentValue, previousValue, state) {
+  if (
+    currentValue === null ||
+    currentValue === undefined ||
+    previousValue === null ||
+    previousValue === undefined
+  ) {
+    return null;
+  }
+
+  const current = Number(currentValue);
+  const previous = Number(previousValue);
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+
+  if (current < previous) {
+    return String(state || "").trim().toUpperCase() === "S"
+      ? Math.max(0, current)
+      : 0;
+  }
+
+  return current - previous;
+}
+
 /* ------------------ Create or Load Session ------------------ */
 
 exports.createOrLoadSession = async function ({
@@ -299,14 +322,13 @@ exports.getSessionGrid = async function ({ sessionId }) {
               ? null
               : Number(row.consumo_fatturato);
 
-          const calculatedConsumption =
-            previousRow &&
-            row.valore_lettura !== null &&
-            row.valore_lettura !== undefined &&
-            previousRow.valore_lettura !== null &&
-            previousRow.valore_lettura !== undefined
-              ? Number(row.valore_lettura) - Number(previousRow.valore_lettura)
-              : null;
+          const calculatedConsumption = previousRow
+            ? calculateReadingConsumption(
+                row.valore_lettura,
+                previousRow.valore_lettura,
+                row.stato_lettura
+              )
+            : null;
 
           const hasInvoicedConsumption =
             invoicedConsumption !== null && Number.isFinite(invoicedConsumption);

@@ -24,6 +24,7 @@ import { parse, set, weeksToDays } from "date-fns";
 import { useRef } from "react";
 import { ca, se } from "date-fns/locale";
 import InvoicePrintCard from "../components/InvoicePrintCard";
+import { calculateReadingConsumption } from "../../utils/readingConsumption";
 import { getVersionFull, listVersions } from "../../api/tariffe";
 import { getAuthToken } from "../../auth";
  // @ts-ignore
@@ -4481,10 +4482,13 @@ const getLiveRowConsumption = (row: any) => {
 
   const attuale = getLiveLetturaAttuale(row);
   const precedente = getLiveLetturaPrecedente(row);
+  const calculated = calculateReadingConsumption(
+    attuale,
+    precedente,
+    getLiveStatoAttuale(row)
+  );
 
-  if (attuale !== null && precedente !== null) {
-    return attuale - precedente;
-  }
+  if (calculated !== null) return calculated;
 
   return Number(row?.riga?.consumo_totale || 0);
 };
