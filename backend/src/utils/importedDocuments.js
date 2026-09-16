@@ -117,8 +117,22 @@ async function saveImportedDocument({
   mimeType,
 }) {
   if (!isR2Configured()) {
+    if (process.env.RENDER === "true" || process.env.RENDER_SERVICE_ID) {
+      const error = new Error(
+        "Archivio documenti permanente non configurato: verifica le credenziali Cloudflare R2"
+      );
+      error.statusCode = 503;
+      throw error;
+    }
+
+    await fsPromises.mkdir(LOCAL_IMPORT_ROOT, { recursive: true });
+    const key = buildImportedDocumentKey({ condominioId, originalFilename });
+    const destination = resolveLocalImportPath(key);
+    await fsPromises.mkdir(path.dirname(destination), { recursive: true });
+    await fsPromises.copyFile(sourcePath, destination);
+
     return {
-      storedFilename: path.basename(sourcePath),
+      storedFilename: `${LOCAL_REFERENCE_PREFIX}${key}`,
       provider: "local",
     };
   }

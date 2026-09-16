@@ -5,7 +5,14 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const uploadDir = path.join(process.cwd(), "..", "runtime_uploads", "fatture-import");
+// Multer writes to a temporary directory. The service then copies the file to
+// durable local storage or uploads it to R2 before this temporary copy is
+// removed. Resolve from this module instead of process.cwd(), which varies
+// between local, Docker and Render starts.
+const uploadDir = path.resolve(
+  __dirname,
+  "../../../runtime_uploads/fatture-import-temp"
+);
 
 // Ensure upload directory exists
 if (!fs.existsSync(uploadDir)) {

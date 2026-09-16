@@ -2267,17 +2267,29 @@ exports.uploadImportedDocument = async ({ file, body }) => {
       body.sessionId || null,
     ];
 
-    const result = await db.query(sql, params);
-    insertedDocumentId = result.insertId;
+    const [insertResult] = await db.query(sql, params);
+    insertedDocumentId = insertResult.insertId;
 
-    const rows = await db.query(
+    if (!insertedDocumentId) {
+      const err = new Error("Il documento e stato ricevuto ma non e stato possibile confermarne il salvataggio");
+      err.statusCode = 500;
+      throw err;
+    }
+
+    const [rows] = await db.query(
       `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
       [insertedDocumentId]
     );
 
+    if (!rows[0]) {
+      const err = new Error("Documento salvato ma non disponibile per la verifica");
+      err.statusCode = 500;
+      throw err;
+    }
+
     return {
       ok: true,
-      document: rows[0] || null,
+      document: rows[0],
     };
   } catch (error) {
     if (storedDocument?.storedFilename && !insertedDocumentId) {
@@ -2285,11 +2297,9 @@ exports.uploadImportedDocument = async ({ file, body }) => {
     }
     throw error;
   } finally {
-    if (storedDocument?.provider === "r2" || !insertedDocumentId) {
-      await removeUploadTempFile(file.path).catch((error) => {
-        console.warn("Pulizia file temporaneo importato non riuscita:", error?.message);
-      });
-    }
+    await removeUploadTempFile(file.path).catch((error) => {
+      console.warn("Pulizia file temporaneo importato non riuscita:", error?.message);
+    });
   }
 };
 
@@ -6343,10 +6353,10 @@ exports.createImportedDocument = async function (payload) {
     payload.fileHash ?? null,
   ];
 
-  const result = await db.query(sql, params);
-  const rows = await db.query(
+  const [insertResult] = await db.query(sql, params);
+  const [rows] = await db.query(
     `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
-    [result.insertId]
+    [insertResult.insertId]
   );
 
   return { ok: true, document: rows[0] || null };

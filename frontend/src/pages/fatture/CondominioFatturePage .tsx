@@ -385,6 +385,11 @@ export default function CondominioFatturePage() {
     const [importProviderId, setImportProviderId] = useState("");
     const [importFile, setImportFile] = useState<File | null>(null);
     const [uploadingImport, setUploadingImport] = useState(false);
+    const [importUploadFeedback, setImportUploadFeedback] = useState<{
+      type: "success" | "error";
+      message: string;
+    } | null>(null);
+    const importFileInputRef = useRef<HTMLInputElement | null>(null);
     const [parsingImportId, setParsingImportId] = useState<string | null>(null);
     const [deletingImportId, setDeletingImportId] = useState<string | null>(null);
     const [dettaglioByUtenza, setDettaglioByUtenza]  = useState<Record<string, any[]>>({})
@@ -1218,7 +1223,9 @@ export default function CondominioFatturePage() {
     if (!condominioId || !fatturaId || !importFile) return;
 
     if (!importFile.name.toLowerCase().endsWith(".txt")) {
-      setError("Per il momento e possibile caricare solo file TXT.");
+      const message = "Per il momento e possibile caricare solo file TXT.";
+      setError(message);
+      setImportUploadFeedback({ type: "error", message });
       setImportFile(null);
       return;
     }
@@ -1226,6 +1233,7 @@ export default function CondominioFatturePage() {
     try {
       setUploadingImport(true);
       setError(null);
+      setImportUploadFeedback(null);
 
       const formData = new FormData();
       formData.append("file", importFile);
@@ -1238,15 +1246,27 @@ export default function CondominioFatturePage() {
       const res = await api.post("/fatture/imported-documents/upload", formData);
 
       const doc = res.data?.document;
+      if (!doc?.id) {
+        throw new Error("Il server non ha confermato il salvataggio del documento.");
+      }
       await loadImportedDocuments();
 
-      if (doc?.id) {
-        await loadImportedDocumentDetail(String(doc.id));
-      }
+      await loadImportedDocumentDetail(String(doc.id));
 
       setImportFile(null);
+      if (importFileInputRef.current) importFileInputRef.current.value = "";
+      setImportUploadFeedback({
+        type: "success",
+        message: `${importFile.name} e stato salvato correttamente. Ora puoi procedere con l'analisi.`,
+      });
     } catch (err: any) {
-      setError(err?.response?.data?.error || "Errore upload bolletta");
+      const detail =
+        err?.response?.data?.error ||
+        err?.message ||
+        "Errore upload bolletta";
+      const message = `Caricamento non completato: ${detail} Il file resta selezionato e puoi riprovare.`;
+      setError(message);
+      setImportUploadFeedback({ type: "error", message });
     } finally {
       setUploadingImport(false);
     }
@@ -5398,6 +5418,7 @@ return (
           </div>
 
           <input
+            ref={importFileInputRef}
             type="file"
             accept=".txt,text/plain"
             className="hidden"
@@ -5405,11 +5426,14 @@ return (
               const file = e.target.files?.[0] || null;
               if (file && !file.name.toLowerCase().endsWith(".txt")) {
                 setImportFile(null);
-                setError("Per il momento e possibile caricare solo file TXT.");
+                const message = "Per il momento e possibile caricare solo file TXT.";
+                setError(message);
+                setImportUploadFeedback({ type: "error", message });
                 e.target.value = "";
                 return;
               }
               setError(null);
+              setImportUploadFeedback(null);
               setImportFile(file);
             }}
           />
@@ -5444,6 +5468,20 @@ return (
         {uploadingImport ? "Caricamento..." : "Carica"}
       </button>
     </div>
+
+    {importUploadFeedback && (
+      <div
+        role={importUploadFeedback.type === "error" ? "alert" : "status"}
+        aria-live="polite"
+        className={`mt-3 rounded-xl border px-3 py-2 text-sm font-medium ${
+          importUploadFeedback.type === "success"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+            : "border-red-200 bg-red-50 text-red-800"
+        }`}
+      >
+        {importUploadFeedback.message}
+      </div>
+    )}
   </div>
 
   {/* MAIN SPLIT */}
