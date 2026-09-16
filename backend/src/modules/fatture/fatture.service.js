@@ -2635,6 +2635,25 @@ function resolveBillingDateRange(periodoPrecedente, periodoAttuale, fallbackDays
   return { startDate, endDate };
 }
 
+function resolveOperatorReadingDays(periodoPrecedente, periodoAttuale) {
+  const startDate = toIsoDate(
+    periodoPrecedente?.data_lettura_operatore ?? periodoPrecedente?.dataOperatore
+  );
+  const endDate = toIsoDate(
+    periodoAttuale?.data_lettura_operatore ?? periodoAttuale?.dataOperatore
+  );
+
+  if (!startDate || !endDate) return null;
+
+  const startMs = Date.parse(`${startDate}T00:00:00Z`);
+  const endMs = Date.parse(`${endDate}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return null;
+  }
+
+  return Math.round((endMs - startMs) / 86400000);
+}
+
 /* ---------------- Load tariffs for the session provider ---------------- */
 async function loadProviderTariffVersions(conn, providerId) {
   assertUUID(providerId, "providerId tariffa");
@@ -3482,6 +3501,24 @@ exports.updateSessionParams = async function ({
   
   const conn = await db.getConnection();
   try {
+    const [[periodDates]] = await conn.query(
+      `
+      SELECT
+        precedente.data_lettura_operatore AS data_operatore_precedente,
+        attuale.data_lettura_operatore AS data_operatore_attuale
+      FROM fatture_sessioni fs
+      LEFT JOIN letture_sessioni precedente ON precedente.id = fs.id_periodo_precedente
+      LEFT JOIN letture_sessioni attuale ON attuale.id = fs.id_periodo_attuale
+      WHERE fs.id = ?
+      LIMIT 1
+      `,
+      [sessionId]
+    );
+    const operatorReadingDays = resolveOperatorReadingDays(
+      { data_lettura_operatore: periodDates?.data_operatore_precedente },
+      { data_lettura_operatore: periodDates?.data_operatore_attuale }
+    );
+
     await conn.query(
       `
       UPDATE fatture_sessioni
@@ -3507,7 +3544,8 @@ exports.updateSessionParams = async function ({
         varie === undefined ? null : round2(varie),
         dataFattura ?? null,
         dataCasaIdrica ?? null,
-        giorniCasa !== undefined ? (giorniCasa === null ? null : Number(giorniCasa)) : null,
+        operatorReadingDays ??
+          (giorniCasa !== undefined ? (giorniCasa === null ? null : Number(giorniCasa)) : null),
         totImpo !== undefined ? (totImpo === null ? null : Number(totImpo)) : null,
         mcAcconto !== undefined ? (mcAcconto === null ? null : Number(mcAcconto)) : null,
         mcStorno !== undefined ? (mcStorno === null ? null : Number(mcStorno)) : null,

@@ -913,9 +913,9 @@ export default function CondominioFatturePage() {
 
   function resolveGiorniCasaInterniValue() {
     return (
+      resolveGiorniInterniFromPeriods(periodoPrecedente, periodoAttuale) ??
       positiveNumberOrNull(giorniCasaInterni) ??
       positiveNumberOrNull(session?.giorni_interni) ??
-      resolveGiorniInterniFromPeriods(periodoPrecedente, periodoAttuale) ??
       0
     );
   }
@@ -1431,6 +1431,14 @@ function getInternalPeriodDate(period: any): string | null {
   ]);
 }
 
+function getOperatorPeriodDate(period: any): string | null {
+  return firstDateValue(period, [
+    "dataOperatore",
+    "data_lettura_operatore",
+    "data_operatore",
+  ]);
+}
+
 function formatItalianDateValue(value?: string | null): string {
   const date = parseItalianDate(value);
   if (!date) return value ? String(value) : "";
@@ -1476,8 +1484,8 @@ function resolveGiorniInterniFromPeriods(
   periodoPrecedente?: any,
   periodoAttuale?: any
 ): number | null {
-  const from = getInternalPeriodDate(periodoPrecedente);
-  const to = getInternalPeriodDate(periodoAttuale);
+  const from = getOperatorPeriodDate(periodoPrecedente);
+  const to = getOperatorPeriodDate(periodoAttuale);
   return diffDaysExclusive(from, to);
 }
 
@@ -4016,8 +4024,8 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     setGiorniAcconto(parsedParams.giorniAcconto ?? Number(session.giorni_acconto) ?? 0);
     setMcAcconto(parsedParams.mcAcconto ?? Number(session.mcAcconto) ?? 0);
     setGiorniCasaInterni(
-      positiveNumberOrNull(session.giorni_interni) ??
-        resolveGiorniInterniFromPeriods(periodoPrecedente, periodoAttuale) ??
+      resolveGiorniInterniFromPeriods(periodoPrecedente, periodoAttuale) ??
+        positiveNumberOrNull(session.giorni_interni) ??
         0
     );
     setManualConsumptions(parseManualConsumptions(session.manual_consumptions_json));
@@ -4104,13 +4112,9 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     }
   }, [
     periodoPrecedente?.id,
-    periodoPrecedente?.dataCasaIdrica,
-    periodoPrecedente?.data_lettura_casa_idrica,
     periodoPrecedente?.dataOperatore,
     periodoPrecedente?.data_lettura_operatore,
     periodoAttuale?.id,
-    periodoAttuale?.dataCasaIdrica,
-    periodoAttuale?.data_lettura_casa_idrica,
     periodoAttuale?.dataOperatore,
     periodoAttuale?.data_lettura_operatore,
   ]);
