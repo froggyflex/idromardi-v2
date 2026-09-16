@@ -2208,6 +2208,8 @@ exports.uploadImportedDocument = async ({ file, body }) => {
 
   let storedDocument = null;
   let insertedDocumentId = null;
+  let conn = null;
+  let committed = false;
 
   try {
     if (path.extname(String(file.originalname || "")).toLowerCase() !== ".txt") {
@@ -2216,15 +2218,27 @@ exports.uploadImportedDocument = async ({ file, body }) => {
       throw err;
     }
 
+    if (body.sessionId) await ensureFattureSessionContextColumns();
+
+    storedDocument = await saveImportedDocument({
+      sourcePath: file.path,
+      condominioId: body.condominioId,
+      originalFilename: file.originalname,
+      mimeType: file.mimetype,
+    });
+
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+
     if (body.sessionId) {
-      await ensureFattureSessionContextColumns();
-      const [sessionRows] = await db.query(
+      const [sessionRows] = await conn.query(
         `
         SELECT id
         FROM fatture_sessioni
         WHERE BINARY id = BINARY ?
           AND BINARY id_condominio = BINARY ?
         LIMIT 1
+        FOR UPDATE
         `,
         [body.sessionId, body.condominioId]
       );
@@ -2235,13 +2249,6 @@ exports.uploadImportedDocument = async ({ file, body }) => {
         throw err;
       }
     }
-
-    storedDocument = await saveImportedDocument({
-      sourcePath: file.path,
-      condominioId: body.condominioId,
-      originalFilename: file.originalname,
-      mimeType: file.mimetype,
-    });
 
     const sql = `
       INSERT INTO imported_invoice_documents (
@@ -2267,7 +2274,7 @@ exports.uploadImportedDocument = async ({ file, body }) => {
       body.sessionId || null,
     ];
 
-    const [insertResult] = await db.query(sql, params);
+    const [insertResult] = await conn.query(sql, params);
     insertedDocumentId = insertResult.insertId;
 
     if (!insertedDocumentId) {
@@ -2276,7 +2283,42 @@ exports.uploadImportedDocument = async ({ file, body }) => {
       throw err;
     }
 
-    const [rows] = await db.query(
+    if (body.sessionId) {
+      await conn.query(
+        `
+        UPDATE imported_invoice_documents
+        SET linked_session_id = NULL
+        WHERE BINARY linked_session_id = BINARY ?
+          AND id <> ?
+        `,
+        [body.sessionId, insertedDocumentId]
+      );
+
+      const [sessionUpdate] = await conn.query(
+        `
+        UPDATE fatture_sessioni
+        SET
+          imported_document_id = ?,
+          id_casa_idrica = COALESCE(?, id_casa_idrica)
+        WHERE BINARY id = BINARY ?
+          AND BINARY id_condominio = BINARY ?
+        `,
+        [
+          insertedDocumentId,
+          body.providerId || null,
+          body.sessionId,
+          body.condominioId,
+        ]
+      );
+
+      if (!sessionUpdate.affectedRows) {
+        const err = new Error("Il documento e stato salvato ma non associato al periodo");
+        err.statusCode = 500;
+        throw err;
+      }
+    }
+
+    const [rows] = await conn.query(
       `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
       [insertedDocumentId]
     );
@@ -2287,16 +2329,23 @@ exports.uploadImportedDocument = async ({ file, body }) => {
       throw err;
     }
 
+    await conn.commit();
+    committed = true;
+
     return {
       ok: true,
       document: rows[0],
     };
   } catch (error) {
-    if (storedDocument?.storedFilename && !insertedDocumentId) {
+    if (conn && !committed) {
+      await conn.rollback().catch(() => {});
+    }
+    if (storedDocument?.storedFilename && !committed) {
       await deleteImportedDocumentFile(storedDocument.storedFilename).catch(() => {});
     }
     throw error;
   } finally {
+    conn?.release();
     await removeUploadTempFile(file.path).catch((error) => {
       console.warn("Pulizia file temporaneo importato non riuscita:", error?.message);
     });

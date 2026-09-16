@@ -1221,6 +1221,7 @@ export default function CondominioFatturePage() {
 
   async function uploadImportedInvoice() {
     if (!condominioId || !fatturaId || !importFile) return;
+    const uploadSessionId = String(fatturaId);
 
     if (!importFile.name.toLowerCase().endsWith(".txt")) {
       const message = "Per il momento e possibile caricare solo file TXT.";
@@ -1238,7 +1239,7 @@ export default function CondominioFatturePage() {
       const formData = new FormData();
       formData.append("file", importFile);
       formData.append("condominioId", String(condominioId));
-      formData.append("sessionId", String(fatturaId));
+      formData.append("sessionId", uploadSessionId);
       if (importProviderId) {
         formData.append("providerId", String(importProviderId));
       }
@@ -1249,9 +1250,58 @@ export default function CondominioFatturePage() {
       if (!doc?.id) {
         throw new Error("Il server non ha confermato il salvataggio del documento.");
       }
-      await loadImportedDocuments();
+      const uploadedDocument = {
+        ...doc,
+        linked_session_id: uploadSessionId,
+      } as ImportedInvoiceDocument;
+      const isUploadSessionStillActive =
+        String(activeFatturaIdRef.current || "") === uploadSessionId;
 
-      await loadImportedDocumentDetail(String(doc.id));
+      if (isUploadSessionStillActive) {
+        setImportedSearch("");
+        setImportedStatusFilter("all");
+        setImportedPage(1);
+        setImportedDocs((current) => [
+          uploadedDocument,
+          ...current.filter((item) => String(item.id) !== String(uploadedDocument.id)),
+        ]);
+      }
+      setSessions((current) =>
+        current.map((item: any) =>
+          String(item.id) === uploadSessionId
+            ? {
+                ...item,
+                imported_document_id: uploadedDocument.id,
+                linked_imported_document_id: uploadedDocument.id,
+                linked_imported_original_filename: uploadedDocument.original_filename,
+              }
+            : item
+        )
+      );
+      setCurrentSession((current: any) =>
+        current && String(current.id || "") === uploadSessionId
+          ? { ...current, imported_document_id: uploadedDocument.id }
+          : current
+      );
+      setDetail((current: any) =>
+        current?.session && String(current.session.id || "") === uploadSessionId
+          ? {
+              ...current,
+              session: {
+                ...current.session,
+                imported_document_id: uploadedDocument.id,
+              },
+              linkedImportedDocument: uploadedDocument,
+            }
+          : current
+      );
+
+      if (isUploadSessionStillActive) {
+        await Promise.all([
+          loadImportedDocuments(uploadSessionId),
+          loadImportedDocumentDetail(String(uploadedDocument.id)),
+        ]);
+      }
 
       setImportFile(null);
       if (importFileInputRef.current) importFileInputRef.current.value = "";
@@ -3988,7 +4038,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
 
     if (
       String(selectedImportedId || "") === String(linkedDoc.id) &&
-      selectedImportedDoc?.parsed_payload_json
+      String(selectedImportedDoc?.id || "") === String(linkedDoc.id)
     ) {
       return;
     }
