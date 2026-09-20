@@ -20,6 +20,19 @@ function roundPayableToTenth(amount, minimumPayable = 0) {
   return round2(Math.ceil((minimum - 0.000001) * 10) / 10);
 }
 
+function wasMinimumPayableApplied(
+  amountBeforeMinimum,
+  minimumPayable,
+  explicitAdjustment = 0
+) {
+  const amount = numberOrZero(amountBeforeMinimum);
+  const minimum = Math.max(0, numberOrZero(minimumPayable));
+  const adjustment = Math.max(0, numberOrZero(explicitAdjustment));
+
+  return adjustment > 0.004 || (minimum > 0 && amount < minimum - 0.004);
+}
+
 module.exports = {
   roundPayableToTenth,
+  wasMinimumPayableApplied,
 };

@@ -4774,19 +4774,30 @@ const getMinimumPayableBreakdown = (row: any) => {
   const oneri = getRowOneri(row);
   const ivaQf = roundMoney(qf * 0.1);
   const minimum = getMinimumPayableAmount(row);
+  const amountBeforeMinimum = numberOrNull(r.amount_before_minimum);
+  const comparison =
+    amountBeforeMinimum !== null
+      ? ` Importo prima del minimo: EUR ${formatDecimalIt(amountBeforeMinimum)}.`
+      : "";
 
   return {
     qf,
     oneri,
     ivaQf,
     minimum,
-    label: `Minimo: oneri EUR ${formatDecimalIt(oneri)} + QF EUR ${formatDecimalIt(qf)} + IVA QF EUR ${formatDecimalIt(ivaQf)} = EUR ${formatDecimalIt(minimum)}`,
+    amountBeforeMinimum,
+    label: `Minimo: oneri EUR ${formatDecimalIt(oneri)} + QF EUR ${formatDecimalIt(qf)} + IVA QF EUR ${formatDecimalIt(ivaQf)} = EUR ${formatDecimalIt(minimum)}.${comparison}`,
   };
 };
 
 const isMinimumPayableApplied = (row: any) => {
   const r = row?.riga || {};
-  if (Number(r.minimum_payable_applied || 0) === 1) return true;
+  if (
+    r.minimum_payable_applied !== null &&
+    r.minimum_payable_applied !== undefined
+  ) {
+    return Number(r.minimum_payable_applied) === 1;
+  }
 
   const storno = Number(r.storno_acconto || 0);
   const total = getDisplayedRowTotal(row);

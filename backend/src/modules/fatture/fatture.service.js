@@ -13,7 +13,10 @@ const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
 const { buildAccontoAccountingCheck } = require("./acconto-accounting");
-const { roundPayableToTenth } = require("./accounting-rounding");
+const {
+  roundPayableToTenth,
+  wasMinimumPayableApplied,
+} = require("./accounting-rounding");
 const { prepareLaterSessionsForReplay } = require("./billing-chain");
 const { resolveBillingReadings } = require("./meter-readings");
 const {
@@ -2393,17 +2396,30 @@ function annotateMinimumPayableRow(row) {
   if (!row) return row;
 
   const minimum = getMinimumPayableForRow(row);
-  const total = round2(n2(row.totale));
   const storno = round2(n2(row.storno_acconto ?? row.storno_totale));
   const explicitCredit = round2(
     n2(row._storno_credit_euro) + n2(row.credito_storno_residuo)
   );
-  const isCapped =
-    explicitCredit > 0 ||
-    (storno < 0 && total > 0 && Math.abs(total - minimum) <= 0.05);
+  const amountBeforeMinimum = round2(
+    n2(row.imp_acquedotto) +
+      n2(row.imp_fognatura) +
+      n2(row.imp_depurazione) +
+      n2(row.imp_qf) +
+      n2(row.imp_oneri) +
+      n2(row.imp_iva) +
+      n2(row.acconto) +
+      storno +
+      n2(row.conguaglio)
+  );
+  const isCapped = wasMinimumPayableApplied(
+    amountBeforeMinimum,
+    minimum,
+    row._minimum_payable_adjustment
+  );
 
   row.minimum_payable = minimum;
   row.minimum_payable_applied = isCapped ? 1 : 0;
+  row.amount_before_minimum = amountBeforeMinimum;
   row.minimum_payable_credit_euro = explicitCredit;
   row.minimum_payable_credit_mc = round3(n2(row._storno_credit_mc));
 
