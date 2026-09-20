@@ -17,6 +17,15 @@ export interface LetturaRowInput {
   stato: string;
 }
 
+export interface ReadingSessionSummary {
+  id: string;
+  period_year: number;
+  period_month: number;
+  data_lettura_operatore?: string | null;
+  data_lettura_casa_idrica?: string | null;
+  stato: "BOZZA" | "CHIUSA";
+}
+
 /* ---------- API Calls ---------- */
 
 export async function createOrLoadSession(
@@ -24,6 +33,13 @@ export async function createOrLoadSession(
 ) {
   const { data } = await api.post("/letture/sessioni", payload);
   return data;
+}
+
+export async function listReadingSessions(idCondominio: string) {
+  const { data } = await api.get(
+    `/letture/condomini/${idCondominio}/sessioni`
+  );
+  return (Array.isArray(data?.items) ? data.items : []) as ReadingSessionSummary[];
 }
 
 export async function getSessionGrid(sessionId: string) {

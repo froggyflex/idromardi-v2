@@ -1,5 +1,16 @@
 const service = require("./letture.service");
 
+exports.listSessionsByCondominio = async (req, res, next) => {
+  try {
+    const result = await service.listSessionsByCondominio({
+      idCondominio: req.params.condominioId,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.createOrLoadSession = async (req, res, next) => {
   try {
     const result = await service.createOrLoadSession(req.body);

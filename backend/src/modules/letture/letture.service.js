@@ -57,6 +57,28 @@ function calculateReadingConsumption(currentValue, previousValue, state) {
   return current - previous;
 }
 
+exports.listSessionsByCondominio = async function ({ idCondominio }) {
+  assertUUID(idCondominio, "idCondominio");
+
+  const [rows] = await db.query(
+    `
+    SELECT
+      id,
+      period_year,
+      period_month,
+      data_lettura_operatore,
+      data_lettura_casa_idrica,
+      stato
+    FROM letture_sessioni
+    WHERE id_condominio = ?
+    ORDER BY period_year DESC, period_month DESC
+    `,
+    [idCondominio]
+  );
+
+  return { items: rows };
+};
+
 /* ------------------ Create or Load Session ------------------ */
 
 exports.createOrLoadSession = async function ({

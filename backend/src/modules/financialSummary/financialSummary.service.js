@@ -2709,12 +2709,28 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     );
 
     const [[currentP]] = await conn.query(
-            `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
+            `
+            SELECT
+              period_month,
+              period_year,
+              data_lettura_operatore,
+              data_lettura_casa_idrica
+            FROM letture_sessioni
+            WHERE id = ?
+            `,
             [current]
     );
 
     const [[previousP]] = await conn.query(
-            `SELECT period_month, period_year FROM letture_sessioni WHERE id = ?`,
+            `
+            SELECT
+              period_month,
+              period_year,
+              data_lettura_operatore,
+              data_lettura_casa_idrica
+            FROM letture_sessioni
+            WHERE id = ?
+            `,
             [previous]
     );
 
@@ -2745,7 +2761,12 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
 
 
 
-        const period = "dal "+previousP.period_month+"."+previousP.period_year+" al "+currentP.period_month+"."+currentP.period_year;
+        const previousPeriodDate = formatBillingPeriodDate(previousP);
+        const currentPeriodDate = formatBillingPeriodDate(currentP);
+        if (!previousPeriodDate || !currentPeriodDate) {
+          throw new Error("Date del periodo di fatturazione non disponibili");
+        }
+        const period = `dal ${previousPeriodDate} al ${currentPeriodDate}`;
 
         description =  "Lettura e fatturazione consumi idrici periodo "+period+" per condominio sito in "+condominio.cap+" - "+condominio.citta+" alla "+condominio.indirizzo;
 
@@ -3560,6 +3581,21 @@ function formatItalianShortDate(value) {
     month: "2-digit",
     year: "numeric",
   }).format(date);
+}
+
+function formatBillingPeriodDate(period) {
+  const readingDate =
+    period?.data_lettura_operatore || period?.data_lettura_casa_idrica || null;
+  const formattedReadingDate = formatItalianShortDate(readingDate);
+  if (formattedReadingDate) return formattedReadingDate;
+
+  const month = Number(period?.period_month);
+  const year = Number(period?.period_year);
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year)) {
+    return "";
+  }
+
+  return `${String(month).padStart(2, "0")}/${year}`;
 }
 
 function textOrDash(v) {

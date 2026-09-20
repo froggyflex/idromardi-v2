@@ -5,7 +5,9 @@ import {
   saveSessionRows,
   closeSession,
   getCondominio,
+  listReadingSessions,
 } from "../api/letture";
+import type { ReadingSessionSummary } from "../api/letture";
 
 import { useParams } from "react-router-dom";
 import type { Stato, GridRow, Session } from "../api/letture_interface";
@@ -89,6 +91,10 @@ type ManualDatePickerProps = {
   onChange: (date: Date | null) => void;
   disabled?: boolean;
   placeholder?: string;
+  periodMarkers?: Array<{
+    date: Date;
+    status: "BOZZA" | "CHIUSA";
+  }>;
 };
 
 function ManualDatePicker({
@@ -96,6 +102,7 @@ function ManualDatePicker({
   onChange,
   disabled = false,
   placeholder = "gg/mm/aaaa",
+  periodMarkers = [],
 }: ManualDatePickerProps) {
   const [text, setText] = useState(formatManualDate(selected));
   const [hasError, setHasError] = useState(false);
@@ -126,6 +133,10 @@ function ManualDatePicker({
     setHasError(false);
     onChange(parsed);
   }
+
+  const periodMarkerByDate = new Map(
+    periodMarkers.map((marker) => [formatManualDate(marker.date), marker.status])
+  );
 
   return (
     <div>
@@ -167,6 +178,21 @@ function ManualDatePicker({
         shouldCloseOnSelect
         showPopperArrow={false}
         calendarStartDay={1}
+        dayClassName={(date) => {
+          const status = periodMarkerByDate.get(formatManualDate(date));
+          if (status === "CHIUSA") return "reading-period-day reading-period-day--closed";
+          if (status === "BOZZA") return "reading-period-day reading-period-day--draft";
+          return "";
+        }}
+        renderDayContents={(day, date) => {
+          const status = date
+            ? periodMarkerByDate.get(formatManualDate(date))
+            : undefined;
+          const title = status
+            ? `Periodo già presente (${status === "CHIUSA" ? "chiuso" : "bozza"})`
+            : undefined;
+          return <span title={title}>{day}</span>;
+        }}
       />
       {hasError && (
         <div className="mt-1 text-xs font-medium text-red-600">
@@ -208,6 +234,7 @@ export default function LetturePage() {
   const [editedRowIds, setEditedRowIds] = useState<Set<string>>(() => new Set());
 
   const [condominioName, setCondominioName] = useState("");
+  const [existingPeriods, setExistingPeriods] = useState<ReadingSessionSummary[]>([]);
 
   const lastLoadKeyRef = useRef("");
 
@@ -235,6 +262,18 @@ export default function LetturePage() {
     "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"
   ];
 
+  const periodCalendarMarkers = existingPeriods.flatMap((period) => {
+    const date = parseDbDate(
+      period.data_lettura_operatore || period.data_lettura_casa_idrica
+    );
+    return date ? [{ date, status: period.stato }] : [];
+  });
+
+  async function refreshExistingPeriods() {
+    const periods = await listReadingSessions(condominioId);
+    setExistingPeriods(periods);
+  }
+
   /* ---------------- LOAD CONDOMINIO ---------------- */
 
   useEffect(() => {
@@ -245,11 +284,15 @@ export default function LetturePage() {
 
       try {
 
-        const data = await getCondominio(condominioId);
+        const [data, periods] = await Promise.all([
+          getCondominio(condominioId),
+          listReadingSessions(condominioId),
+        ]);
 
         if (!alive) return;
 
         setCondominioName(data.nome);
+        setExistingPeriods(periods);
 
       } catch {
 
@@ -276,6 +319,7 @@ export default function LetturePage() {
     setSession(null);
     setGrid([]);
     setStates([]);
+    setExistingPeriods([]);
 
     setDataOperatore(null);
     setDataCasa(null);
@@ -482,6 +526,7 @@ export default function LetturePage() {
         dataOperatore: opISO,
         dataCasaIdrica: casaISO
       });
+      await refreshExistingPeriods().catch(() => undefined);
 
       const editedRows = grid.filter((row) => editedRowIds.has(row.utenza.id));
 
@@ -531,6 +576,7 @@ export default function LetturePage() {
     await closeSession(session.id);
 
     setSession({ ...session, stato: "CHIUSA" });
+    await refreshExistingPeriods().catch(() => undefined);
 
     alert("Session closed");
 
@@ -572,7 +618,16 @@ export default function LetturePage() {
             selected={triggerDate}
             onChange={(date: Date | null) => setTriggerDate(date)}
             disabled={loading}
+            periodMarkers={periodCalendarMarkers}
           />
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-amber-500" /> Bozza
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" /> Chiuso
+            </span>
+          </div>
         </div>
 
         {/* PERIOD INFO */}

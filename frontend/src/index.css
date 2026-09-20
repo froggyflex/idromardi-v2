@@ -17,6 +17,41 @@ body {
 .input {
   @apply border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-500;
 }
+
+.react-datepicker__day.reading-period-day {
+  position: relative;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.react-datepicker__day.reading-period-day--draft {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.react-datepicker__day.reading-period-day--closed {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.react-datepicker__day.reading-period-day--draft::after,
+.react-datepicker__day.reading-period-day--closed::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.react-datepicker__day--selected.reading-period-day,
+.react-datepicker__day--keyboard-selected.reading-period-day {
+  background: #2563eb;
+  color: #fff;
+}
 .cluster-wrapper {
   background: transparent;
   border: none;

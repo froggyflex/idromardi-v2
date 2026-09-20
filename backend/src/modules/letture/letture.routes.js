@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const lettureController = require("./letture.controller");
  
+// Existing periods for calendar markers
+router.get("/condomini/:condominioId/sessioni", lettureController.listSessionsByCondominio);
 
 // Create or load session
 router.post("/sessioni", lettureController.createOrLoadSession);

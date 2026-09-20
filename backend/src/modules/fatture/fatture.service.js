@@ -15,6 +15,7 @@ const { resolveLegacyTxtTransition } = require("./storno-transition");
 const { buildAccontoAccountingCheck } = require("./acconto-accounting");
 const { roundPayableToTenth } = require("./accounting-rounding");
 const { prepareLaterSessionsForReplay } = require("./billing-chain");
+const { resolveBillingReadings } = require("./meter-readings");
 const {
   addUtcDays,
   allocateTariffConsumption,
@@ -3214,7 +3215,8 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
           u.id_user,
           CONCAT(u.nome,' ',u.cognome) AS utente,
           u.doppio_contatore,
-          u.billing_group_id
+          u.billing_group_id,
+          u.Contatore_Inverso AS contatore_inverso
         FROM fatture_righe fr
         JOIN utenze_v2 u ON u.id = fr.id_utenza
         WHERE fr.id_fattura = ?
@@ -3235,13 +3237,20 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     righeRows.forEach(annotateMinimumPayableRow);
     const mapRighe = new Map(righeRows.map((r) => [r.id_utenza, r]));
 
-    let grid = utenze.map((u) => ({
-      utenza: u,
-      attuale: mapAtt.get(u.id) || null,
-      precedente: mapPrec.get(u.id) || null,  
-      riga: mapRighe.get(u.id) || null,
-      
-    }));
+    let grid = utenze.map((u) => {
+      const readings = resolveBillingReadings(
+        u,
+        mapAtt.get(u.id) || null,
+        mapPrec.get(u.id) || null
+      );
+
+      return {
+        utenza: u,
+        attuale: readings.current,
+        precedente: readings.previous,
+        riga: mapRighe.get(u.id) || null,
+      };
+    });
 
     if (grid.length === 0 && righeRows.length > 0) {
       grid = righeRows.map((r) => ({
@@ -3251,6 +3260,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
           Nome: r.utente,
           Cognome: "",
           doppio_contatore: r.doppio_contatore,
+          Contatore_Inverso: r.contatore_inverso,
         },
         attuale: {
           valore_lettura: r.lettura_attuale,
@@ -3636,7 +3646,8 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
       u.id_user,
       CONCAT(u.nome,' ',u.cognome) AS utente,
       u.doppio_contatore,
-      u.billing_group_id
+      u.billing_group_id,
+      u.Contatore_Inverso AS contatore_inverso
     FROM fatture_righe fr
     JOIN utenze_v2 u ON u.id = fr.id_utenza
     WHERE fr.id_fattura = ?
@@ -4386,20 +4397,22 @@ async function calculateInterni(
 
       const ra0 = mapAtt.get(first.id);
       const rp0 = mapPrec.get(first.id);
-      const statoAtt = ra0?.stato_lettura ?? null;
-      const statoPrec = rp0?.stato_lettura ?? null;
+      const firstReadings = resolveBillingReadings(first, ra0, rp0);
+      const statoAtt = firstReadings.currentState;
+      const statoPrec = firstReadings.previousState;
 
       for (const gx of group) {
         const ra = mapAtt.get(gx.id);
         const rp = mapPrec.get(gx.id);
-        const a = ra?.valore_lettura ?? null;
-        const p = rp?.valore_lettura ?? null;
+        const readings = resolveBillingReadings(gx, ra, rp);
+        const a = readings.currentValue;
+        const p = readings.previousValue;
 
         if (a !== null && p !== null) {
           haveAny = true;
           const currentValue = n2(a);
           const previousValue = n2(p);
-          const stato = upper(ra?.stato_lettura, "");
+          const stato = upper(readings.currentState, "");
 
           if (currentValue < previousValue) {
             if (stato === "S") {
@@ -4424,14 +4437,14 @@ async function calculateInterni(
 
       const adjustedFirstAtt = adjustedCurrentReadings.has(first.id)
         ? adjustedCurrentReadings.get(first.id)
-        : (ra0?.valore_lettura ?? null);
+        : firstReadings.currentValue;
 
       let consumoNorm = null;
       if (haveAny) {
         consumoNorm = round3(consumoSomma);
-      } else if (ra0?.valore_lettura != null && rp0?.valore_lettura != null) {
-        const currentValue = n2(ra0?.valore_lettura);
-        const previousValue = n2(rp0?.valore_lettura);
+      } else if (firstReadings.currentValue != null && firstReadings.previousValue != null) {
+        const currentValue = n2(firstReadings.currentValue);
+        const previousValue = n2(firstReadings.previousValue);
         const stato = upper(statoAtt, "");
 
         if (currentValue < previousValue) {
@@ -4529,7 +4542,7 @@ async function calculateInterni(
         id_user: first.id_user,
         id_riga_fattura: null,
 
-        lettura_precedente: rp0?.valore_lettura ?? null,
+        lettura_precedente: firstReadings.previousValue,
         stato_precedente: statoPrec,
         lettura_attuale: adjustedFirstAtt,
         stato_attuale: statoAtt,
@@ -4592,18 +4605,19 @@ async function calculateInterni(
           const gk = group[k];
           const rak = mapAtt.get(gk.id);
           const rpk = mapPrec.get(gk.id);
+          const readings = resolveBillingReadings(gk, rak, rpk);
 
           rows.push({
             id_utenza: gk.id,
             id_user: gk.id_user,
             id_riga_fattura: null,
 
-            lettura_precedente: rpk?.valore_lettura ?? null,
-            stato_precedente: rpk?.stato_lettura ?? null,
+            lettura_precedente: readings.previousValue,
+            stato_precedente: readings.previousState,
             lettura_attuale: adjustedCurrentReadings.has(gk.id)
               ? adjustedCurrentReadings.get(gk.id)
-              : (rak?.valore_lettura ?? null),
-            stato_attuale: rak?.stato_lettura ?? null,
+              : readings.currentValue,
+            stato_attuale: readings.currentState,
 
             consumo_normale: 0,
             consumo_acconto: 0,
