@@ -4422,7 +4422,7 @@ async function calculateInterni(
           const previousValue = n2(p);
           const stato = upper(readings.currentState, "");
           const replacementReset =
-            stato === "S" && (readings.inverse || currentValue < previousValue);
+            stato === "S" && currentValue < previousValue;
 
           if (replacementReset) {
             consumoSomma += Math.max(0, n2(readings.currentValue));
@@ -4458,7 +4458,7 @@ async function calculateInterni(
         const previousValue = n2(firstReadings.calculationPreviousValue);
         const stato = upper(statoAtt, "");
         const replacementReset =
-          stato === "S" && (firstReadings.inverse || currentValue < previousValue);
+          stato === "S" && currentValue < previousValue;
 
         if (replacementReset) {
           consumoNorm = round3(Math.max(0, n2(firstReadings.currentValue)));

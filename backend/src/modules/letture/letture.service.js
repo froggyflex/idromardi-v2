@@ -34,7 +34,7 @@ function getMonthBounds(year, month) {
   return { start: toISO(start), end: toISO(end) };
 }
 
-function calculateReadingConsumption(currentValue, previousValue, state, inverse = false) {
+function calculateReadingConsumption(currentValue, previousValue, state) {
   if (
     currentValue === null ||
     currentValue === undefined ||
@@ -49,11 +49,6 @@ function calculateReadingConsumption(currentValue, previousValue, state, inverse
   if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
 
   const normalizedState = String(state || "").trim().toUpperCase();
-
-  if (inverse) {
-    if (normalizedState === "S") return Math.max(0, current);
-    return previous >= current ? previous - current : 0;
-  }
 
   if (current < previous) {
     return normalizedState === "S"
@@ -290,7 +285,6 @@ exports.getSessionGrid = async function ({ sessionId }) {
     const righeMap = new Map(
       righe.map((r) => [r.id_utenza, r])
     );
-    const utenzeMap = new Map(utenze.map((u) => [u.id, u]));
 
     const utenzaIds = utenze.map((u) => u.id);
     let historyMap = new Map();
@@ -370,8 +364,7 @@ exports.getSessionGrid = async function ({ sessionId }) {
             ? calculateReadingConsumption(
                 row.valore_lettura,
                 previousRow.valore_lettura,
-                row.stato_lettura,
-                String(utenzeMap.get(idUtenza)?.Contatore_Inverso || "").toUpperCase() === "SI"
+                row.stato_lettura
               )
             : null;
 

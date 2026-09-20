@@ -10,21 +10,21 @@ function isInverseMeter(utenza) {
 
 function resolveBillingReadings(utenza, currentReading, previousReading) {
   const inverse = isInverseMeter(utenza);
-  const currentValue = currentReading?.valore_lettura ?? null;
-  const previousValue = previousReading?.valore_lettura ?? null;
+  const rawCurrentValue = currentReading?.valore_lettura ?? null;
+  const rawPreviousValue = previousReading?.valore_lettura ?? null;
   const currentState = currentReading?.stato_lettura ?? null;
   const previousState = previousReading?.stato_lettura ?? null;
 
   return {
     inverse,
-    currentValue,
-    previousValue,
-    calculationCurrentValue: inverse ? previousValue : currentValue,
-    calculationPreviousValue: inverse ? currentValue : previousValue,
+    currentValue: inverse ? rawPreviousValue : rawCurrentValue,
+    previousValue: inverse ? rawCurrentValue : rawPreviousValue,
+    calculationCurrentValue: rawCurrentValue,
+    calculationPreviousValue: rawPreviousValue,
     currentState,
     previousState,
-    current: currentReading || null,
-    previous: previousReading || null,
+    current: inverse ? previousReading || null : currentReading || null,
+    previous: inverse ? currentReading || null : previousReading || null,
   };
 }
 

@@ -4502,19 +4502,35 @@ const isSnapshotSession =
   String(session?.stato || "").toUpperCase() === "CALCOLATA" ||
   String(session?.stato || "").toUpperCase() === "CONFERMATA";
 
-const getLiveLetturaAttuale = (row: any) =>
-  isSnapshotSession
-    ? numberOrNull(row?.riga?.lettura_attuale) ??
+const getLiveLetturaAttuale = (row: any) => {
+  if (isSnapshotSession) {
+    return (
+      numberOrNull(row?.riga?.lettura_attuale) ??
       numberOrNull(row?.attuale?.valore_lettura)
-    : numberOrNull(row?.attuale?.valore_lettura) ??
-      numberOrNull(row?.riga?.lettura_attuale);
+    );
+  }
 
-const getLiveLetturaPrecedente = (row: any) =>
-  isSnapshotSession
-    ? numberOrNull(row?.riga?.lettura_precedente) ??
+  return isInverseMeter(row?.utenza)
+    ? numberOrNull(row?.precedente?.valore_lettura) ??
+        numberOrNull(row?.riga?.lettura_attuale)
+    : numberOrNull(row?.attuale?.valore_lettura) ??
+        numberOrNull(row?.riga?.lettura_attuale);
+};
+
+const getLiveLetturaPrecedente = (row: any) => {
+  if (isSnapshotSession) {
+    return (
+      numberOrNull(row?.riga?.lettura_precedente) ??
       numberOrNull(row?.precedente?.valore_lettura)
+    );
+  }
+
+  return isInverseMeter(row?.utenza)
+    ? numberOrNull(row?.attuale?.valore_lettura) ??
+        numberOrNull(row?.riga?.lettura_precedente)
     : numberOrNull(row?.precedente?.valore_lettura) ??
-      numberOrNull(row?.riga?.lettura_precedente);
+        numberOrNull(row?.riga?.lettura_precedente);
+};
 
 const getLiveStatoAttuale = (row: any) =>
   isSnapshotSession
@@ -7005,7 +7021,7 @@ return (
                                             {isInverseMeter(r.utenza) && (
                                               <div
                                                 className="mx-auto mt-1 inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700"
-                                                title="Contatore inverso: letture mostrate in ordine cronologico; consumo calcolato come precedente meno attuale."
+                                                title="Contatore inverso: in fatturazione le letture attuale e precedente sono scambiate; il consumo resta la loro differenza positiva."
                                               >
                                                 Inverso
                                               </div>
