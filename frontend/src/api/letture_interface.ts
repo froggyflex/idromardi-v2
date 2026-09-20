@@ -12,6 +12,8 @@ export interface Utenza {
   nome?: string;
   cognome?: string;
   interno?: string;
+  Contatore_Inverso?: "SI" | "NO";
+  contatore_inverso?: "SI" | "NO";
 }
 
 export interface HistoryRow {

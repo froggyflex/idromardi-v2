@@ -24,7 +24,10 @@ import { parse, set, weeksToDays } from "date-fns";
 import { useRef } from "react";
 import { ca, se } from "date-fns/locale";
 import InvoicePrintCard from "../components/InvoicePrintCard";
-import { calculateReadingConsumption } from "../../utils/readingConsumption";
+import {
+  calculateReadingConsumption,
+  isInverseMeter,
+} from "../../utils/readingConsumption";
 import { getVersionFull, listVersions } from "../../api/tariffe";
 import { getAuthToken } from "../../auth";
  // @ts-ignore
@@ -4559,7 +4562,8 @@ const getLiveRowConsumption = (row: any) => {
   const calculated = calculateReadingConsumption(
     attuale,
     precedente,
-    getLiveStatoAttuale(row)
+    getLiveStatoAttuale(row),
+    isInverseMeter(row?.utenza)
   );
 
   if (calculated !== null) return calculated;
@@ -4813,7 +4817,11 @@ const isRecuperoReadingRow = (row: any) => {
   const current = numberOrNull(row?.riga?.lettura_attuale ?? row?.attuale?.valore_lettura);
   const previous = numberOrNull(row?.riga?.lettura_precedente ?? row?.precedente?.valore_lettura);
 
-  return stato !== "S" && current !== null && previous !== null && current < previous;
+  if (stato === "S" || current === null || previous === null) return false;
+
+  return isInverseMeter(row?.utenza)
+    ? current > previous
+    : current < previous;
 };
 
 const roundMoney = (value: number) =>
@@ -6994,6 +7002,14 @@ return (
                                           <td className="sticky left-0 z-20 w-14 min-w-14 bg-inherit p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
                                           <td className="sticky left-14 z-20 min-w-[220px] bg-inherit p-2 text-center shadow-[2px_0_0_0_rgb(226_232_240)]">
                                             {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                                            {isInverseMeter(r.utenza) && (
+                                              <div
+                                                className="mx-auto mt-1 inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700"
+                                                title="Contatore inverso: letture mostrate in ordine cronologico; consumo calcolato come precedente meno attuale."
+                                              >
+                                                Inverso
+                                              </div>
+                                            )}
                                             {staleReadings && (
                                               <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-orange-700">
                                                 Da ricalcolare

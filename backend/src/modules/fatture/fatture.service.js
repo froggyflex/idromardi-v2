@@ -3253,20 +3253,12 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     righeRows.forEach(annotateMinimumPayableRow);
     const mapRighe = new Map(righeRows.map((r) => [r.id_utenza, r]));
 
-    let grid = utenze.map((u) => {
-      const readings = resolveBillingReadings(
-        u,
-        mapAtt.get(u.id) || null,
-        mapPrec.get(u.id) || null
-      );
-
-      return {
-        utenza: u,
-        attuale: readings.current,
-        precedente: readings.previous,
-        riga: mapRighe.get(u.id) || null,
-      };
-    });
+    let grid = utenze.map((u) => ({
+      utenza: u,
+      attuale: mapAtt.get(u.id) || null,
+      precedente: mapPrec.get(u.id) || null,
+      riga: mapRighe.get(u.id) || null,
+    }));
 
     if (grid.length === 0 && righeRows.length > 0) {
       grid = righeRows.map((r) => ({
@@ -4421,32 +4413,32 @@ async function calculateInterni(
         const ra = mapAtt.get(gx.id);
         const rp = mapPrec.get(gx.id);
         const readings = resolveBillingReadings(gx, ra, rp);
-        const a = readings.currentValue;
-        const p = readings.previousValue;
+        const a = readings.calculationCurrentValue;
+        const p = readings.calculationPreviousValue;
 
         if (a !== null && p !== null) {
           haveAny = true;
           const currentValue = n2(a);
           const previousValue = n2(p);
           const stato = upper(readings.currentState, "");
+          const replacementReset =
+            stato === "S" && (readings.inverse || currentValue < previousValue);
 
-          if (currentValue < previousValue) {
-            if (stato === "S") {
-              consumoSomma += currentValue;
-              sostituzioneContatore = true;
-              adjustedCurrentReadings.set(gx.id, currentValue);
-            } else {
-              recuperoLettura = true;
-              adjustedCurrentReadings.set(gx.id, previousValue);
-              recuperoByUtenza.set(gx.id, true);
-              consumoSomma += 0;
-              const note = `Lettura attuale inferiore alla precedente su interno ${gx.Interno || gx.id}: recupero applicato`;
-              recuperoNotes.push(note);
-              recuperoNoteByUtenza.set(gx.id, note);
-            }
+          if (replacementReset) {
+            consumoSomma += Math.max(0, n2(readings.currentValue));
+            sostituzioneContatore = true;
+            adjustedCurrentReadings.set(gx.id, readings.currentValue);
+          } else if (currentValue < previousValue) {
+            recuperoLettura = true;
+            adjustedCurrentReadings.set(gx.id, readings.previousValue);
+            recuperoByUtenza.set(gx.id, true);
+            consumoSomma += 0;
+            const note = `Lettura attuale non coerente con il verso del contatore su interno ${gx.Interno || gx.id}: recupero applicato`;
+            recuperoNotes.push(note);
+            recuperoNoteByUtenza.set(gx.id, note);
           } else {
             consumoSomma += currentValue - previousValue;
-            adjustedCurrentReadings.set(gx.id, currentValue);
+            adjustedCurrentReadings.set(gx.id, readings.currentValue);
           }
         }
       }
@@ -4458,22 +4450,25 @@ async function calculateInterni(
       let consumoNorm = null;
       if (haveAny) {
         consumoNorm = round3(consumoSomma);
-      } else if (firstReadings.currentValue != null && firstReadings.previousValue != null) {
-        const currentValue = n2(firstReadings.currentValue);
-        const previousValue = n2(firstReadings.previousValue);
+      } else if (
+        firstReadings.calculationCurrentValue != null &&
+        firstReadings.calculationPreviousValue != null
+      ) {
+        const currentValue = n2(firstReadings.calculationCurrentValue);
+        const previousValue = n2(firstReadings.calculationPreviousValue);
         const stato = upper(statoAtt, "");
+        const replacementReset =
+          stato === "S" && (firstReadings.inverse || currentValue < previousValue);
 
-        if (currentValue < previousValue) {
-          if (stato === "S") {
-            consumoNorm = round3(currentValue);
-            sostituzioneContatore = true;
-          } else {
-            consumoNorm = 0;
-            recuperoLettura = true;
-            recuperoNotes.push("Lettura attuale inferiore alla precedente: recupero applicato");
-            recuperoByUtenza.set(first.id, true);
-            recuperoNoteByUtenza.set(first.id, "Lettura attuale inferiore alla precedente: recupero applicato");
-          }
+        if (replacementReset) {
+          consumoNorm = round3(Math.max(0, n2(firstReadings.currentValue)));
+          sostituzioneContatore = true;
+        } else if (currentValue < previousValue) {
+          consumoNorm = 0;
+          recuperoLettura = true;
+          recuperoNotes.push("Lettura non coerente con il verso del contatore: recupero applicato");
+          recuperoByUtenza.set(first.id, true);
+          recuperoNoteByUtenza.set(first.id, "Lettura non coerente con il verso del contatore: recupero applicato");
         } else {
           consumoNorm = round3(currentValue - previousValue);
         }

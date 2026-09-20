@@ -14,6 +14,7 @@ import type { Stato, GridRow, Session } from "../api/letture_interface";
 import MobileAssignmentControls from "./components/MobileAssignmentControls";
 import {
   calculateReadingConsumption,
+  isInverseMeter,
   readingFromConsumption,
 } from "../utils/readingConsumption";
 
@@ -22,6 +23,7 @@ import "react-datepicker/dist/react-datepicker.css";
 
 import { registerLocale } from "react-datepicker";
 import { it } from "date-fns/locale/it";
+import { CalendarClock, FolderOpen } from "lucide-react";
 
 registerLocale("it", it);
 
@@ -269,6 +271,39 @@ export default function LetturePage() {
     return date ? [{ date, status: period.stato }] : [];
   });
 
+  const latestRegisteredPeriod = existingPeriods.find(
+    (period) => Number(period.registered_rows || 0) > 0
+  ) ?? null;
+
+  const isLatestPeriodOpen =
+    latestRegisteredPeriod !== null &&
+    periodYear === Number(latestRegisteredPeriod.period_year) &&
+    periodMonth === Number(latestRegisteredPeriod.period_month);
+
+  function getPeriodLocatorDate(period: ReadingSessionSummary): Date {
+    return (
+      parseDbDate(
+        period.data_lettura_operatore || period.data_lettura_casa_idrica
+      ) ||
+      new Date(
+        Number(period.period_year),
+        Number(period.period_month) - 1,
+        1,
+        12,
+        0,
+        0
+      )
+    );
+  }
+
+  function openRegisteredPeriod(period: ReadingSessionSummary) {
+    if (dirty && !window.confirm("Sono presenti modifiche non salvate. Aprire un altro periodo?")) {
+      return;
+    }
+
+    setTriggerDate(getPeriodLocatorDate(period));
+  }
+
   async function refreshExistingPeriods() {
     const periods = await listReadingSessions(condominioId);
     setExistingPeriods(periods);
@@ -445,7 +480,12 @@ export default function LetturePage() {
   function getPossibleConsumption(row: GridRow) {
     const previous = latestHistory(row)?.valore_lettura;
     const current = row.current.valore;
-    const consumption = calculateReadingConsumption(current, previous, row.current.stato);
+    const consumption = calculateReadingConsumption(
+      current,
+      previous,
+      row.current.stato,
+      isInverseMeter(row.utenza)
+    );
     return consumption === null ? "" : String(consumption);
   }
 
@@ -487,7 +527,8 @@ export default function LetturePage() {
     const nextValue = readingFromConsumption(
       value,
       previous,
-      grid[index].current.stato
+      grid[index].current.stato,
+      isInverseMeter(grid[index].utenza)
     );
 
     setGrid((currentGrid) =>
@@ -591,6 +632,71 @@ export default function LetturePage() {
     <div className="sticky top-0 z-30 bg-slate-50 pb-3 bg-white p-4 rounded-2xl shadow space-y-4">
 
       <h1 className="text-lg font-semibold">Inserimento Letture</h1>
+
+      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
+            <CalendarClock className="h-4 w-4" aria-hidden="true" />
+          </span>
+
+          {latestRegisteredPeriod ? (
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">
+                Ultimo periodo con letture registrate
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <span className="font-semibold text-slate-900">
+                  {monthNames[Number(latestRegisteredPeriod.period_month) - 1]} {latestRegisteredPeriod.period_year}
+                </span>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+                    latestRegisteredPeriod.stato === "CHIUSA"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  {latestRegisteredPeriod.stato === "CHIUSA" ? "Chiuso" : "Bozza"}
+                </span>
+              </div>
+              <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                <span>
+                  Lettura operatore: {formatManualDate(parseDbDate(latestRegisteredPeriod.data_lettura_operatore)) || "non indicata"}
+                </span>
+                <span>
+                  {Number(latestRegisteredPeriod.registered_values || 0)} letture con valore
+                </span>
+                {Number(latestRegisteredPeriod.registered_rows || 0) !==
+                  Number(latestRegisteredPeriod.registered_values || 0) && (
+                  <span>
+                    {Number(latestRegisteredPeriod.registered_rows || 0)} righe salvate
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="text-[11px] font-semibold uppercase text-slate-500">
+                Ultimo periodo con letture registrate
+              </div>
+              <div className="text-sm text-slate-700">
+                Nessuna lettura ancora registrata per questo condominio.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {latestRegisteredPeriod && (
+          <button
+            type="button"
+            onClick={() => openRegisteredPeriod(latestRegisteredPeriod)}
+            disabled={loading || isLatestPeriodOpen}
+            className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-300 hover:text-blue-700 disabled:cursor-default disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+          >
+            <FolderOpen className="h-4 w-4" aria-hidden="true" />
+            {isLatestPeriodOpen ? "Periodo aperto" : "Apri periodo"}
+          </button>
+        )}
+      </div>
 
       {/* TOP ROW */}
 
@@ -797,6 +903,14 @@ export default function LetturePage() {
                       <div className="mt-0.5 flex flex-wrap gap-2 text-[11px] text-slate-500">
                         <span>Scala {row.utenza.Scala || "-"}</span>
                         <span>Mat. {row.utenza.Matricola_Contatore || "-"}</span>
+                        {isInverseMeter(row.utenza) && (
+                          <span
+                            className="rounded-full border border-cyan-200 bg-cyan-50 px-1.5 py-0.5 font-bold uppercase text-cyan-700"
+                            title="Il contatore decresce: il consumo e calcolato come lettura precedente meno lettura attuale."
+                          >
+                            Inverso
+                          </span>
+                        )}
                       </div>
                     </td>
 

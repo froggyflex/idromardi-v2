@@ -18,7 +18,7 @@ test("normal meters retain current and previous readings", () => {
   assert.equal(result.current.stato_lettura, "X");
 });
 
-test("inverse meters swap billing readings while retaining period states", () => {
+test("inverse meters keep chronological display values and reverse only calculation", () => {
   const result = resolveBillingReadings(
     { Contatore_Inverso: "SI" },
     { valore_lettura: 90, stato_lettura: "X" },
@@ -26,11 +26,16 @@ test("inverse meters swap billing readings while retaining period states", () =>
   );
 
   assert.equal(result.inverse, true);
-  assert.equal(result.currentValue, 100);
-  assert.equal(result.previousValue, 90);
+  assert.equal(result.currentValue, 90);
+  assert.equal(result.previousValue, 100);
+  assert.equal(result.calculationCurrentValue, 100);
+  assert.equal(result.calculationPreviousValue, 90);
   assert.equal(result.current.stato_lettura, "X");
   assert.equal(result.previous.stato_lettura, "K");
-  assert.equal(result.currentValue - result.previousValue, 10);
+  assert.equal(
+    result.calculationCurrentValue - result.calculationPreviousValue,
+    10
+  );
 });
 
 test("inverse meters preserve missing readings instead of producing zero consumption", () => {
@@ -40,9 +45,11 @@ test("inverse meters preserve missing readings instead of producing zero consump
     { valore_lettura: 100, stato_lettura: "K" }
   );
 
-  assert.equal(result.currentValue, 100);
-  assert.equal(result.previousValue, null);
-  assert.equal(result.current.stato_lettura, null);
+  assert.equal(result.currentValue, null);
+  assert.equal(result.previousValue, 100);
+  assert.equal(result.calculationCurrentValue, 100);
+  assert.equal(result.calculationPreviousValue, null);
+  assert.equal(result.current, null);
 });
 
 test("inverse meter accepts boolean and numeric database representations", () => {

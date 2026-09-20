@@ -34,7 +34,7 @@ function getMonthBounds(year, month) {
   return { start: toISO(start), end: toISO(end) };
 }
 
-function calculateReadingConsumption(currentValue, previousValue, state) {
+function calculateReadingConsumption(currentValue, previousValue, state, inverse = false) {
   if (
     currentValue === null ||
     currentValue === undefined ||
@@ -48,8 +48,15 @@ function calculateReadingConsumption(currentValue, previousValue, state) {
   const previous = Number(previousValue);
   if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
 
+  const normalizedState = String(state || "").trim().toUpperCase();
+
+  if (inverse) {
+    if (normalizedState === "S") return Math.max(0, current);
+    return previous >= current ? previous - current : 0;
+  }
+
   if (current < previous) {
-    return String(state || "").trim().toUpperCase() === "S"
+    return normalizedState === "S"
       ? Math.max(0, current)
       : 0;
   }
@@ -63,15 +70,29 @@ exports.listSessionsByCondominio = async function ({ idCondominio }) {
   const [rows] = await db.query(
     `
     SELECT
-      id,
-      period_year,
-      period_month,
-      data_lettura_operatore,
-      data_lettura_casa_idrica,
-      stato
-    FROM letture_sessioni
-    WHERE id_condominio = ?
-    ORDER BY period_year DESC, period_month DESC
+      s.id,
+      s.period_year,
+      s.period_month,
+      s.data_lettura_operatore,
+      s.data_lettura_casa_idrica,
+      s.stato,
+      s.created_at,
+      s.updated_at,
+      COALESCE(r.registered_rows, 0) AS registered_rows,
+      COALESCE(r.registered_values, 0) AS registered_values,
+      r.last_reading_update
+    FROM letture_sessioni s
+    LEFT JOIN (
+      SELECT
+        id_sessione,
+        COUNT(*) AS registered_rows,
+        SUM(CASE WHEN valore_lettura IS NOT NULL THEN 1 ELSE 0 END) AS registered_values,
+        MAX(COALESCE(updated_at, created_at)) AS last_reading_update
+      FROM letture_righe
+      GROUP BY id_sessione
+    ) r ON r.id_sessione = s.id
+    WHERE s.id_condominio = ?
+    ORDER BY s.period_year DESC, s.period_month DESC
     `,
     [idCondominio]
   );
@@ -269,6 +290,7 @@ exports.getSessionGrid = async function ({ sessionId }) {
     const righeMap = new Map(
       righe.map((r) => [r.id_utenza, r])
     );
+    const utenzeMap = new Map(utenze.map((u) => [u.id, u]));
 
     const utenzaIds = utenze.map((u) => u.id);
     let historyMap = new Map();
@@ -348,7 +370,8 @@ exports.getSessionGrid = async function ({ sessionId }) {
             ? calculateReadingConsumption(
                 row.valore_lettura,
                 previousRow.valore_lettura,
-                row.stato_lettura
+                row.stato_lettura,
+                String(utenzeMap.get(idUtenza)?.Contatore_Inverso || "").toUpperCase() === "SI"
               )
             : null;
 

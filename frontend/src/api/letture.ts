@@ -24,6 +24,11 @@ export interface ReadingSessionSummary {
   data_lettura_operatore?: string | null;
   data_lettura_casa_idrica?: string | null;
   stato: "BOZZA" | "CHIUSA";
+  created_at?: string | null;
+  updated_at?: string | null;
+  registered_rows: number;
+  registered_values: number;
+  last_reading_update?: string | null;
 }
 
 /* ---------- API Calls ---------- */
