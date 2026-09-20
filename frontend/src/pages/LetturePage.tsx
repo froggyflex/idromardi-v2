@@ -483,7 +483,8 @@ export default function LetturePage() {
     const consumption = calculateReadingConsumption(
       current,
       previous,
-      row.current.stato
+      row.current.stato,
+      isInverseMeter(row.utenza)
     );
     return consumption === null ? "" : String(consumption);
   }
@@ -526,7 +527,8 @@ export default function LetturePage() {
     const nextValue = readingFromConsumption(
       value,
       previous,
-      grid[index].current.stato
+      grid[index].current.stato,
+      isInverseMeter(grid[index].utenza)
     );
 
     setGrid((currentGrid) =>
@@ -904,7 +906,7 @@ export default function LetturePage() {
                         {isInverseMeter(row.utenza) && (
                           <span
                             className="rounded-full border border-cyan-200 bg-cyan-50 px-1.5 py-0.5 font-bold uppercase text-cyan-700"
-                            title="Contatore configurato come inverso; l'inversione delle letture viene applicata in fatturazione."
+                            title="Contatore inverso: le letture restano nel proprio periodo e il consumo viene calcolato dalla precedente meno l'attuale."
                           >
                             Inverso
                           </span>

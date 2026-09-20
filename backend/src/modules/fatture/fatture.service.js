@@ -238,6 +238,43 @@ async function ensureFattureRigheRecuperoColumns() {
   return getFattureRigheColumns();
 }
 
+async function loadRecoveryCarryForwardMap(
+  conn,
+  { idCondominio, idPeriodoPrecedente, excludeSessionId }
+) {
+  if (!idCondominio || !idPeriodoPrecedente) return new Map();
+
+  const [rows] = await conn.query(
+    `
+    SELECT
+      fr.id_utenza,
+      fr.lettura_attuale AS valore_effettivo
+    FROM fatture_sessioni fs
+    JOIN fatture_righe fr ON fr.id_fattura = fs.id
+    WHERE fs.id_condominio = ?
+      AND fs.id_periodo_attuale = ?
+      AND fs.id <> ?
+      AND fs.stato IN ('CALCOLATA', 'CONFERMATA')
+      AND fr.recupero_lettura = 1
+      AND fr.lettura_attuale IS NOT NULL
+    ORDER BY
+      CASE WHEN fs.stato = 'CONFERMATA' THEN 0 ELSE 1 END,
+      fs.updated_at DESC,
+      fs.created_at DESC
+    `,
+    [idCondominio, idPeriodoPrecedente, excludeSessionId || ""]
+  );
+
+  const carryForward = new Map();
+  for (const row of rows) {
+    if (!carryForward.has(row.id_utenza)) {
+      carryForward.set(row.id_utenza, row.valore_effettivo);
+    }
+  }
+
+  return carryForward;
+}
+
 async function getFattureAccontiColumns() {
   if (fattureAccontiColumns) return fattureAccontiColumns;
 
@@ -3242,7 +3279,27 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     );
 
     const mapAtt = new Map(righeAtt.map((r) => [r.id_utenza, r]));
-    const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
+    const recoveryCarryForward = await loadRecoveryCarryForwardMap(conn, {
+      idCondominio: session.id_condominio,
+      idPeriodoPrecedente: session.id_periodo_precedente,
+      excludeSessionId: session.id,
+    });
+    const mapPrec = new Map(
+      righePrec.map((row) => {
+        if (!recoveryCarryForward.has(row.id_utenza)) {
+          return [row.id_utenza, row];
+        }
+
+        return [
+          row.id_utenza,
+          {
+            ...row,
+            valore_lettura_rilevata: row.valore_lettura,
+            valore_lettura: recoveryCarryForward.get(row.id_utenza),
+          },
+        ];
+      })
+    );
     const context = parseCalculationContextJson(session.calculation_context_json);
     const calculationWarnings = Array.isArray(context.calculationWarnings)
       ? context.calculationWarnings
@@ -3655,13 +3712,17 @@ async function loadFullSession(conn, sessionId, interniTotals = null, generaleRe
       CONCAT(u.nome,' ',u.cognome) AS utente,
       u.doppio_contatore,
       u.billing_group_id,
-      u.Contatore_Inverso AS contatore_inverso
+      u.Contatore_Inverso AS contatore_inverso,
+      lr_att.valore_lettura AS lettura_attuale_rilevata
     FROM fatture_righe fr
     JOIN utenze_v2 u ON u.id = fr.id_utenza
+    LEFT JOIN letture_righe lr_att
+      ON lr_att.id_sessione = ?
+      AND lr_att.id_utenza = fr.id_utenza
     WHERE fr.id_fattura = ?
     ORDER BY u.id_user ASC
     `,
-    [sessionId]
+    [sessionRows[0].id_periodo_attuale, sessionId]
   );
   
   const session = sessionRows[0];
@@ -4299,7 +4360,27 @@ async function calculateInterni(
     );
 
     const mapAtt = new Map(righeAtt.map((r) => [r.id_utenza, r]));
-    const mapPrec = new Map(righePrec.map((r) => [r.id_utenza, r]));
+    const recoveryCarryForward = await loadRecoveryCarryForwardMap(conn, {
+      idCondominio: session.id_condominio,
+      idPeriodoPrecedente: session.id_periodo_precedente,
+      excludeSessionId: session.id,
+    });
+    const mapPrec = new Map(
+      righePrec.map((row) => {
+        if (!recoveryCarryForward.has(row.id_utenza)) {
+          return [row.id_utenza, row];
+        }
+
+        return [
+          row.id_utenza,
+          {
+            ...row,
+            valore_lettura_rilevata: row.valore_lettura,
+            valore_lettura: recoveryCarryForward.get(row.id_utenza),
+          },
+        ];
+      })
+    );
 
     // ---------- Condo NUAEs for QF distribution ----------
     const [[condo]] = await conn.query(
@@ -4422,7 +4503,7 @@ async function calculateInterni(
           const previousValue = n2(p);
           const stato = upper(readings.currentState, "");
           const replacementReset =
-            stato === "S" && currentValue < previousValue;
+            stato === "S" && (readings.inverse || currentValue < previousValue);
 
           if (replacementReset) {
             consumoSomma += Math.max(0, n2(readings.currentValue));
@@ -4458,7 +4539,7 @@ async function calculateInterni(
         const previousValue = n2(firstReadings.calculationPreviousValue);
         const stato = upper(statoAtt, "");
         const replacementReset =
-          stato === "S" && currentValue < previousValue;
+          stato === "S" && (firstReadings.inverse || currentValue < previousValue);
 
         if (replacementReset) {
           consumoNorm = round3(Math.max(0, n2(firstReadings.currentValue)));

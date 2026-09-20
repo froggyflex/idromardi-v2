@@ -6,6 +6,11 @@ const uploadPdf = require("../../config/multerPdf");
  
 router.get("/", controller.getSummary);
 router.get("/recent", controller.getRecentRows);
+router.get("/document-counters", controller.listDocumentNumberCounters);
+router.put(
+  "/document-counters/:documentType/:anno",
+  controller.updateDocumentNumberCounter
+);
 
 router.get("/imported-documents", controller.getImportedDocuments);
 router.get("/imported-documents/:id", controller.getImportedDocumentDetail);

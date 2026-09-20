@@ -21,6 +21,7 @@ import LoginPage from "./pages/LoginPage";
 import PasswordSettings from "./pages/admin/PasswordSettings";
 import MobileReadingsReview from "./pages/admin/MobileReadingsReview";
 import MetaBusinessPage from "./pages/admin/MetaBusinessPage";
+import DocumentNumberSettings from "./pages/admin/DocumentNumberSettings";
 import { isAuthenticated } from "./auth";
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -62,6 +63,7 @@ function App() {
                   <Route path="/admin/tariffe" element={<AdminTariffe />} />
                   <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />
                   <Route path="/admin/password" element={<PasswordSettings />} />
+                  <Route path="/admin/document-numbers" element={<DocumentNumberSettings />} />
                   <Route path="/admin/mobile-readings" element={<MobileReadingsReview />} />
                   <Route path="/admin/meta-business" element={<MetaBusinessPage />} />
                 </Routes>

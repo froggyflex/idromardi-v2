@@ -9,6 +9,7 @@ import {
   Droplets,
   Gauge,
   KeyRound,
+  ListOrdered,
   LayoutDashboard,
   LogOut,
   MapPinned,
@@ -465,6 +466,11 @@ export default function MainLayout({ children }: Props) {
                 icon={MapPinned}
               />
               <NavItem to="/admin/password" label="Password" icon={KeyRound} />
+              <NavItem
+                to="/admin/document-numbers"
+                label="Numerazione documenti"
+                icon={ListOrdered}
+              />
             </div>
           </div>
 

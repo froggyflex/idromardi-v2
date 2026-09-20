@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Search as SearchIcon, X as XIcon } from "lucide-react";
 import api from "../../api/client";
 import { th } from "date-fns/locale/th";
 import { Fragment } from "react";
@@ -246,6 +247,7 @@ type ProformaRow = {
 
 type FatturaRow = {
   id: string;
+  numero_progressivo: number;
   numero: string;
   descrizione: string | null;
   data_documento: string;
@@ -253,6 +255,12 @@ type FatturaRow = {
   stato: string;
   condominio: string;
   import_numero: string | null;
+  created_at?: string | null;
+  totale_proforme_collegate: number;
+  numero_proforme_collegate: number;
+  residuo_da_associare: number;
+  eccedenza_proforme: number;
+  copertura_completa: boolean;
 };
 
 
@@ -268,6 +276,28 @@ function formatDate(value?: string | null) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return new Intl.DateTimeFormat("it-IT").format(d);
+}
+
+function getInvoiceDisplayNumber(row: FatturaRow) {
+  const progressiveNumber = Number(row.numero_progressivo);
+  if (Number.isFinite(progressiveNumber) && progressiveNumber > 0) {
+    return String(progressiveNumber).padStart(6, "0");
+  }
+
+  const source = String(row.import_numero || row.numero || "");
+  const numericParts = source.match(/\d+/g) || [];
+  const mostSpecificPart = numericParts.reduce(
+    (current, part) => (part.length > current.length ? part : current),
+    ""
+  );
+
+  return mostSpecificPart || source || "-";
+}
+
+function getInvoiceSortTime(value?: string | null) {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function labelType(type: RecentRow["type"]) {
@@ -390,8 +420,8 @@ export default function FinancialSummaryPageTemplate() {
     descrizione: "",
   });
   const [registeringPayment, setRegisteringPayment] = useState(false);
-  const [printingId, setPrintingId] = useState<number | null>(null);
-  const [openPrintMenuId, setOpenPrintMenuId] = useState<number | null>(null);
+  const [printingId, setPrintingId] = useState<string | null>(null);
+  const [openPrintMenuId, setOpenPrintMenuId] = useState<string | null>(null);
 
   const [paymentsRows, setPaymentsRows] = useState<PaymentRow[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
@@ -636,12 +666,12 @@ async function createManualFattura() {
   }
 }
 
-  async function handlePrint(id: number, mode: PrintMode) {
+  async function handlePrint(id: string, mode: PrintMode) {
     try {
       setPrintingId(id);
       setOpenPrintMenuId(null);
 
-      await printFatturaPdf(String(id), mode);
+      await printFatturaPdf(id, mode);
     } finally {
       setPrintingId(null);
     }
@@ -778,28 +808,42 @@ async function savePaymentDescription() {
     setIsRegisterPaymentModalOpen(true);
   }
   const filteredFattureRows = useMemo(() => {
-  
-    return fattureRows.filter((row: any) => {
-      const q = fatturaSearch.trim().toLowerCase();
+    const q = fatturaSearch.trim().toLocaleLowerCase("it-IT");
 
+    return fattureRows
+      .filter((row) => {
       const matchesSearch =
         !q ||
         [
+          getInvoiceDisplayNumber(row),
+          String(row.numero_progressivo || ""),
           row.numero,
+          row.import_numero || "",
           row.condominio || "",
           row.descrizione || "",
+          formatDate(row.data_documento),
           String(row.importo || ""),
-          String(row.totale_proforme_collegate || ""),
         ]
           .join(" ")
-          .toLowerCase()
+          .toLocaleLowerCase("it-IT")
           .includes(q);
 
       const matchesStatus =
         fatturaStatusFilter === "TUTTI" || row.stato === fatturaStatusFilter;
 
-      return matchesSearch && matchesStatus;
-    });
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a, b) => {
+        const documentDateDifference =
+          getInvoiceSortTime(b.data_documento) - getInvoiceSortTime(a.data_documento);
+        if (documentDateDifference !== 0) return documentDateDifference;
+
+        const creationDateDifference =
+          getInvoiceSortTime(b.created_at) - getInvoiceSortTime(a.created_at);
+        if (creationDateDifference !== 0) return creationDateDifference;
+
+        return Number(b.numero_progressivo || 0) - Number(a.numero_progressivo || 0);
+      });
   }, [fattureRows, fatturaSearch, fatturaStatusFilter]);
 
   const summaryCards = [
@@ -1829,29 +1873,6 @@ async function uploadProformaFiles() {
       setParsingImportId(null);
     }
   }
-   const filteredFatturaRows = useMemo(() => {
-    return fattureRows.filter((row) => {
-      const q = fatturaSearch.trim().toLowerCase();
-
-      const matchesSearch =
-        !q ||
-        [
-          row.numero,
-          row.condominio || "",
-          row.descrizione || "",
-           
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q);
-
-      const matchesStatus =
-        fatturaStatusFilter === "TUTTI" || row.stato === fatturaStatusFilter;
-
-      return matchesSearch && matchesStatus;
-    });
-  }, [fattureRows, fatturaSearch, fatturaStatusFilter]);
-
   const filteredProformasRows = useMemo(() => {
     return proformasRows.filter((row) => {
       const q = proformaSearch.trim().toLowerCase();
@@ -1903,9 +1924,9 @@ async function uploadProformaFiles() {
     const paginatedFatturaRows = useMemo(() => {
       const start = (fatturaPage - 1) * fatturaRowsPerPage;
       const end = start + fatturaRowsPerPage;
-      return filteredFatturaRows.slice(start, end);
+      return filteredFattureRows.slice(start, end);
 
-    }, [filteredFatturaRows, fatturaPage, fatturaRowsPerPage]);
+    }, [filteredFattureRows, fatturaPage, fatturaRowsPerPage]);
 
     const totalFatturaPages = Math.max(
           1,
@@ -2935,47 +2956,72 @@ const renderImportedTableSection = (
                       </p>
                     </div>
 
-                    <div className="flex flex-col gap-3 sm:flex-row">
-                      <input
-                        value={fatturaSearch}
-                        onChange={(e) => setFatturaSearch(e.target.value)}
-                        placeholder="Cerca numero, condominio, descrizione..."
-                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-                      />
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-col gap-3 sm:flex-row">
+                        <div className="relative min-w-[280px] flex-1">
+                          <SearchIcon
+                            aria-hidden="true"
+                            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                          />
+                          <input
+                            value={fatturaSearch}
+                            onChange={(e) => setFatturaSearch(e.target.value)}
+                            placeholder="Cerca in tutte le fatture..."
+                            aria-label="Cerca in tutto l'archivio fatture"
+                            className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-10 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          />
+                          {fatturaSearch ? (
+                            <button
+                              type="button"
+                              onClick={() => setFatturaSearch("")}
+                              title="Cancella ricerca"
+                              aria-label="Cancella ricerca fatture"
+                              className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                            >
+                              <XIcon aria-hidden="true" className="h-4 w-4" />
+                            </button>
+                          ) : null}
+                        </div>
 
-                      <select
-                        value={fatturaStatusFilter}
-                        onChange={(e) => setFatturaStatusFilter(e.target.value)}
-                        className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-                      >
-                        <option value="TUTTI">Tutti gli stati</option>
-                        <option value="BOZZA">Bozza</option>
-                        <option value="EMESSA">Emessa</option>
-                        <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
-                        <option value="PAGATA">Pagata</option>
-                        <option value="ANNULLATA">Annullata</option>
-                      </select>
+                        <select
+                          value={fatturaStatusFilter}
+                          onChange={(e) => setFatturaStatusFilter(e.target.value)}
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value="TUTTI">Tutti gli stati</option>
+                          <option value="BOZZA">Bozza</option>
+                          <option value="EMESSA">Emessa</option>
+                          <option value="PARZIALMENTE_PAGATA">Parzialmente pagata</option>
+                          <option value="PAGATA">Pagata</option>
+                          <option value="ANNULLATA">Annullata</option>
+                        </select>
 
-                    <select
-                      value={fatturaRowsPerPage}
-                      onChange={(e) => {
-                        setFatturaRowsPerPage(Number(e.target.value));
-                        setFatturaPage(1);
-                      }}
-                      className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
-                    >
-                      <option value={5}>5 righe</option>
-                      <option value={10}>10 righe</option>
-                      <option value={20}>20 righe</option>
-                      <option value={50}>50 righe</option>
-                    </select>
+                        <select
+                          value={fatturaRowsPerPage}
+                          onChange={(e) => {
+                            setFatturaRowsPerPage(Number(e.target.value));
+                            setFatturaPage(1);
+                          }}
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value={5}>5 righe</option>
+                          <option value={10}>10 righe</option>
+                          <option value={20}>20 righe</option>
+                          <option value={50}>50 righe</option>
+                        </select>
 
-                      <button
-                        onClick={() => setActiveDetailSection(null)}
-                        className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
-                      >
-                        Chiudi sezione
-                      </button>
+                        <button
+                          onClick={() => setActiveDetailSection(null)}
+                          className="rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          Chiudi sezione
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500 sm:text-right">
+                        {fatturaSearch.trim()
+                          ? `${filteredFattureRows.length} risultati nell'intero archivio`
+                          : `Ricerca disponibile su tutte le ${fattureRows.length} fatture`}
+                      </p>
                     </div>
                   </div>
 
@@ -3009,10 +3055,20 @@ const renderImportedTableSection = (
                             </td>
                           </tr>
                         ) : (
-                          paginatedFatturaRows.map((row: any) => (
+                          paginatedFatturaRows.map((row) => (
                             
                             <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-6 py-4 font-semibold text-slate-800">{row.import_numero || row.numero}</td>
+                              <td className="px-6 py-4 font-mono font-semibold tabular-nums text-slate-800">
+                                <span
+                                  title={
+                                    row.import_numero
+                                      ? `${row.numero} - ${row.import_numero}`
+                                      : row.numero
+                                  }
+                                >
+                                  {getInvoiceDisplayNumber(row)}
+                                </span>
+                              </td>
                               <td className="px-6 py-4 text-slate-700">{row.condominio || "-"}</td>
                               <td className="px-6 py-4 text-slate-700">{row.descrizione || "-"}</td>
                               <td className="px-6 py-4 text-slate-500">{formatDate(row.data_documento)}</td>
@@ -3115,7 +3171,6 @@ const renderImportedTableSection = (
                                         }
                                         disabled={
                                           row.stato === "ANNULLATA" ||
-                                          row.fattura_numero != null ||
                                           printingId === row.id
                                         }
                                         title="Stampa fattura"
@@ -3220,7 +3275,7 @@ const renderImportedTableSection = (
                         )}
                       </tbody>
                     </table>
-                  {!loadingFatture && filteredFatturaRows.length > 0 ? (
+                  {!loadingFatture && filteredFattureRows.length > 0 ? (
                     <div className="flex flex-col gap-4 border-t border-slate-200 px-5 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
                       <div className="text-sm text-slate-500">
                         Mostrando{" "}
@@ -3229,11 +3284,11 @@ const renderImportedTableSection = (
                         </span>{" "}
                         -{" "}
                         <span className="font-semibold text-slate-700">
-                          {Math.min(fatturaPage * fatturaRowsPerPage, filteredFatturaRows.length)}
+                          {Math.min(fatturaPage * fatturaRowsPerPage, filteredFattureRows.length)}
                         </span>{" "}
                         di{" "}
                         <span className="font-semibold text-slate-700">
-                          {filteredFatturaRows.length}
+                          {filteredFattureRows.length}
                         </span>{" "}
                         fatture
                       </div>

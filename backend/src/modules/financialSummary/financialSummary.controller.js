@@ -20,6 +20,37 @@ async function getRecentRows(req, res) {
   }
 }
 
+async function listDocumentNumberCounters(req, res) {
+  try {
+    const counters = await service.listDocumentNumberCounters({
+      anno: req.query.anno,
+    });
+    return res.json({ counters });
+  } catch (err) {
+    console.error("listDocumentNumberCounters error:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || "Errore nel caricamento delle numerazioni.",
+    });
+  }
+}
+
+async function updateDocumentNumberCounter(req, res) {
+  try {
+    const counter = await service.updateDocumentNumberCounter({
+      documentType: req.params.documentType,
+      anno: req.params.anno,
+      currentValue: req.body?.currentValue,
+    });
+    return res.json({ counter });
+  } catch (err) {
+    console.error("updateDocumentNumberCounter error:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.message || "Errore durante l'aggiornamento della numerazione.",
+      code: err.code || undefined,
+    });
+  }
+}
+
 async function listImportedDocuments(req, res) {
   try {
     const rows = await service.listImportedDocuments();
@@ -550,6 +581,8 @@ module.exports = {
   resetProformaToEmessa,
   getSummary,
   getRecentRows,
+  listDocumentNumberCounters,
+  updateDocumentNumberCounter,
   listImportedDocuments,
   getImportedDocumentDetail,
   uploadImportedDocument,

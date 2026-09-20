@@ -284,6 +284,10 @@ export default function CondominioFatturePage() {
             Interno: sourceUtenza?.Interno ?? sourceUtenza?.interno ?? "",
             doppio_contatore:
               sourceUtenza?.doppio_contatore ?? row?.doppio_contatore,
+            Contatore_Inverso:
+              sourceUtenza?.Contatore_Inverso ??
+              sourceUtenza?.contatore_inverso ??
+              row?.contatore_inverso,
           },
         };
       }
@@ -298,11 +302,13 @@ export default function CondominioFatturePage() {
           Scala: row?.Scala ?? row?.scala ?? "",
           Interno: row?.Interno ?? row?.interno ?? "",
           doppio_contatore: row?.doppio_contatore,
+          Contatore_Inverso: row?.Contatore_Inverso ?? row?.contatore_inverso,
         },
         attuale:
           row?.lettura_attuale !== undefined || row?.stato_attuale !== undefined
             ? {
-                valore_lettura: row?.lettura_attuale,
+                valore_lettura:
+                  row?.lettura_attuale_rilevata ?? row?.lettura_attuale,
                 stato_lettura: row?.stato_attuale,
               }
             : null,
@@ -4510,11 +4516,25 @@ const getLiveLetturaAttuale = (row: any) => {
     );
   }
 
-  return isInverseMeter(row?.utenza)
-    ? numberOrNull(row?.precedente?.valore_lettura) ??
-        numberOrNull(row?.riga?.lettura_attuale)
-    : numberOrNull(row?.attuale?.valore_lettura) ??
-        numberOrNull(row?.riga?.lettura_attuale);
+  const current =
+    numberOrNull(row?.attuale?.valore_lettura) ??
+    numberOrNull(row?.riga?.lettura_attuale);
+  const previous =
+    numberOrNull(row?.precedente?.valore_lettura) ??
+    numberOrNull(row?.riga?.lettura_precedente);
+  const state = String(
+    row?.attuale?.stato_lettura ?? row?.riga?.stato_attuale ?? ""
+  )
+    .trim()
+    .toUpperCase();
+
+  if (state === "S" || current === null || previous === null) return current;
+
+  const isRecovery = isInverseMeter(row?.utenza)
+    ? current > previous
+    : current < previous;
+
+  return isRecovery ? previous : current;
 };
 
 const getLiveLetturaPrecedente = (row: any) => {
@@ -4525,11 +4545,10 @@ const getLiveLetturaPrecedente = (row: any) => {
     );
   }
 
-  return isInverseMeter(row?.utenza)
-    ? numberOrNull(row?.attuale?.valore_lettura) ??
-        numberOrNull(row?.riga?.lettura_precedente)
-    : numberOrNull(row?.precedente?.valore_lettura) ??
-        numberOrNull(row?.riga?.lettura_precedente);
+  return (
+    numberOrNull(row?.precedente?.valore_lettura) ??
+    numberOrNull(row?.riga?.lettura_precedente)
+  );
 };
 
 const getLiveStatoAttuale = (row: any) =>
@@ -4838,6 +4857,32 @@ const isRecuperoReadingRow = (row: any) => {
   return isInverseMeter(row?.utenza)
     ? current > previous
     : current < previous;
+};
+
+const getRecuperoReadingDetail = (row: any) => {
+  if (!isRecuperoReadingRow(row)) return null;
+
+  const effective = getLiveLetturaAttuale(row);
+  const detected = numberOrNull(
+    row?.attuale?.valore_lettura ?? row?.riga?.lettura_attuale_rilevata
+  );
+
+  if (effective === null || detected === null || effective === detected) {
+    return null;
+  }
+
+  return { effective, detected };
+};
+
+const getPreviousRecoveryCarryDetail = (row: any) => {
+  const effective = getLiveLetturaPrecedente(row);
+  const detected = numberOrNull(row?.precedente?.valore_lettura_rilevata);
+
+  if (effective === null || detected === null || effective === detected) {
+    return null;
+  }
+
+  return { effective, detected };
 };
 
 const roundMoney = (value: number) =>
@@ -6986,9 +7031,12 @@ return (
                                     const minimumCreditEuro = Number(r.riga?.minimum_payable_credit_euro || 0);
                                     const minimumCreditMc = Number(r.riga?.minimum_payable_credit_mc || 0);
                                     const recuperoReading = isRecuperoReadingRow(r);
+                                    const recuperoReadingDetail = getRecuperoReadingDetail(r);
+                                    const previousRecoveryCarryDetail =
+                                      getPreviousRecoveryCarryDetail(r);
                                     const recuperoNote =
                                       r.riga?.recupero_note ||
-                                      "Lettura attuale inferiore alla precedente: consumo portato a recupero";
+                                      "Lettura non coerente con il verso del contatore: consumo portato a recupero";
 
                                     const uniqueTiers = tiers.filter(
                                       (tier: any, index: number, arr: any[]) =>
@@ -7021,7 +7069,7 @@ return (
                                             {isInverseMeter(r.utenza) && (
                                               <div
                                                 className="mx-auto mt-1 inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700"
-                                                title="Contatore inverso: in fatturazione le letture attuale e precedente sono scambiate; il consumo resta la loro differenza positiva."
+                                                title="Contatore inverso: le letture restano nel proprio periodo e il consumo viene calcolato dalla precedente meno l'attuale."
                                               >
                                                 Inverso
                                               </div>
@@ -7041,7 +7089,7 @@ return (
                                             )}
                                             {recuperoReading && (
                                               <div
-                                                className="mx-auto mt-1 inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700"
+                                                className="mx-auto mt-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700"
                                                 title={recuperoNote}
                                               >
                                                 Recupero
@@ -7052,10 +7100,26 @@ return (
                                           <td className="p-2 text-center">{r.utenza?.Scala ?? ""}</td>
                                           <td className="p-2 text-center">{r.utenza?.Interno ?? ""}</td>
                                           <td className="p-2 text-center">
-                                            {getLiveLetturaAttuale(r) ?? "-"}
+                                            <div>{getLiveLetturaAttuale(r) ?? "-"}</div>
+                                            {recuperoReadingDetail && (
+                                              <div
+                                                className="mt-0.5 text-[10px] font-medium text-slate-500"
+                                                title="Lettura originale inserita dall'operatore"
+                                              >
+                                                Rilevata: {recuperoReadingDetail.detected}
+                                              </div>
+                                            )}
                                           </td>
                                           <td className="p-2 text-center">
-                                            {getLiveLetturaPrecedente(r) ?? "-"}
+                                            <div>{getLiveLetturaPrecedente(r) ?? "-"}</div>
+                                            {previousRecoveryCarryDetail && (
+                                              <div
+                                                className="mt-0.5 text-[10px] font-medium text-slate-500"
+                                                title="Lettura rilevata nel periodo precedente, sostituita dal valore effettivo di recupero"
+                                              >
+                                                Rilevata: {previousRecoveryCarryDetail.detected}
+                                              </div>
+                                            )}
                                           </td>
                                           <td className="p-2 text-center">
                                             {getLiveStatoAttuale(r)}

@@ -608,9 +608,13 @@ async function listFattureSimple() {
       f.stato,
       f.created_at,
       f.updated_at,
+      pi.extracted_number,
       c.indirizzo
 
-    ORDER BY import_numero DESC
+    ORDER BY
+      f.data_documento DESC,
+      f.created_at DESC,
+      f.numero_progressivo DESC
     `
   );
 
@@ -1533,80 +1537,58 @@ async function parseImportedDocumentF(fileId) {
   }
 }
 
-async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = null) {
-  if (!conn) {
-    throw new Error("Connessione database mancante.");
+const DOCUMENT_NUMBER_CONFIG = Object.freeze({
+  PROFORMA: {
+    table: "proformas",
+    dateColumn: "data_documento",
+    prefix: "PF",
+    label: "Proforma",
+  },
+  FATTURA: {
+    table: "fatture",
+    dateColumn: "data_documento",
+    prefix: "FT",
+    label: "Fattura",
+  },
+  PAYMENT: {
+    table: "payments",
+    dateColumn: "data_pagamento",
+    prefix: "PG",
+    label: "Pagamento",
+  },
+});
+
+function normalizeDocumentNumberType(documentType) {
+  const requestedType = String(documentType || "").trim().toUpperCase();
+  return requestedType === "PAGAMENTO" ? "PAYMENT" : requestedType;
+}
+
+function validateDocumentNumberYear(anno) {
+  const year = Number(anno);
+  if (!Number.isInteger(year) || year < 2000 || year > 9999) {
+    const error = new Error("Anno numerazione non valido.");
+    error.statusCode = 400;
+    throw error;
   }
+  return year;
+}
 
-  if (!documentType) {
-    throw new Error("documentType mancante.");
-  }
+async function getIssuedDocumentMax(conn, documentConfig, documentYear) {
+  const startDate = `${documentYear}-01-01`;
+  const endDate = `${documentYear + 1}-01-01`;
+  const [[row]] = await conn.query(
+    `
+    SELECT COALESCE(MAX(numero_progressivo), 0) AS max_value
+    FROM ${documentConfig.table}
+    WHERE ${documentConfig.dateColumn} >= ?
+      AND ${documentConfig.dateColumn} < ?
+    `,
+    [startDate, endDate]
+  );
+  return Number(row?.max_value || 0);
+}
 
-  if (!anno || Number.isNaN(Number(anno))) {
-    throw new Error("anno non valido.");
-  }
-
-  const requestedType = String(documentType).trim().toUpperCase();
-  const normalizedType =
-    requestedType === "PAGAMENTO" ? "PAYMENT" : requestedType;
-  const documentConfig = {
-    PROFORMA: { table: "proformas", prefix: "PF" },
-    FATTURA: { table: "fatture", prefix: "FT" },
-    PAYMENT: { table: "payments", prefix: "PG" },
-  }[normalizedType];
-
-  if (!documentConfig) {
-    throw new Error(`Tipo documento non supportato: ${requestedType}`);
-  }
-
-  const documentYear = Number(anno);
-
-  // Older code attempted to write PAGAMENTO into an enum that accepts PAYMENT.
-  // MySQL stored that invalid enum value as an empty string; recover that row
-  // before creating a new counter for the same year.
-  if (normalizedType === "PAYMENT") {
-    const [paymentCounterRows] = await conn.query(
-      `
-      SELECT id, document_type, current_value
-      FROM document_number_counters
-      WHERE anno = ?
-        AND (document_type = 'PAYMENT' OR document_type = '')
-      FOR UPDATE
-      `,
-      [documentYear]
-    );
-    const validCounter = paymentCounterRows.find(
-      (row) => row.document_type === "PAYMENT"
-    );
-    const legacyCounter = paymentCounterRows.find(
-      (row) => row.document_type === ""
-    );
-
-    if (!validCounter && legacyCounter) {
-      await conn.query(
-        `
-        UPDATE document_number_counters
-        SET document_type = 'PAYMENT', updated_at = NOW()
-        WHERE id = ?
-        `,
-        [legacyCounter.id]
-      );
-    } else if (validCounter && legacyCounter) {
-      await conn.query(
-        `
-        UPDATE document_number_counters
-        SET current_value = GREATEST(current_value, ?), updated_at = NOW()
-        WHERE id = ?
-        `,
-        [Number(legacyCounter.current_value || 0), validCounter.id]
-      );
-      await conn.query(
-        `DELETE FROM document_number_counters WHERE id = ?`,
-        [legacyCounter.id]
-      );
-    }
-  }
-
+async function ensureDocumentCounterRow(conn, documentType, documentYear) {
   await conn.query(
     `
     INSERT IGNORE INTO document_number_counters (
@@ -1619,8 +1601,80 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     )
     VALUES (?, ?, ?, 0, NOW(), NOW())
     `,
-    [crypto.randomUUID(), normalizedType, documentYear]
+    [crypto.randomUUID(), documentType, documentYear]
   );
+}
+
+async function repairLegacyPaymentCounter(conn, documentYear, lock = false) {
+  const [paymentCounterRows] = await conn.query(
+    `
+    SELECT id, document_type, current_value
+    FROM document_number_counters
+    WHERE anno = ?
+      AND (document_type = 'PAYMENT' OR document_type = '')
+    ${lock ? "FOR UPDATE" : ""}
+    `,
+    [documentYear]
+  );
+  const validCounter = paymentCounterRows.find(
+    (row) => row.document_type === "PAYMENT"
+  );
+  const legacyCounter = paymentCounterRows.find(
+    (row) => row.document_type === ""
+  );
+
+  if (!validCounter && legacyCounter) {
+    await conn.query(
+      `
+      UPDATE document_number_counters
+      SET document_type = 'PAYMENT', updated_at = NOW()
+      WHERE id = ?
+      `,
+      [legacyCounter.id]
+    );
+  } else if (validCounter && legacyCounter) {
+    await conn.query(
+      `
+      UPDATE document_number_counters
+      SET current_value = GREATEST(current_value, ?), updated_at = NOW()
+      WHERE id = ?
+      `,
+      [Number(legacyCounter.current_value || 0), validCounter.id]
+    );
+    await conn.query(
+      `DELETE FROM document_number_counters WHERE id = ?`,
+      [legacyCounter.id]
+    );
+  }
+}
+
+async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = null) {
+  if (!conn) {
+    throw new Error("Connessione database mancante.");
+  }
+
+  if (!documentType) {
+    throw new Error("documentType mancante.");
+  }
+
+  const requestedType = String(documentType).trim().toUpperCase();
+  const normalizedType = normalizeDocumentNumberType(requestedType);
+  const documentConfig = DOCUMENT_NUMBER_CONFIG[normalizedType];
+
+  if (!documentConfig) {
+    throw new Error(`Tipo documento non supportato: ${requestedType}`);
+  }
+
+  const documentYear = validateDocumentNumberYear(anno);
+
+  // Older code attempted to write PAGAMENTO into an enum that accepts PAYMENT.
+  // MySQL stored that invalid enum value as an empty string; recover that row
+  // before creating a new counter for the same year.
+  if (normalizedType === "PAYMENT") {
+    await repairLegacyPaymentCounter(conn, documentYear, true);
+  }
+
+  await ensureDocumentCounterRow(conn, normalizedType, documentYear);
 
   const [rows] = await conn.query(
     `
@@ -1640,25 +1694,11 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     );
   }
 
-  const [[issuedRow]] = await conn.query(
-    `
-    SELECT COALESCE(MAX(numero_progressivo), 0) AS max_value
-    FROM ${documentConfig.table}
-    `
-  );
-  const [[counterMaxRow]] = await conn.query(
-    `
-    SELECT COALESCE(MAX(current_value), 0) AS max_value
-    FROM document_number_counters
-    WHERE document_type = ?
-    `,
-    [normalizedType]
-  );
+  const issuedMax = await getIssuedDocumentMax(conn, documentConfig, documentYear);
   const nextValue =
     Math.max(
       Number(rows[0].current_value || 0),
-      Number(issuedRow?.max_value || 0),
-      Number(counterMaxRow?.max_value || 0)
+      issuedMax
     ) + 1;
 
   await conn.query(
@@ -1691,6 +1731,122 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
       ? `${documentConfig.prefix}-${padded}-${slug}`
       : `${documentConfig.prefix}-${padded}`,
   };
+}
+
+async function listDocumentNumberCounters({ anno } = {}) {
+  const documentYear = validateDocumentNumberYear(
+    anno ?? new Date().getFullYear()
+  );
+  const conn = await db.getConnection();
+
+  try {
+    const counters = [];
+    for (const [documentType, config] of Object.entries(DOCUMENT_NUMBER_CONFIG)) {
+      if (documentType === "PAYMENT") {
+        await repairLegacyPaymentCounter(conn, documentYear);
+      }
+      await ensureDocumentCounterRow(conn, documentType, documentYear);
+      const [[counter]] = await conn.query(
+        `
+        SELECT current_value, updated_at
+        FROM document_number_counters
+        WHERE document_type = ? AND anno = ?
+        LIMIT 1
+        `,
+        [documentType, documentYear]
+      );
+      const issuedMax = await getIssuedDocumentMax(conn, config, documentYear);
+      const currentValue = Number(counter?.current_value || 0);
+
+      counters.push({
+        documentType,
+        label: config.label,
+        prefix: config.prefix,
+        anno: documentYear,
+        currentValue,
+        issuedMax,
+        nextValue: Math.max(currentValue, issuedMax) + 1,
+        synchronized: currentValue >= issuedMax,
+        updatedAt: counter?.updated_at || null,
+      });
+    }
+
+    return counters;
+  } finally {
+    conn.release();
+  }
+}
+
+async function updateDocumentNumberCounter({ documentType, anno, currentValue }) {
+  const normalizedType = normalizeDocumentNumberType(documentType);
+  const config = DOCUMENT_NUMBER_CONFIG[normalizedType];
+  if (!config) {
+    const error = new Error(`Tipo documento non supportato: ${documentType}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const documentYear = validateDocumentNumberYear(anno);
+  const parsedValue = Number(currentValue);
+  if (!Number.isInteger(parsedValue) || parsedValue < 0) {
+    const error = new Error("Il contatore deve essere un numero intero maggiore o uguale a zero.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    if (normalizedType === "PAYMENT") {
+      await repairLegacyPaymentCounter(conn, documentYear, true);
+    }
+    await ensureDocumentCounterRow(conn, normalizedType, documentYear);
+    const [[counter]] = await conn.query(
+      `
+      SELECT id
+      FROM document_number_counters
+      WHERE document_type = ? AND anno = ?
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [normalizedType, documentYear]
+    );
+    const issuedMax = await getIssuedDocumentMax(conn, config, documentYear);
+    if (parsedValue < issuedMax) {
+      const error = new Error(
+        `Il contatore non può essere inferiore a ${issuedMax}, già assegnato nel ${documentYear}.`
+      );
+      error.statusCode = 409;
+      error.code = "DOCUMENT_COUNTER_BELOW_ISSUED";
+      throw error;
+    }
+
+    await conn.query(
+      `
+      UPDATE document_number_counters
+      SET current_value = ?, updated_at = NOW()
+      WHERE id = ?
+      `,
+      [parsedValue, counter.id]
+    );
+    await conn.commit();
+
+    return {
+      documentType: normalizedType,
+      label: config.label,
+      prefix: config.prefix,
+      anno: documentYear,
+      currentValue: parsedValue,
+      issuedMax,
+      nextValue: parsedValue + 1,
+      synchronized: true,
+    };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 async function annullaProforma(id, reason, userId = null) {
@@ -4673,6 +4829,8 @@ async function resetToEmessa(id) {
   getSummary,
   getRecentRows,
   getNextDocumentNumber,
+  listDocumentNumberCounters,
+  updateDocumentNumberCounter,
   promoteImportedDocumentToProforma,
   searchCondomini,
   listCondominiSimple,

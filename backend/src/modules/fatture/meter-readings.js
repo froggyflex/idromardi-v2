@@ -17,14 +17,14 @@ function resolveBillingReadings(utenza, currentReading, previousReading) {
 
   return {
     inverse,
-    currentValue: inverse ? rawPreviousValue : rawCurrentValue,
-    previousValue: inverse ? rawCurrentValue : rawPreviousValue,
-    calculationCurrentValue: rawCurrentValue,
-    calculationPreviousValue: rawPreviousValue,
+    currentValue: rawCurrentValue,
+    previousValue: rawPreviousValue,
+    calculationCurrentValue: inverse ? rawPreviousValue : rawCurrentValue,
+    calculationPreviousValue: inverse ? rawCurrentValue : rawPreviousValue,
     currentState,
     previousState,
-    current: inverse ? previousReading || null : currentReading || null,
-    previous: inverse ? currentReading || null : previousReading || null,
+    current: currentReading || null,
+    previous: previousReading || null,
   };
 }
 
