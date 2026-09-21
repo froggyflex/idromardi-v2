@@ -1,5 +1,25 @@
 const service = require("./financialSummary.service");
 
+function sendDocumentCreationError(res, err, fallbackMessage) {
+  const duplicateProgressive =
+    err?.code === "ER_DUP_ENTRY" &&
+    /progressivo/i.test(String(err?.sqlMessage || err?.message || ""));
+
+  if (duplicateProgressive) {
+    return res.status(409).json({
+      error:
+        "Il numero progressivo selezionato è già riservato. Aggiorna il contatore e riprova.",
+      code: "DOCUMENT_NUMBER_ALREADY_USED",
+    });
+  }
+
+  return res.status(err?.statusCode || 500).json({
+    error: err?.message || fallbackMessage,
+    code: err?.code || undefined,
+    conflict: err?.conflict || undefined,
+  });
+}
+
 async function getSummary(req, res) {
   try {
     const summary = await service.getSummary();
@@ -166,9 +186,11 @@ async function promoteImportedDocumentToProforma(req, res) {
     return res.status(201).json(result);
   } catch (err) {
     console.error("promoteImportedDocumentToProforma error:", err);
-    return res.status(500).json({
-      error: err.message || "Errore durante la creazione delle proforme.",
-    });
+    return sendDocumentCreationError(
+      res,
+      err,
+      "Errore durante la creazione delle proforme."
+    );
   }
 }
 
@@ -350,10 +372,7 @@ async function promoteImportedDocumentToFattura(req, res) {
     return res.status(201).json(result);
   } catch (err) {
     console.error("promoteImportedDocumentToFattura:", err);
-
-    return res.status(500).json({
-      error: err.message || "Errore creazione fattura",
-    });
+    return sendDocumentCreationError(res, err, "Errore creazione fattura");
   }
 }
 
@@ -401,9 +420,11 @@ async function registraPagamentoFattura(req, res) {
     return res.status(201).json(result);
   } catch (err) {
     console.error("registraPagamentoFattura error:", err);
-    return res.status(500).json({
-      error: err.message || "Errore durante la registrazione del pagamento.",
-    });
+    return sendDocumentCreationError(
+      res,
+      err,
+      "Errore durante la registrazione del pagamento."
+    );
   }
 }
 async function listPayments(req, res) {
@@ -488,9 +509,11 @@ async function createManualProforma(req, res) {
     return res.status(201).json(result);
   } catch (err) {
     console.error("createManualProforma error:", err);
-    return res.status(500).json({
-      error: err.message || "Errore durante la creazione manuale della proforma.",
-    });
+    return sendDocumentCreationError(
+      res,
+      err,
+      "Errore durante la creazione manuale della proforma."
+    );
   }
 }
 
@@ -515,9 +538,11 @@ async function createManualFattura(req, res) {
     return res.status(201).json(result);
   } catch (err) {
     console.error("createManualFattura error:", err);
-    return res.status(500).json({
-      error: err.message || "Errore durante la creazione manuale della fattura.",
-    });
+    return sendDocumentCreationError(
+      res,
+      err,
+      "Errore durante la creazione manuale della fattura."
+    );
   }
 }
 async function printProformaPdf(req, res) {

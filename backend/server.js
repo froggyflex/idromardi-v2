@@ -2,6 +2,9 @@ require("dotenv").config();
 const app = require("./src/app");
 const { runMobileMigrationWithRetry } = require("./scripts/run-mobile-migration");
 const { runMetaMigrationWithRetry } = require("./scripts/run-meta-migration");
+const {
+  runDocumentNumberMigrationWithRetry,
+} = require("./scripts/run-document-number-migration");
 const metaService = require("./src/modules/meta/meta.service");
 
 const PORT = process.env.PORT || 4000;
@@ -18,6 +21,7 @@ process.on("unhandledRejection", (reason) => {
 
 function startServer() {
   app.locals.metaReady = false;
+  app.locals.documentNumberingReady = false;
   const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });
@@ -42,6 +46,26 @@ function startServer() {
     require("./scripts/audit-meta-readiness").auditMetaReadiness().then(result => {
       app.locals.metaReady = result.schema.ready;
     }).catch(error => console.error("META READINESS CHECK FAILED:", error.code || "DATABASE_UNAVAILABLE"));
+  }
+
+  if (
+    String(
+      process.env.RUN_DOCUMENT_NUMBER_MIGRATION_ON_STARTUP || "true"
+    ).toLowerCase() !== "false"
+  ) {
+    runDocumentNumberMigrationWithRetry()
+      .then(() => {
+        app.locals.documentNumberingReady = true;
+      })
+      .catch((error) => {
+        console.error(
+          "DOCUMENT NUMBER MIGRATION FAILED AFTER RETRIES; DOCUMENT CREATION REMAINS DISABLED:",
+          error
+        );
+      });
+  } else {
+    app.locals.documentNumberingReady = true;
+    console.log("Document number migration on startup disabled by configuration.");
   }
 
   if (String(process.env.META_OUTBOX_WORKER_ENABLED || "false").toLowerCase() === "true") {
