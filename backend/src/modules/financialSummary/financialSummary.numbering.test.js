@@ -58,6 +58,10 @@ test("an edited yearly invoice counter is authoritative", async () => {
     call.sql.includes("numero_progressivo = ?")
   );
   assert.deepEqual(collisionQuery.params, ["2026-01-01", "2027-01-01", 1352]);
+  assert.match(
+    collisionQuery.sql,
+    /stato IS NULL OR stato <> 'ANNULLATA'/
+  );
 });
 
 test("an exact collision is reported instead of silently skipping numbers", async () => {

@@ -158,7 +158,7 @@ export default function DocumentNumberSettings() {
         <div className="grid grid-cols-[minmax(180px,1.4fr)_minmax(150px,1fr)_minmax(130px,0.8fr)_minmax(130px,0.8fr)_52px] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-[11px] font-bold uppercase text-slate-500 max-md:hidden">
           <div>Tipo documento</div>
           <div>Ultimo assegnato</div>
-          <div>Massimo presente</div>
+          <div>Massimo attivo</div>
           <div>Prossimo numero</div>
           <div />
         </div>
@@ -210,7 +210,7 @@ export default function DocumentNumberSettings() {
 
                 <div>
                   <div className="text-[10px] font-bold uppercase text-slate-500 md:hidden">
-                    Massimo presente
+                    Massimo attivo
                   </div>
                   <div className="mt-1 font-mono text-sm font-semibold text-slate-700 md:mt-0">
                     {counter.issuedMax}
@@ -259,8 +259,9 @@ export default function DocumentNumberSettings() {
 
       <p className="text-xs leading-5 text-slate-500">
         Il valore indica l'ultimo progressivo assegnato ed è la fonte della prossima
-        numerazione. Il massimo presente è mostrato solo come riferimento storico. Prima del
-        salvataggio e dell'emissione viene verificato che il numero successivo non sia già in uso.
+        numerazione. Il massimo attivo è mostrato solo come riferimento; i documenti annullati
+        non bloccano il riutilizzo del numero. Prima del salvataggio e dell'emissione viene
+        verificato che il numero successivo non appartenga a un documento attivo.
       </p>
     </div>
   );

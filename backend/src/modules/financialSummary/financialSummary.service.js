@@ -1582,6 +1582,7 @@ async function getIssuedDocumentMax(conn, documentConfig, documentYear) {
     FROM ${documentConfig.table}
     WHERE ${documentConfig.dateColumn} >= ?
       AND ${documentConfig.dateColumn} < ?
+      AND (stato IS NULL OR stato <> 'ANNULLATA')
     `,
     [startDate, endDate]
   );
@@ -1604,6 +1605,7 @@ async function getIssuedDocumentByNumber(
     WHERE ${documentConfig.dateColumn} >= ?
       AND ${documentConfig.dateColumn} < ?
       AND numero_progressivo = ?
+      AND (stato IS NULL OR stato <> 'ANNULLATA')
     LIMIT 1
     ${lock ? "FOR UPDATE" : ""}
     `,
