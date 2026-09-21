@@ -47,6 +47,7 @@ async function updateDocumentNumberCounter(req, res) {
     return res.status(err.statusCode || 500).json({
       error: err.message || "Errore durante l'aggiornamento della numerazione.",
       code: err.code || undefined,
+      conflict: err.conflict || undefined,
     });
   }
 }

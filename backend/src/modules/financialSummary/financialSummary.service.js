@@ -1588,7 +1588,63 @@ async function getIssuedDocumentMax(conn, documentConfig, documentYear) {
   return Number(row?.max_value || 0);
 }
 
-async function ensureDocumentCounterRow(conn, documentType, documentYear) {
+async function getIssuedDocumentByNumber(
+  conn,
+  documentConfig,
+  documentYear,
+  progressiveNumber,
+  lock = false
+) {
+  const startDate = `${documentYear}-01-01`;
+  const endDate = `${documentYear + 1}-01-01`;
+  const [rows] = await conn.query(
+    `
+    SELECT id, numero, numero_progressivo, stato, ${documentConfig.dateColumn} AS document_date
+    FROM ${documentConfig.table}
+    WHERE ${documentConfig.dateColumn} >= ?
+      AND ${documentConfig.dateColumn} < ?
+      AND numero_progressivo = ?
+    LIMIT 1
+    ${lock ? "FOR UPDATE" : ""}
+    `,
+    [startDate, endDate, progressiveNumber]
+  );
+  return rows[0] || null;
+}
+
+async function loadDocumentCounterRows(
+  conn,
+  documentType,
+  documentYear,
+  lock = false
+) {
+  const [rows] = await conn.query(
+    `
+    SELECT id, current_value, created_at, updated_at
+    FROM document_number_counters
+    WHERE document_type = ? AND anno = ?
+    ORDER BY updated_at DESC, created_at DESC, id DESC
+    ${lock ? "FOR UPDATE" : ""}
+    `,
+    [documentType, documentYear]
+  );
+  return rows;
+}
+
+async function ensureDocumentCounterRows(
+  conn,
+  documentType,
+  documentYear,
+  lock = false
+) {
+  let rows = await loadDocumentCounterRows(
+    conn,
+    documentType,
+    documentYear,
+    lock
+  );
+  if (rows.length) return rows;
+
   await conn.query(
     `
     INSERT IGNORE INTO document_number_counters (
@@ -1602,6 +1658,24 @@ async function ensureDocumentCounterRow(conn, documentType, documentYear) {
     VALUES (?, ?, ?, 0, NOW(), NOW())
     `,
     [crypto.randomUUID(), documentType, documentYear]
+  );
+
+  rows = await loadDocumentCounterRows(
+    conn,
+    documentType,
+    documentYear,
+    lock
+  );
+  return rows;
+}
+
+async function removeDuplicateDocumentCounters(conn, rows) {
+  if (rows.length <= 1) return;
+  const duplicateIds = rows.slice(1).map((row) => row.id);
+  const placeholders = duplicateIds.map(() => "?").join(",");
+  await conn.query(
+    `DELETE FROM document_number_counters WHERE id IN (${placeholders})`,
+    duplicateIds
   );
 }
 
@@ -1674,18 +1748,11 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     await repairLegacyPaymentCounter(conn, documentYear, true);
   }
 
-  await ensureDocumentCounterRow(conn, normalizedType, documentYear);
-
-  const [rows] = await conn.query(
-    `
-    SELECT id, current_value
-    FROM document_number_counters
-    WHERE document_type = ?
-      AND anno = ?
-    LIMIT 1
-    FOR UPDATE
-    `,
-    [normalizedType, documentYear]
+  const rows = await ensureDocumentCounterRows(
+    conn,
+    normalizedType,
+    documentYear,
+    true
   );
 
   if (!rows.length) {
@@ -1694,12 +1761,31 @@ async function getNextDocumentNumber(conn, documentType, anno, buildingLabel = n
     );
   }
 
-  const issuedMax = await getIssuedDocumentMax(conn, documentConfig, documentYear);
-  const nextValue =
-    Math.max(
-      Number(rows[0].current_value || 0),
-      issuedMax
-    ) + 1;
+  await removeDuplicateDocumentCounters(conn, rows);
+  const nextValue = Number(rows[0].current_value || 0) + 1;
+  const conflict = await getIssuedDocumentByNumber(
+    conn,
+    documentConfig,
+    documentYear,
+    nextValue,
+    true
+  );
+  if (conflict) {
+    const error = new Error(
+      `${documentConfig.label} ${String(nextValue).padStart(6, "0")} già esistente nel ${documentYear}. ` +
+        "Aggiorna il contatore all'ultimo numero realmente utilizzato."
+    );
+    error.statusCode = 409;
+    error.code = "DOCUMENT_NUMBER_ALREADY_USED";
+    error.conflict = {
+      id: conflict.id,
+      numero: conflict.numero,
+      progressivo: Number(conflict.numero_progressivo),
+      dataDocumento: conflict.document_date,
+      stato: conflict.stato,
+    };
+    throw error;
+  }
 
   await conn.query(
     `
@@ -1745,18 +1831,21 @@ async function listDocumentNumberCounters({ anno } = {}) {
       if (documentType === "PAYMENT") {
         await repairLegacyPaymentCounter(conn, documentYear);
       }
-      await ensureDocumentCounterRow(conn, documentType, documentYear);
-      const [[counter]] = await conn.query(
-        `
-        SELECT current_value, updated_at
-        FROM document_number_counters
-        WHERE document_type = ? AND anno = ?
-        LIMIT 1
-        `,
-        [documentType, documentYear]
+      const counterRows = await ensureDocumentCounterRows(
+        conn,
+        documentType,
+        documentYear
       );
+      const counter = counterRows[0] || null;
       const issuedMax = await getIssuedDocumentMax(conn, config, documentYear);
       const currentValue = Number(counter?.current_value || 0);
+      const nextValue = currentValue + 1;
+      const nextConflict = await getIssuedDocumentByNumber(
+        conn,
+        config,
+        documentYear,
+        nextValue
+      );
 
       counters.push({
         documentType,
@@ -1765,8 +1854,18 @@ async function listDocumentNumberCounters({ anno } = {}) {
         anno: documentYear,
         currentValue,
         issuedMax,
-        nextValue: Math.max(currentValue, issuedMax) + 1,
-        synchronized: currentValue >= issuedMax,
+        nextValue,
+        synchronized: !nextConflict,
+        duplicateCounterRows: Math.max(0, counterRows.length - 1),
+        nextConflict: nextConflict
+          ? {
+              id: nextConflict.id,
+              numero: nextConflict.numero,
+              progressivo: Number(nextConflict.numero_progressivo),
+              dataDocumento: nextConflict.document_date,
+              stato: nextConflict.stato,
+            }
+          : null,
         updatedAt: counter?.updated_at || null,
       });
     }
@@ -1800,24 +1899,35 @@ async function updateDocumentNumberCounter({ documentType, anno, currentValue })
     if (normalizedType === "PAYMENT") {
       await repairLegacyPaymentCounter(conn, documentYear, true);
     }
-    await ensureDocumentCounterRow(conn, normalizedType, documentYear);
-    const [[counter]] = await conn.query(
-      `
-      SELECT id
-      FROM document_number_counters
-      WHERE document_type = ? AND anno = ?
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [normalizedType, documentYear]
+    const counterRows = await ensureDocumentCounterRows(
+      conn,
+      normalizedType,
+      documentYear,
+      true
     );
+    const counter = counterRows[0];
+    if (!counter) {
+      throw new Error(
+        `Contatore numerazione non disponibile per ${normalizedType} ${documentYear}.`
+      );
+    }
+
     const issuedMax = await getIssuedDocumentMax(conn, config, documentYear);
-    if (parsedValue < issuedMax) {
+    const nextValue = parsedValue + 1;
+    const conflict = await getIssuedDocumentByNumber(
+      conn,
+      config,
+      documentYear,
+      nextValue,
+      true
+    );
+    if (conflict) {
       const error = new Error(
-        `Il contatore non può essere inferiore a ${issuedMax}, già assegnato nel ${documentYear}.`
+        `${config.label} ${String(nextValue).padStart(6, "0")} già esistente nel ${documentYear}. ` +
+          "Imposta il contatore su un numero il cui successivo non sia già utilizzato."
       );
       error.statusCode = 409;
-      error.code = "DOCUMENT_COUNTER_BELOW_ISSUED";
+      error.code = "DOCUMENT_NUMBER_ALREADY_USED";
       throw error;
     }
 
@@ -1829,6 +1939,7 @@ async function updateDocumentNumberCounter({ documentType, anno, currentValue })
       `,
       [parsedValue, counter.id]
     );
+    await removeDuplicateDocumentCounters(conn, counterRows);
     await conn.commit();
 
     return {
@@ -1838,7 +1949,7 @@ async function updateDocumentNumberCounter({ documentType, anno, currentValue })
       anno: documentYear,
       currentValue: parsedValue,
       issuedMax,
-      nextValue: parsedValue + 1,
+      nextValue,
       synchronized: true,
     };
   } catch (error) {

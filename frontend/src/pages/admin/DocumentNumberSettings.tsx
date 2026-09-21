@@ -11,6 +11,13 @@ type DocumentCounter = {
   issuedMax: number;
   nextValue: number;
   synchronized: boolean;
+  duplicateCounterRows?: number;
+  nextConflict?: {
+    numero: string;
+    progressivo: number;
+    dataDocumento?: string | null;
+    stato?: string | null;
+  } | null;
   updatedAt?: string | null;
 };
 
@@ -70,12 +77,15 @@ export default function DocumentNumberSettings() {
 
     try {
       setSavingType(counter.documentType);
-      await api.put(
+      const response = await api.put(
         `/financial-summary/document-counters/${counter.documentType}/${year}`,
         { currentValue: value }
       );
+      const savedCounter = response.data?.counter;
       setMessage(
-        `${counter.label}: contatore aggiornato. Il prossimo numero sarà ${value + 1}.`
+        `${counter.label}: contatore aggiornato. Il prossimo numero sarà ${
+          savedCounter?.nextValue ?? value + 1
+        }.`
       );
       await loadCounters();
     } catch (requestError: any) {
@@ -148,7 +158,7 @@ export default function DocumentNumberSettings() {
         <div className="grid grid-cols-[minmax(180px,1.4fr)_minmax(150px,1fr)_minmax(130px,0.8fr)_minmax(130px,0.8fr)_52px] gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-[11px] font-bold uppercase text-slate-500 max-md:hidden">
           <div>Tipo documento</div>
           <div>Ultimo assegnato</div>
-          <div>Massimo emesso</div>
+          <div>Massimo presente</div>
           <div>Prossimo numero</div>
           <div />
         </div>
@@ -164,7 +174,7 @@ export default function DocumentNumberSettings() {
             const nextPreview = Number.isInteger(draftValue)
               ? draftValue + 1
               : counter.nextValue;
-            const belowIssued =
+            const sequenceRewind =
               Number.isInteger(draftValue) && draftValue < counter.issuedMax;
 
             return (
@@ -185,7 +195,7 @@ export default function DocumentNumberSettings() {
                   </span>
                   <input
                     type="number"
-                    min={counter.issuedMax}
+                    min={0}
                     step="1"
                     value={drafts[counter.documentType] ?? ""}
                     onChange={(event) =>
@@ -194,17 +204,13 @@ export default function DocumentNumberSettings() {
                         [counter.documentType]: event.target.value,
                       }))
                     }
-                    className={`h-10 w-full rounded-lg border px-3 text-sm font-semibold outline-none focus:ring-2 ${
-                      belowIssued
-                        ? "border-red-300 bg-red-50 focus:border-red-500 focus:ring-red-100"
-                        : "border-slate-300 bg-white focus:border-blue-500 focus:ring-blue-100"
-                    }`}
+                    className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                   />
                 </label>
 
                 <div>
                   <div className="text-[10px] font-bold uppercase text-slate-500 md:hidden">
-                    Massimo emesso
+                    Massimo presente
                   </div>
                   <div className="mt-1 font-mono text-sm font-semibold text-slate-700 md:mt-0">
                     {counter.issuedMax}
@@ -218,10 +224,16 @@ export default function DocumentNumberSettings() {
                   <div className="mt-1 font-mono text-sm font-bold text-blue-700 md:mt-0">
                     {counter.prefix}-{String(nextPreview).padStart(6, "0")}
                   </div>
-                  {belowIssued && (
+                  {sequenceRewind && (
+                    <div className="mt-1 flex items-center gap-1 text-xs text-amber-700">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      Sequenza arretrata: il prossimo numero verrà controllato
+                    </div>
+                  )}
+                  {counter.nextConflict && draftValue === counter.currentValue && (
                     <div className="mt-1 flex items-center gap-1 text-xs text-red-700">
                       <AlertTriangle className="h-3.5 w-3.5" />
-                      Inferiore a un numero già emesso
+                      Numero già presente: {counter.nextConflict.progressivo}
                     </div>
                   )}
                 </div>
@@ -229,7 +241,7 @@ export default function DocumentNumberSettings() {
                 <button
                   type="button"
                   onClick={() => void saveCounter(counter)}
-                  disabled={savingType === counter.documentType || belowIssued}
+                  disabled={savingType === counter.documentType}
                   className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                   title={`Salva contatore ${counter.label}`}
                 >
@@ -246,8 +258,9 @@ export default function DocumentNumberSettings() {
       </section>
 
       <p className="text-xs leading-5 text-slate-500">
-        Il valore indica l'ultimo progressivo già utilizzato. Per evitare duplicati non può
-        essere inferiore al massimo documento emesso nello stesso anno.
+        Il valore indica l'ultimo progressivo assegnato ed è la fonte della prossima
+        numerazione. Il massimo presente è mostrato solo come riferimento storico. Prima del
+        salvataggio e dell'emissione viene verificato che il numero successivo non sia già in uso.
       </p>
     </div>
   );
