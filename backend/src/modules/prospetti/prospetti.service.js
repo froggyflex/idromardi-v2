@@ -1,5 +1,6 @@
 const db = require("../../config/db");
 const { launchBrowser } = require("../../utils/puppeteer");
+const { preparePrintLogo } = require("../../utils/pdf-logo");
 const fs = require("fs");
 const path = require("path");
 
@@ -67,7 +68,7 @@ function getLogoColoratoDataUrl() {
 }
 
 function compactName(row) {
-  const name = [row.Nome, row.Cognome].filter(Boolean).join(" ").trim();
+  const name = [row.Cognome, row.Nome].filter(Boolean).join(" ").trim();
   return name || "-";
 }
 
@@ -396,7 +397,7 @@ function tableHtml(rows, totals) {
       <thead>
         <tr>
           <th>ID</th>
-          <th>Nome</th>
+          <th>Cognome e nome</th>
           <th>Is.</th>
           <th>Sc.</th>
           <th>Interno</th>
@@ -478,11 +479,10 @@ function replacementHtml(rows) {
   `;
 }
 
-function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrecedente, rows }) {
+function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrecedente, rows, logoUrl = getLogoColoratoDataUrl() }) {
   const orderedRows = enrichRowsWithSeparatedOneri([...rows], session).sort(compareTableRows);
   const totals = buildTotals(orderedRows, session);
   const pages = chunkRows(orderedRows);
-  const logoUrl = getLogoColoratoDataUrl();
   const header = buildHeader({
     session,
     condominio,
@@ -826,6 +826,28 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
           .replacement-table tr:last-child td {
             border-bottom: none;
           }
+          @media print {
+            * {
+              color: #111111 !important;
+              border-color: #555555 !important;
+              box-shadow: none !important;
+              background-image: none !important;
+              background-color: #ffffff !important;
+            }
+            .boxed, .condo-box, .general-box, .replacement-card {
+              border-width: 0.75pt;
+            }
+            .detail-table th, .detail-table td,
+            .replacement-table th, .replacement-table td {
+              border: 0.6pt solid #555555;
+            }
+            .detail-table .totals td {
+              background: #ffffff !important;
+              padding-left: 0.4mm;
+              padding-right: 0.4mm;
+              font-size: 6.5pt;
+            }
+          }
         </style>
       </head>
       <body>
@@ -909,15 +931,6 @@ async function buildPdf(fatturaId) {
     [session.id_periodo_precedente]
   );
 
-  const html = buildHtml({
-    session,
-    condominio,
-    contatto,
-    periodoAttuale,
-    periodoPrecedente,
-    rows,
-  });
-
   let browser;
   let page;
 
@@ -927,8 +940,13 @@ async function buildPdf(fatturaId) {
     page.setDefaultNavigationTimeout(120000);
     page.setDefaultTimeout(120000);
 
+    const logoUrl = await preparePrintLogo(page, getLogoColoratoDataUrl());
+    const html = buildHtml({
+      session, condominio, contatto, periodoAttuale, periodoPrecedente, rows, logoUrl,
+    });
+
     await page.setContent(html, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "load",
       timeout: 120000,
     });
 
@@ -963,4 +981,4 @@ async function buildPdf(fatturaId) {
   }
 }
 
-module.exports = { buildPdf };
+module.exports = { buildPdf, buildHtml };

@@ -753,6 +753,27 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
           text-align: right;
           white-space: nowrap;
         }
+
+        @media print {
+          /* Solid strokes and text remain legible without background printing. */
+          * {
+            color: #111111 !important;
+            border-color: #555555 !important;
+            box-shadow: none !important;
+            background-image: none !important;
+            background-color: #ffffff !important;
+          }
+          .invoice-sheet, .panel, .summary-band, .info-row {
+            border-width: 0.75pt;
+          }
+          .cost-table tbody td, .mini-row {
+            border-bottom: 0.6pt solid #555555;
+          }
+          .top-accent {
+            height: 1mm;
+            border-bottom: 1pt solid #111111;
+          }
+        }
       </style>
     </head>
     <body>

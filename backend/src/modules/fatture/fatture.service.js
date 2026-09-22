@@ -8,8 +8,10 @@ const e = require("express");
 const fs = require("fs").promises;
 const fs1 = require("fs");
 const { launchBrowser } = require("../../utils/puppeteer");
-const { PDFDocument } = require("pdf-lib");
-const { buildRipartizionePdfHtml } = require("./fatture.pdf");
+const {
+  getRipartizionePdfChunkSize,
+  generateRipartizioneCompletePdfBuffer,
+} = require("./fatture.pdf-renderer");
 const { error } = require("console");
 const { resolveLegacyTxtTransition } = require("./storno-transition");
 const { buildAccontoAccountingCheck } = require("./acconto-accounting");
@@ -1539,7 +1541,7 @@ async function processRipartizionePdfJob({
       dettaglioByUtenza,
       trimestreLabel,
       dataLettura,
-      logoUrl,
+      logoUrl: getRipartizioneLogoUrl(logoUrl),
       onChunkComplete: async () => {
         processed += 1;
         try {
@@ -1653,16 +1655,6 @@ function groupRowsByUtenza(righe) {
 
     return acc;
   }, {});
-}
-
-function getPositiveIntegerEnv(name, fallback, max) {
-  const parsed = Number(process.env[name]);
-  const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-  return Math.min(value, max);
-}
-
-function getRipartizionePdfChunkSize() {
-  return getPositiveIntegerEnv("RIPARTIZIONE_PDF_CHUNK_SIZE", 8, 100);
 }
 
 function parseCalculationContextJson(value) {
@@ -1898,7 +1890,7 @@ exports.exportRipartizioniPerUtenza = async ({
       dettaglioByUtenza,
       trimestreLabel,
       dataLettura,
-      logoUrl,
+      logoUrl: getRipartizioneLogoUrl(logoUrl),
     });
 
     if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
@@ -1945,92 +1937,6 @@ exports.exportRipartizioniPerUtenza = async ({
     }
   }
 };
-async function generateRipartizionePdfBuffer({
-  browser,
-  righe,
-  dettaglioByUtenza,
-  trimestreLabel,
-  dataLettura,
-  logoUrl,
-}) {
-  const html = buildRipartizionePdfHtml({
-    righe,
-    dettaglioByUtenza,
-    trimestreLabel: trimestreLabel || "",
-    dataLettura: dataLettura || "",
-    logoUrl: getRipartizioneLogoUrl(logoUrl),
-  });
-
-  let page;
-
-  try {
-    page = await browser.newPage();
-
-    page.setDefaultNavigationTimeout(120000);
-    page.setDefaultTimeout(120000);
-
-    await page.setContent(html, {
-      waitUntil: "domcontentloaded",
-      timeout: 120000,
-    });
-
-    const pdfBuffer = await page.pdf({
-      format: "A4",
-      landscape: false,
-      preferCSSPageSize: true,
-      printBackground: true,
-      margin: {
-        top: "6mm",
-        right: "6mm",
-        bottom: "6mm",
-        left: "6mm",
-      },
-    });
-
-    return Buffer.from(pdfBuffer);
-  } finally {
-    if (page) await page.close();
-  }
-}
-
-async function generateRipartizioneCompletePdfBuffer({
-  browser,
-  righe,
-  dettaglioByUtenza,
-  trimestreLabel,
-  dataLettura,
-  logoUrl,
-  onChunkComplete,
-}) {
-  const rows = Array.isArray(righe) ? righe : [];
-  const chunkSize = getRipartizionePdfChunkSize();
-  const chunks = [];
-
-  for (let index = 0; index < rows.length; index += chunkSize) {
-    chunks.push(rows.slice(index, index + chunkSize));
-  }
-
-  const mergedPdf = await PDFDocument.create();
-
-  for (let index = 0; index < chunks.length; index += 1) {
-    const chunkBuffer = Buffer.from(await generateRipartizionePdfBuffer({
-      browser,
-      righe: chunks[index],
-      dettaglioByUtenza,
-      trimestreLabel,
-      dataLettura,
-      logoUrl,
-    }));
-    const chunkPdf = await PDFDocument.load(chunkBuffer);
-    const copiedPages = await mergedPdf.copyPages(chunkPdf, chunkPdf.getPageIndices());
-    copiedPages.forEach((page) => mergedPdf.addPage(page));
-
-    if (onChunkComplete) await onChunkComplete(index, chunks.length);
-  }
-
-  return Buffer.from(await mergedPdf.save({ useObjectStreams: true }));
-}
-
 exports.parseImportedDocument = async (id) => {
   const rows = await db.query(
     `SELECT * FROM imported_invoice_documents WHERE id = ? LIMIT 1`,
