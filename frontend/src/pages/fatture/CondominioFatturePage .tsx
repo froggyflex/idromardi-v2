@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
+import { buildRipartizionePdfPayload } from "../../utils/ripartizionePdfPayload";
 import {
   AlertTriangle,
   ArrowRight,
@@ -4361,11 +4362,11 @@ const handleExportPdf = async () => {
   try {
     setExportingRipartizioni(true);
     setExportMessage("Avvio generazione PDF...");
+    setError(null);
     setExportJob(null);
 
     const { data } = await api.post("/fatture/export-ripartizione-pdf/start", {
-      righe,
-      dettaglioByUtenza,
+      ...buildRipartizionePdfPayload(righe, dettaglioByUtenza),
       trimestreLabel: ripartizionePeriodLabel,
       dataLettura: ripartizioneDataLettura,
       logoUrl: logoUrl || undefined,
@@ -4390,11 +4391,15 @@ const handleExportPdf = async () => {
   } catch (error: any) {
     console.error("Errore avvio export PDF:", error);
     setExportingRipartizioni(false);
-    setExportMessage(
+    const message = error?.response?.status === 413
+      ? "La richiesta per le bollette supera il limite del server. Ricarica la pagina e riprova; se persiste, contatta l'assistenza."
+      : (
       error?.response?.data?.error ||
         error?.message ||
         "Errore durante l'avvio della generazione PDF."
     );
+    setExportMessage(message);
+    setError(message);
   }
 };
 

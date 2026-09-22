@@ -16,6 +16,7 @@ const authRoutes = require("./modules/auth/auth.routes");
 const mobileReadingsRoutes = require("./modules/mobileReadings/mobileReadings.routes");
 const metaRoutes = require("./modules/meta/meta.routes");
 const { requireAuth } = require("./modules/auth/auth.middleware");
+const { PDF_EXPORT_PATHS, parsePdfExportJson } = require("./utils/pdf-request-body");
 
 const app = express();
 
@@ -47,6 +48,9 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+
+// Authenticate larger PDF requests before parsing; all other routes keep their limit.
+app.post(PDF_EXPORT_PATHS, requireAuth, parsePdfExportJson);
 
 app.use(
   express.json({
@@ -111,6 +115,12 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
+  if (err.type === "entity.too.large") {
+    return res.status(413).json({
+      code: "REQUEST_TOO_LARGE",
+      error: "La richiesta contiene troppi dati. Ricarica la pagina e riprova; se il problema persiste, contatta l'assistenza.",
+    });
+  }
   console.error("Unhandled error:", err);
 
   if (err.message && err.message.startsWith("CORS blocked")) {
