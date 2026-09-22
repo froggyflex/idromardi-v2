@@ -627,9 +627,9 @@ export default function LetturePage() {
 
   return (
 
-    <div className="p-6 space-y-6">
+    <div className="space-y-4">
 
-    <div className="sticky top-0 z-30 bg-slate-50 pb-3 bg-white p-4 rounded-2xl shadow space-y-4">
+    <div className="workspace-sticky sticky z-30 space-y-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm min-[1440px]:space-y-4 min-[1440px]:p-4">
 
       <h1 className="text-lg font-semibold">Inserimento Letture</h1>
 
@@ -835,17 +835,17 @@ export default function LetturePage() {
 
       {session && (
 
-        <div className="bg-white p-6 rounded-2xl shadow overflow-auto">
+        <div className="workspace-table-shell overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:p-3">
 
-      <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden">
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="overflow-auto max-h-[calc(100vh-260px)]">
-          <table className="w-full min-w-[1520px] text-sm border-separate border-spacing-0">
+          <table className="compact-data-table w-full min-w-[1400px] border-separate border-spacing-0 text-sm">
             <thead className="sticky top-0 z-20 bg-slate-100">
               <tr className="text-slate-700">
-                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                <th className="sticky left-0 top-0 z-30 min-w-16 border-b border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold">
                   Id
                 </th>
-                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                <th className="sticky left-16 top-0 z-30 min-w-[230px] border-b border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold shadow-[2px_0_0_0_rgb(226_232_240)]">
                   Utente / Contatore
                 </th>
                 <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
@@ -892,11 +892,11 @@ export default function LetturePage() {
                         : "odd:bg-white even:bg-slate-50/50"
                     }`}
                   >
-                    <td className="px-3 py-2 align-middle border-b border-slate-100 text-slate-700 font-medium whitespace-nowrap">
+                    <td className="sticky left-0 z-10 whitespace-nowrap border-b border-slate-100 bg-inherit px-3 py-2 align-middle font-medium text-slate-700">
                       {row.utenza.id_user}
                     </td>
 
-                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                    <td className="sticky left-16 z-10 border-b border-slate-100 bg-inherit px-3 py-2 align-middle shadow-[2px_0_0_0_rgb(226_232_240)]">
                       <div className="font-semibold text-slate-800 leading-tight">
                         {row.utenza.Nome} {row.utenza.Cognome}
                       </div>

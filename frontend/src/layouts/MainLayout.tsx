@@ -352,14 +352,14 @@ export default function MainLayout({ children }: Props) {
         <button
           type="button"
           aria-label="Chiudi menu di navigazione"
-          className="fixed inset-0 z-50 bg-slate-950/35 backdrop-blur-[1px] lg:hidden"
+          className="fixed inset-0 z-50 bg-slate-950/35 backdrop-blur-[1px] 2xl:hidden"
           onClick={() => setMobileNavOpen(false)}
         />
       )}
 
       <aside
         id="main-navigation"
-        className={`navbarside fixed inset-y-0 left-0 z-[60] flex w-72 flex-col border-r border-slate-200 bg-white shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 lg:shadow-none ${
+        className={`navbarside fixed inset-y-0 left-0 z-[60] flex w-72 flex-col overflow-x-hidden border-r border-slate-200 bg-white shadow-xl transition-transform duration-200 2xl:static 2xl:z-auto 2xl:translate-x-0 2xl:shadow-none ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -382,7 +382,7 @@ export default function MainLayout({ children }: Props) {
             type="button"
             onClick={() => setMobileNavOpen(false)}
             aria-label="Chiudi menu"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 lg:hidden"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 2xl:hidden"
           >
             <X className="h-5 w-5" />
           </button>
@@ -390,7 +390,7 @@ export default function MainLayout({ children }: Props) {
 
         {/* Navigation */}
         <nav
-          className="flex-1 space-y-6 overflow-y-auto px-4 py-5 scrollbar-thin"
+          className="flex-1 space-y-6 overflow-x-hidden overflow-y-auto px-4 py-5 scrollbar-thin"
           onClick={(event) => {
             if ((event.target as HTMLElement).closest("a")) setMobileNavOpen(false);
           }}
@@ -510,9 +510,9 @@ export default function MainLayout({ children }: Props) {
       <main
         ref={mainRef}
         onScroll={(event) => setShowScrollTop(event.currentTarget.scrollTop > 500)}
-        className="min-w-0 flex-1 overflow-auto p-3 sm:p-4 lg:p-6"
+        className="app-main min-w-0 flex-1 overflow-auto p-3 sm:p-4 2xl:p-6"
       >
-        <div className="sticky top-0 z-50 -mx-3 -mt-3 mb-3 flex h-14 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:-mx-4 sm:-mt-4 sm:px-4 lg:hidden">
+        <div className="sticky top-0 z-50 -mx-3 -mt-3 mb-3 flex h-12 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 shadow-sm backdrop-blur sm:-mx-4 sm:-mt-4 sm:px-4 2xl:hidden">
           <button
             type="button"
             onClick={() => setMobileNavOpen(true)}

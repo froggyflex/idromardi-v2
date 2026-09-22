@@ -309,7 +309,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <MetricCard
           title="Condomini attivi"
           value={loading ? "-" : formatNumber(stats?.condomini?.active)}
@@ -342,7 +342,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(380px,0.45fr)]">
+      <div className="grid grid-cols-1 gap-4 min-[1180px]:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.45fr)]">
         <Panel
           title="Mappa condomini"
           subtitle={`${formatNumber(validMapData.length)} condomini con coordinate valide`}

@@ -5072,7 +5072,7 @@ const isSessionPreparing = Boolean(
 );
 
 return (
-    <div className="relative" aria-busy={isSessionPreparing}>
+    <div className="billing-workspace relative" aria-busy={isSessionPreparing}>
       {error && (
         <div
           className="fixed bottom-4 right-4 z-[120] w-[min(34rem,calc(100vw-2rem))] rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800 shadow-2xl"
@@ -5137,7 +5137,7 @@ return (
       )}
       <div className="screen-only" inert={isSessionPreparing}>
       {calculationNotice && (
-        <div className="space-y-2 px-4 pt-3">
+        <div className="space-y-2 px-2 pt-3 2xl:px-4">
           {calculationNotice && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900">
               <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-600" />
@@ -5153,8 +5153,8 @@ return (
         </div>
       )}
       {/* SUMMARY */}
-      <div className="sticky top-0 z-50 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-        <div className="max-w-full space-y-1.5 px-4 py-2">
+      <div className="workspace-sticky sticky z-40 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur 2xl:z-50">
+        <div className="max-w-full space-y-1.5 px-2 py-2 2xl:px-4">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
@@ -5267,7 +5267,7 @@ return (
         </div>
       </div>
 
-      <div className="max-w-full px-4 pt-3">
+      <div className="max-w-full px-2 pt-3 2xl:px-4">
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
             <div className={`flex items-center justify-between gap-4 ${sessionPanelOpen ? "mb-3" : ""}`}>
               <div>
