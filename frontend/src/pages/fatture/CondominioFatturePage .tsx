@@ -5619,7 +5619,7 @@ return (
   </div>
 
   {/* MAIN SPLIT */}
-  <div className="grid grid-cols-1 items-start gap-4 p-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(380px,0.92fr)]">
+  <div className="grid grid-cols-1 items-start gap-3 p-3 lg:grid-cols-2 2xl:gap-4 2xl:p-4">
     {/* LEFT - DOCUMENTI CARICATI */}
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/70 px-4 py-3">
@@ -5632,7 +5632,7 @@ return (
           </p>
         </div>
 
-        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+        <span className="shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
           {filteredImportedDocs.length} / {importedDocs.length}
         </span>
       </div>
@@ -5670,8 +5670,8 @@ return (
         </div>
       ) : (
         <>
-          <div className="max-h-[320px] overflow-y-auto">
-            <table className="w-full table-fixed divide-y divide-slate-200 text-xs">
+          <div className="max-h-[320px] overflow-auto">
+            <table className="w-full min-w-[480px] table-fixed divide-y divide-slate-200 text-xs">
               <thead className="sticky top-0 z-10 bg-slate-50">
                 <tr>
                   <th className="w-[54%] px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wide text-slate-500">
@@ -5794,7 +5794,7 @@ return (
             </table>
           </div>
 
-          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-3 py-2">
+          {importedTotalPages > 1 && <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-3 py-2">
             <div className="text-xs text-slate-500">
               Pagina {importedPage} di {importedTotalPages}
             </div>
@@ -5818,36 +5818,30 @@ return (
                 Successiva
               </button>
             </div>
-          </div>
+          </div>}
         </>
       )}
     </div>
 
     {/* RIGHT - IMPOSTAZIONI OPERATIVE */}
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="border-b border-slate-200 pb-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          Parametri di calcolo
-        </div>
-        <h4 className="mt-0.5 text-sm font-semibold text-slate-900">
+    <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="border-b border-slate-200 pb-2">
+        <h4 className="text-sm font-semibold text-slate-900">
           Impostazioni operative
         </h4>
-        <p className="mt-0.5 text-xs text-slate-500">
-          Definisci anno tariffa e giorni usati nel calcolo.
-        </p>
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="flex flex-col rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 sm:col-span-2">
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 [&_input]:min-w-0 [&_label]:text-[11px]">
+        <div className="col-span-full flex min-w-0 flex-col rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
           <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Documento associato al periodo
           </span>
-          <span className={`mt-1 truncate text-sm font-semibold ${activeImportedDocument ? "text-slate-900" : "text-amber-700"}`}>
+          <span title={activeImportedDocument ? getImportedDocumentName(activeImportedDocument) : undefined} className={`mt-1 break-words text-xs font-semibold ${activeImportedDocument ? "text-slate-900" : "text-amber-700"}`}>
             {activeImportedDocument ? getImportedDocumentName(activeImportedDocument) : "Nessun TXT associato"}
           </span>
         </div>
 
-        <div className="flex flex-col sm:col-span-2">
+        <div className="col-span-full flex min-w-0 flex-col">
           <label className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
             Anno tariffa
           </label>
@@ -5916,7 +5910,7 @@ return (
     </div>
 
     {/* FULL WIDTH - MODIFICA MANUALE DATI ESTRATTI */}
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white xl:col-span-2">
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white lg:col-span-2">
       <div className="flex flex-col gap-3 border-b border-slate-200 bg-amber-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -6970,11 +6964,21 @@ return (
                       </div>
                     </div>
                       <div className="max-h-[68vh] overflow-auto rounded-lg border border-slate-200 bg-white">
-                          <table className="w-full min-w-[2000px] text-xs">
+                          <table className="billing-readings-table w-full min-w-[1840px] table-fixed text-xs">
+                                <colgroup>
+                                  <col style={{ width: 48 }} />
+                                  <col style={{ width: 184 }} />
+                                  <col span={6} />
+                                  <col style={{ width: 96 }} />
+                                  <col span={10} />
+                                  <col style={{ width: 112 }} />
+                                  <col style={{ width: 104 }} />
+                                  <col span={2} />
+                                </colgroup>
                                 <thead className="sticky top-0 z-30 bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600 shadow-sm">
                                   <tr>
-                                    <th className="sticky left-0 z-40 w-14 min-w-14 bg-slate-100 p-2">ID</th>
-                                    <th className="sticky left-14 z-40 min-w-[220px] bg-slate-100 p-2 shadow-[2px_0_0_0_rgb(226_232_240)]">Utente</th>
+                                    <th className="sticky left-0 z-40 bg-slate-100 p-2">ID</th>
+                                    <th className="sticky left-12 z-40 bg-slate-100 p-2 text-left shadow-[2px_0_0_0_rgb(226_232_240)]">Utente</th>
                                     <th className="p-2">Isolato</th>
                                     <th className="p-2">Scala</th>
                                     <th className="p-2">Interno</th>
@@ -7063,9 +7067,9 @@ return (
                                                 ? "bg-white hover:bg-slate-100"
                                                 : "bg-slate-50 hover:bg-slate-100"}`}
                                         >
-                                          <td className="sticky left-0 z-20 w-14 min-w-14 bg-inherit p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
-                                          <td className="sticky left-14 z-20 min-w-[220px] bg-inherit p-2 text-center shadow-[2px_0_0_0_rgb(226_232_240)]">
-                                            {[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}
+                                          <td className="sticky left-0 z-20 bg-inherit p-2 text-right">{r.utenza?.id_user ?? "-"}</td>
+                                          <td className="sticky left-12 z-20 break-words bg-inherit p-2 text-left shadow-[2px_0_0_0_rgb(226_232_240)]">
+                                            <div className="leading-snug">{[r.utenza?.Nome, r.utenza?.Cognome].filter(Boolean).join(" ") || "-"}</div>
                                             {isInverseMeter(r.utenza) && (
                                               <div
                                                 className="mx-auto mt-1 inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700"

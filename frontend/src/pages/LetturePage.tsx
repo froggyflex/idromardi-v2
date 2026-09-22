@@ -174,6 +174,7 @@ function ManualDatePicker({
         scrollableYearDropdown
         yearDropdownItemNumber={20}
         placeholderText={placeholder}
+        wrapperClassName="w-full"
         className={`input w-full ${hasError ? "border-red-400 ring-2 ring-red-100" : ""}`}
         disabled={disabled}
         isClearable={!disabled}
@@ -629,7 +630,7 @@ export default function LetturePage() {
 
     <div className="space-y-4">
 
-    <div className="workspace-sticky sticky z-30 space-y-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm min-[1440px]:space-y-4 min-[1440px]:p-4">
+    <div className="space-y-3">
 
       <h1 className="text-lg font-semibold">Inserimento Letture</h1>
 
@@ -698,9 +699,12 @@ export default function LetturePage() {
         )}
       </div>
 
+    </div>
+
+    <div className="workspace-sticky z-30 space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:sticky">
       {/* TOP ROW */}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(140px,1fr)_180px_140px_180px_180px_auto]">
 
         {/* CONDOMINIO */}
 
@@ -738,31 +742,19 @@ export default function LetturePage() {
 
         {/* PERIOD INFO */}
 
-        <div className="grid grid-cols-2 gap-2">
-
-          <div>
-            <div className="text-xs text-slate-600">Anno</div>
-            <div className="input bg-slate-100">
-              {periodYear ?? "-"}
-            </div>
+        <div className="space-y-1">
+          <div className="text-xs text-slate-600">Periodo aperto</div>
+          <div className="flex min-h-10 flex-wrap items-center gap-x-1 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium">
+            <span>{periodMonth ? monthNames[periodMonth - 1] : "-"}</span>
+            <span>{periodYear ?? ""}</span>
           </div>
-
-          <div>
-            <div className="text-xs text-slate-600">Mese</div>
-            <div className="input bg-slate-100">
-              {periodMonth ? monthNames[periodMonth - 1] : "-"}
-            </div>
-          </div>
-
         </div>
-
-      </div>
 
       {/* SECOND ROW */}
 
       {session && (
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <>
 
           {/* DATA OPERATORE */}
 
@@ -800,7 +792,7 @@ export default function LetturePage() {
 
           {/* ACTIONS */}
 
-          <div className="flex items-end gap-3">
+          <div className="flex flex-wrap items-center gap-2 lg:pt-5">
 
             <button
               disabled={!dirty || loading || session?.stato === "CHIUSA"}
@@ -818,9 +810,11 @@ export default function LetturePage() {
 
           </div>
 
-        </div>
+        </>
 
       )}
+
+      </div>
 
     </div>
 
@@ -839,13 +833,23 @@ export default function LetturePage() {
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="overflow-auto max-h-[calc(100vh-260px)]">
-          <table className="compact-data-table w-full min-w-[1400px] border-separate border-spacing-0 text-sm">
+          <table className="compact-data-table w-full min-w-[1400px] table-fixed border-separate border-spacing-0 text-sm">
+            <colgroup>
+              <col style={{ width: 48 }} />
+              <col style={{ width: 200 }} />
+              <col style={{ width: 64 }} />
+              <col style={{ width: 128 }} />
+              <col style={{ width: 112 }} />
+              <col style={{ width: 160 }} />
+              <col style={{ width: 128 }} />
+              <col span={4} />
+            </colgroup>
             <thead className="sticky top-0 z-20 bg-slate-100">
               <tr className="text-slate-700">
-                <th className="sticky left-0 top-0 z-30 min-w-16 border-b border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold">
+                <th className="sticky left-0 top-0 z-30 border-b border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold">
                   Id
                 </th>
-                <th className="sticky left-16 top-0 z-30 min-w-[230px] border-b border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold shadow-[2px_0_0_0_rgb(226_232_240)]">
+                <th className="sticky left-12 top-0 z-30 border-b border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold shadow-[2px_0_0_0_rgb(226_232_240)]">
                   Utente / Contatore
                 </th>
                 <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
@@ -888,15 +892,15 @@ export default function LetturePage() {
                     key={row.utenza.id}
                     className={`transition-colors hover:bg-blue-50 ${
                       hasEvidentHistory || currentStateEvident
-                        ? "bg-amber-50/50"
-                        : "odd:bg-white even:bg-slate-50/50"
+                        ? "bg-amber-50"
+                        : "odd:bg-white even:bg-slate-50"
                     }`}
                   >
                     <td className="sticky left-0 z-10 whitespace-nowrap border-b border-slate-100 bg-inherit px-3 py-2 align-middle font-medium text-slate-700">
                       {row.utenza.id_user}
                     </td>
 
-                    <td className="sticky left-16 z-10 border-b border-slate-100 bg-inherit px-3 py-2 align-middle shadow-[2px_0_0_0_rgb(226_232_240)]">
+                    <td className="sticky left-12 z-10 break-words border-b border-slate-100 bg-inherit px-3 py-2 align-middle shadow-[2px_0_0_0_rgb(226_232_240)]">
                       <div className="font-semibold text-slate-800 leading-tight">
                         {row.utenza.Nome} {row.utenza.Cognome}
                       </div>
@@ -921,7 +925,7 @@ export default function LetturePage() {
                     <td className="px-3 py-2 align-middle border-b border-slate-100">
                       <input
                         type="number"
-                        className="h-9 w-28 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
+                        className="h-9 w-full max-w-28 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
                         disabled={session.stato === "CHIUSA"}
                         value={row.current.valore ?? ""}
                         onChange={(e) => updateRow(i, "valore", e.target.value)}
@@ -932,7 +936,7 @@ export default function LetturePage() {
                     <td className="px-3 py-2 align-middle border-b border-slate-100">
                       <input
                         type="number"
-                        className="h-9 w-24 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
+                        className="h-9 w-full max-w-24 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
                         disabled={session.stato === "CHIUSA" || !previous}
                         value={getPossibleConsumption(row)}
                         onChange={(e) => updateConsumption(i, e.target.value)}
@@ -942,7 +946,7 @@ export default function LetturePage() {
 
                     <td className="px-3 py-2 align-middle border-b border-slate-100">
                       <select
-                        className={`h-9 w-36 rounded-lg border bg-white px-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400 ${
+                        className={`h-9 w-full max-w-36 rounded-lg border bg-white px-2 text-sm text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400 ${
                           currentStateEvident ? "border-amber-300 bg-amber-50 font-bold text-amber-800" : "border-slate-300"
                         }`}
                         disabled={session.stato === "CHIUSA"}

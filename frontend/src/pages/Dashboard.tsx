@@ -377,7 +377,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="dashboard-map-shell relative overflow-hidden rounded-xl border border-slate-200">
+          <div className="dashboard-map-shell relative isolate overflow-hidden rounded-xl border border-slate-200">
             <MapContainer
               center={defaultCenter}
               zoom={12}
@@ -427,13 +427,13 @@ export default function Dashboard() {
             </MapContainer>
 
             {isSearchingMap && !mapSearchMatches.length && (
-              <div className="pointer-events-none absolute inset-x-4 top-4 rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm">
+              <div className="pointer-events-none absolute inset-x-4 top-4 z-[1000] rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm">
                 Nessun condominio trovato per "{mapSearch.trim()}".
               </div>
             )}
 
             {!isSearchingMap && !validMapData.length && (
-              <div className="pointer-events-none absolute inset-x-4 top-4 rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm">
+              <div className="pointer-events-none absolute inset-x-4 top-4 z-[1000] rounded-xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm">
                 Nessuna coordinata valida da mostrare.
               </div>
             )}
