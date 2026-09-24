@@ -578,7 +578,7 @@ export default function CondominioFatturePage() {
       );
     }
 
-    function viewGeneratedDocument(id: string) {
+    function viewGeneratedDocument(doc: any) {
       const params = new URLSearchParams();
       const token = getAuthToken();
 
@@ -590,8 +590,16 @@ export default function CondominioFatturePage() {
         params.set("authToken", token);
       }
 
+      if (doc?.source === "financial_invoice" && doc?.financial_invoice_id) {
+        window.open(
+          `${api.defaults.baseURL}/financial-summary/fatture/${doc.financial_invoice_id}/print?${params.toString()}`,
+          "_blank"
+        );
+        return;
+      }
+
       window.open(
-        `${api.defaults.baseURL}/fatture/generated-documents/${id}/view?${params.toString()}`,
+        `${api.defaults.baseURL}/fatture/generated-documents/${doc.id}/view?${params.toString()}`,
         "_blank"
       );
     }
@@ -7484,7 +7492,7 @@ return (
                                 <div className="shrink-0">
                                     <button
                                       type="button"
-                                      onClick={() => viewGeneratedDocument(doc.id)}
+                                      onClick={() => viewGeneratedDocument(doc)}
                                       className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                                     >
                                       Visualizza PDF

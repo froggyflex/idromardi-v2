@@ -22,6 +22,10 @@ const {
 const { prepareLaterSessionsForReplay } = require("./billing-chain");
 const { resolveBillingReadings } = require("./meter-readings");
 const {
+  findBestIssuedInvoice,
+  formatPeriodLabel,
+} = require("./issued-invoice-lookup");
+const {
   addUtcDays,
   allocateTariffConsumption,
   buildTariffDateSegments,
@@ -6549,6 +6553,77 @@ exports.getLatestGeneratedDocument = getLatestGeneratedDocument;
 exports.getGeneratedDocumentById = getGeneratedDocumentById;
 exports.getGeneratedDocumentBuffer = async (document) => getPdfFromR2(document.r2_key);
 exports.listGeneratedDocuments = listGeneratedDocuments;
+exports.findIssuedInvoiceForBillingSession = async ({ sessionId, condominioId }) => {
+  if (!sessionId || !condominioId) return null;
+
+  const [sessionRows] = await db.query(
+    `
+    SELECT
+      fs.id,
+      previous_period.period_month AS previous_month,
+      previous_period.period_year AS previous_year,
+      previous_period.data_lettura_operatore AS previous_operator_date,
+      previous_period.data_lettura_casa_idrica AS previous_utility_date,
+      current_period.period_month AS current_month,
+      current_period.period_year AS current_year,
+      current_period.data_lettura_operatore AS current_operator_date,
+      current_period.data_lettura_casa_idrica AS current_utility_date
+    FROM fatture_sessioni fs
+    LEFT JOIN letture_sessioni previous_period
+      ON BINARY previous_period.id = BINARY fs.id_periodo_precedente
+    LEFT JOIN letture_sessioni current_period
+      ON BINARY current_period.id = BINARY fs.id_periodo_attuale
+    WHERE BINARY fs.id = BINARY ?
+      AND BINARY fs.id_condominio = BINARY ?
+    LIMIT 1
+    `,
+    [sessionId, condominioId]
+  );
+  if (!sessionRows.length) return null;
+
+  const session = sessionRows[0];
+  const previousPeriod = {
+    period_month: session.previous_month,
+    period_year: session.previous_year,
+    data_lettura_operatore: session.previous_operator_date,
+    data_lettura_casa_idrica: session.previous_utility_date,
+  };
+  const currentPeriod = {
+    period_month: session.current_month,
+    period_year: session.current_year,
+    data_lettura_operatore: session.current_operator_date,
+    data_lettura_casa_idrica: session.current_utility_date,
+  };
+
+  const [invoices] = await db.query(
+    `
+    SELECT id, numero, descrizione, data_documento, importo, stato, created_at
+    FROM fatture
+    WHERE BINARY condominio_id = BINARY ?
+      AND source_import_file_id = '01'
+      AND (stato IS NULL OR stato <> 'ANNULLATA')
+    ORDER BY created_at DESC
+    LIMIT 100
+    `,
+    [condominioId]
+  );
+  const invoice = findBestIssuedInvoice(invoices, previousPeriod, currentPeriod);
+  if (!invoice) return null;
+
+  return {
+    id: `financial-invoice:${invoice.id}`,
+    condominio_id: condominioId,
+    fattura_id: sessionId,
+    document_type: "fattura_emessa",
+    filename: `Fattura ${invoice.numero || invoice.id}.pdf`,
+    period_label: formatPeriodLabel(previousPeriod, currentPeriod),
+    mime_type: "application/pdf",
+    file_size: null,
+    created_at: invoice.created_at || invoice.data_documento,
+    source: "financial_invoice",
+    financial_invoice_id: invoice.id,
+  };
+};
 
 exports.deleteImportedDocument = async function (id) {
   const conn = await db.getConnection();

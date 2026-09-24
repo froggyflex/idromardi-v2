@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "test:pdf": "node --test src/utils/puppeteer.test.js src/modules/fatture/fatture.pdf-renderer.test.js src/modules/prospetti/prospetti.print.test.js src/modules/financialSummary/financialInvoiceArchive.test.js",
+    "test:pdf": "node --test src/utils/puppeteer.test.js src/modules/fatture/fatture.pdf-renderer.test.js src/modules/fatture/issued-invoice-lookup.test.js src/modules/prospetti/prospetti.print.test.js src/modules/financialSummary/financialInvoiceArchive.test.js",
     "migrate:mobile": "node scripts/run-mobile-migration.js",
     "migrate:meta": "node scripts/run-meta-migration.js",
     "migrate:document-numbers": "node scripts/run-document-number-migration.js",

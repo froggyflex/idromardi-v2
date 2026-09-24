@@ -493,6 +493,28 @@ exports.listGeneratedDocuments = async (req, res, next) => {
         req.query.latestPerType === "1" || req.query.latestPerType === "true",
     });
 
+    const requestedTypes = String(req.query.documentTypes || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const wantsIssuedInvoice =
+      requestedTypes.length === 0 || requestedTypes.includes("fattura_emessa");
+    const alreadyArchived = rows.some(
+      (document) => document.document_type === "fattura_emessa"
+    );
+    if (
+      wantsIssuedInvoice &&
+      !alreadyArchived &&
+      req.query.condominioId &&
+      req.query.fatturaId
+    ) {
+      const issuedInvoice = await service.findIssuedInvoiceForBillingSession({
+        sessionId: req.query.fatturaId,
+        condominioId: req.query.condominioId,
+      });
+      if (issuedInvoice) rows.push(issuedInvoice);
+    }
+
     return res.json({
       success: true,
       documents: rows,
