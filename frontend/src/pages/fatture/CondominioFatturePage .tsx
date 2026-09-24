@@ -201,6 +201,7 @@ export default function CondominioFatturePage() {
     const [isCreateFatturaModalOpen, setIsCreateFatturaModalOpen] = useState(false);
     const [fatturaDate, setFatturaDate] = useState(new Date().toISOString().slice(0, 10));
     const [creatingFattura, setCreatingFattura] = useState(false);
+    const [registrationNotice, setRegistrationNotice] = useState<string | null>(null);
     const [exportingRipartizioni, setExportingRipartizioni] = useState(false);
     const [exportMessage, setExportMessage] = useState("");
     const [pdfPage, setPdfPage] = useState(1);
@@ -525,7 +526,7 @@ export default function CondominioFatturePage() {
         params: {
           condominioId,
           fatturaId,
-          documentTypes: "prospetto,bollette_complete",
+          documentTypes: "prospetto,bollette_complete,fattura_emessa",
           latestPerType: 1,
         },
       });
@@ -3352,6 +3353,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       }
       setError(null);
       setCalculationNotice(null);
+      setRegistrationNotice(null);
       setLoadingDetail(true);
     try {
       //   backend has /condomini/:condominioId/fatture/:id
@@ -3421,6 +3423,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
     try {
       setError(null);
       setCalculationNotice(null);
+      setRegistrationNotice(null);
 
       if (!condominioId) {
         setError("Condominio non valido.");
@@ -3440,16 +3443,27 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       setLoadingCreate(true);
       setCreatingFattura(true);
 
-      await api.post(`/financial-summary/imported-documents/01/promotef`, {
+      const { data } = await api.post(`/financial-summary/imported-documents/01/promotef`, {
         condominioId,
         proformaIds: [],
         fatturaDate,
         totaleOneri,
         current, 
-        previous, 
+        previous,
+        billingSessionId: fatturaId,
       });
 
       setIsCreateFatturaModalOpen(false);
+      await loadGeneratedDocuments();
+      const registeredNumber = data?.fattura?.numero || data?.fatturaId;
+      setRegistrationNotice(
+        data?.archivedDocument
+          ? `Fattura ${registeredNumber} registrata e disponibile nei documenti salvati.`
+          : `Fattura ${registeredNumber} registrata.`
+      );
+      if (data?.archiveWarning) {
+        setCalculationNotice(data.archiveWarning);
+      }
 
       // opzionale: reset data dopo successo
       // setFatturaDate(new Date().toISOString().slice(0, 10));
@@ -6592,7 +6606,25 @@ return (
                       Registra fattura
                     </button>
                   </div>
-                </div>
+                  </div>
+
+                  {registrationNotice && (
+                    <div className="mt-3 flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <FileText className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{registrationNotice}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRegistrationNotice(null)}
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-700 transition hover:bg-emerald-100"
+                        aria-label="Chiudi conferma"
+                        title="Chiudi"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
 
                   {exportingRipartizioni && exportJob && (
                     <div className="mt-3 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -7400,7 +7432,7 @@ return (
                             Documenti generati salvati
                           </h3>
                           <p className="mt-1 text-sm text-slate-500">
-                            Prospetto e bollette complete salvati su archivio permanente.
+                            Fattura emessa, prospetto e bollette complete salvati su archivio permanente.
                           </p>
                         </div>
 
@@ -7418,7 +7450,7 @@ return (
                             Nessun documento salvato.
                           </p>
                           <p className="mt-1 text-xs text-slate-500">
-                            Genera un prospetto o le bollette per archiviarli.
+                            Registra la fattura oppure genera il prospetto o le bollette.
                           </p>
                         </div>
                       ) : (
@@ -7429,6 +7461,8 @@ return (
                                 ? "Prospetto"
                                 : doc.document_type === "bollette_complete"
                                   ? "Bollette complete"
+                                  : doc.document_type === "fattura_emessa"
+                                    ? "Fattura emessa"
                                   : doc.document_type;
 
                             return (

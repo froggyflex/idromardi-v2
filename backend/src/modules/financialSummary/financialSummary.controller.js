@@ -348,7 +348,15 @@ async function annullaFattura(req, res) {
 async function promoteImportedDocumentToFattura(req, res) {
   try {
     const { fileId } = req.params;
-    const { condominioId, proformaIds, fatturaDate, totaleOneri, current, previous} = req.body;
+    const {
+      condominioId,
+      proformaIds,
+      fatturaDate,
+      totaleOneri,
+      current,
+      previous,
+      billingSessionId,
+    } = req.body;
 
   
     if (!fileId) {
@@ -366,7 +374,8 @@ async function promoteImportedDocumentToFattura(req, res) {
       fatturaDate || null, 
       totaleOneri || 0,
       current || null,
-      previous || null
+      previous || null,
+      billingSessionId || null
     );
 
     return res.status(201).json(result);

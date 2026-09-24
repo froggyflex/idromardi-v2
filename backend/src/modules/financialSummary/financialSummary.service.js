@@ -4,6 +4,8 @@ const path = require("path");
 const pdf = require("pdf-parse");
 const db = require("../../config/db");
 const { launchBrowser } = require("../../utils/puppeteer");
+const { saveGeneratedDocument } = require("../../utils/generatedDocuments");
+const { archiveIssuedInvoice } = require("./financialInvoiceArchive");
 
 const BASE_URL = process.env.BASE_URL;
 
@@ -2950,8 +2952,18 @@ async function getFatturaProforme(fatturaId) {
   }));
 }
 
-async function promoteImportedDocumentToFattura(fileId, condominioId, proformaIds = [], fatturaDate = null, totaleOneri = 0, current = null, previous = null) {
+async function promoteImportedDocumentToFattura(
+  fileId,
+  condominioId,
+  proformaIds = [],
+  fatturaDate = null,
+  totaleOneri = 0,
+  current = null,
+  previous = null,
+  billingSessionId = null
+) {
   const conn = await db.getConnection();
+  let connectionReleased = false;
 
   try {
     await conn.beginTransaction();
@@ -2976,6 +2988,23 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
             `SELECT id, indirizzo, cap, citta FROM condomini_v2 WHERE id = ?`,
             [condominioId]
     );
+
+    if (billingSessionId) {
+      const [[billingSession]] = await conn.query(
+        `
+        SELECT id
+        FROM fatture_sessioni
+        WHERE id = ? AND id_condominio = ?
+        LIMIT 1
+        `,
+        [billingSessionId, condominioId]
+      );
+      if (!billingSession) {
+        const error = new Error("La sessione di fatturazione non appartiene al condominio selezionato.");
+        error.statusCode = 400;
+        throw error;
+      }
+    }
 
     const [[currentP]] = await conn.query(
             `
@@ -3005,6 +3034,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
 
     let imported = null;
     let description = "";
+    let billingPeriodLabel = null;
     if(fileId !== "01") {
       // 1. GET IMPORTED DOC
       [[imported]] = await conn.query(
@@ -3035,6 +3065,7 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
         if (!previousPeriodDate || !currentPeriodDate) {
           throw new Error("Date del periodo di fatturazione non disponibili");
         }
+        billingPeriodLabel = `${previousPeriodDate} - ${currentPeriodDate}`;
         const period = `dal ${previousPeriodDate} al ${currentPeriodDate}`;
 
         description =  "Lettura e fatturazione consumi idrici periodo "+period+" per condominio sito in "+condominio.cap+" - "+condominio.citta+" alla "+condominio.indirizzo;
@@ -3163,16 +3194,41 @@ async function promoteImportedDocumentToFattura(fileId, condominioId, proformaId
     }
     await conn.commit();
 
+    // PDF rendering and R2 upload must not hold a database transaction or a
+    // pooled connection. The accounting invoice is already authoritative.
+    conn.release();
+    connectionReleased = true;
+
+    const { archivedDocument, archiveWarning } = await archiveIssuedInvoice({
+      financialInvoiceId: fatturaId,
+      billingSessionId,
+      condominioId,
+      documentNumber: numbering.numero,
+      progressive: numbering.progressivo,
+      periodLabel: billingPeriodLabel,
+      generatePdf: () => generateFatturaPdf(fatturaId, "color"),
+      saveDocument: saveGeneratedDocument,
+    });
+
     return {
       success: true,
       fatturaId,
+      fattura: {
+        id: fatturaId,
+        numero: numbering.numero,
+        numero_progressivo: numbering.progressivo,
+        data_documento: data,
+        importo,
+      },
+      archivedDocument,
+      archiveWarning,
     };
   } catch (err) {
     await conn.rollback();
     console.error("promoteImportedDocumentToFattura:", err);
     throw err;
   } finally {
-    conn.release();
+    if (!connectionReleased) conn.release();
   }
 }
 
