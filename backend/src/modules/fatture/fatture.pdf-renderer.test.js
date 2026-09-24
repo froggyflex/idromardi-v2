@@ -25,6 +25,11 @@ function fixture(failAt = -1) {
   return { browser, state };
 }
 
+test("uses two bounded render passes for a typical 70-utenza condominium", () => {
+  assert.equal(getRipartizionePdfChunkSize(), 35);
+  assert.equal(Math.ceil(70 / getRipartizionePdfChunkSize()), 2);
+});
+
 test("bounded batches reuse one page and preserve PDF order and progress", async () => {
   const { browser, state } = fixture();
   const size = getRipartizionePdfChunkSize();

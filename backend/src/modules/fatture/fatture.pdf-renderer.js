@@ -6,7 +6,7 @@ function getRipartizionePdfChunkSize() {
   const configured = Number(process.env.RIPARTIZIONE_PDF_CHUNK_SIZE);
   return Number.isFinite(configured) && configured >= 1
     ? Math.min(Math.floor(configured), 100)
-    : 24;
+    : 35;
 }
 
 async function generateRipartizioneCompletePdfBuffer({
