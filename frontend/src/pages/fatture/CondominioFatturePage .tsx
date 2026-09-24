@@ -7,6 +7,7 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
   FileDown,
   FileSpreadsheet,
   FileText,
@@ -6682,6 +6683,106 @@ return (
                     </div>
                   )}
 
+                  <section className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-sm font-bold text-slate-900">
+                            Documenti del periodo
+                          </h3>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
+                            {generatedDocuments.length}/3 disponibili
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Periodo {ripartizionePeriodLabel || "selezionato"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={loadGeneratedDocuments}
+                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                        aria-label="Aggiorna documenti"
+                        title="Aggiorna documenti"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid divide-y divide-slate-200 md:grid-cols-3 md:divide-x md:divide-y-0">
+                      {([
+                        {
+                          type: "fattura_emessa",
+                          label: "Fattura emessa",
+                          Icon: ReceiptText,
+                          iconClass: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+                        },
+                        {
+                          type: "prospetto",
+                          label: "Prospetto",
+                          Icon: FileSpreadsheet,
+                          iconClass: "bg-cyan-50 text-cyan-700 ring-cyan-100",
+                        },
+                        {
+                          type: "bollette_complete",
+                          label: "Bollette complete",
+                          Icon: FileDown,
+                          iconClass: "bg-blue-50 text-blue-700 ring-blue-100",
+                        },
+                      ] as const).map((slot) => {
+                        const doc = generatedDocuments.find(
+                          (item: any) => item.document_type === slot.type
+                        );
+                        const Icon = slot.Icon;
+
+                        return (
+                          <div key={slot.type} className="flex min-w-0 flex-col gap-3 p-4">
+                            <div className="flex min-w-0 items-start gap-3">
+                              <div className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${slot.iconClass}`}>
+                                <Icon className="h-4 w-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-sm font-bold text-slate-800">
+                                    {slot.label}
+                                  </span>
+                                  {doc?.period_label && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                                      {doc.period_label}
+                                    </span>
+                                  )}
+                                </div>
+                                <div
+                                  className={`mt-1 truncate text-xs ${doc ? "text-slate-500" : "text-slate-400"}`}
+                                  title={doc?.filename || "Non ancora disponibile"}
+                                >
+                                  {doc?.filename || "Non ancora disponibile"}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-auto flex justify-end">
+                              {doc ? (
+                                <button
+                                  type="button"
+                                  onClick={() => viewGeneratedDocument(doc)}
+                                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                                >
+                                  Apri PDF
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </button>
+                              ) : (
+                                <span className="text-[11px] font-semibold text-slate-400">
+                                  Da generare
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+
               </div>
 
               {parsingAlert && (
@@ -7432,78 +7533,6 @@ return (
                                 </tfoot>
                           </table>
                       </div>
-                     <br></br>                
-                    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <h3 className="text-base font-bold text-slate-900">
-                            Documenti generati salvati
-                          </h3>
-                          <p className="mt-1 text-sm text-slate-500">
-                            Fattura emessa, prospetto e bollette complete salvati su archivio permanente.
-                          </p>
-                        </div>
-
-                        <button
-                          onClick={loadGeneratedDocuments}
-                          className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-                        >
-                          Aggiorna
-                        </button>
-                      </div>
-
-                      {generatedDocuments.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
-                          <p className="text-sm font-semibold text-slate-700">
-                            Nessun documento salvato.
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Registra la fattura oppure genera il prospetto o le bollette.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="grid gap-3 lg:grid-cols-2">
-                          {generatedDocuments.map((doc: any) => {
-                            const tipo =
-                              doc.document_type === "prospetto"
-                                ? "Prospetto"
-                                : doc.document_type === "bollette_complete"
-                                  ? "Bollette complete"
-                                  : doc.document_type === "fattura_emessa"
-                                    ? "Fattura emessa"
-                                  : doc.document_type;
-
-                            return (
-                              <div
-                                key={doc.id}
-                                className="flex min-w-0 items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
-                              >
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="font-semibold text-slate-800">{tipo}</span>
-                                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">
-                                      {doc.period_label || "-"}
-                                    </span>
-                                  </div>
-                                  <div className="mt-1 truncate text-sm text-slate-600">
-                                    {doc.filename}
-                                  </div>
-                                </div>
-                                <div className="shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={() => viewGeneratedDocument(doc)}
-                                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                                    >
-                                      Visualizza PDF
-                                    </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </section>
 
                     {/* Legacy per-user PDF list hidden for now. The archive section above
                         shows the latest prospetto and complete bollette for the session. */}
