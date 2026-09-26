@@ -14,6 +14,7 @@ import type { ReadingSessionSummary } from "../api/letture";
 import { useParams } from "react-router-dom";
 import type { Stato, GridRow, Session } from "../api/letture_interface";
 import MobileAssignmentControls from "./components/MobileAssignmentControls";
+import CondominioIdentity from "./components/CondominioIdentity";
 import {
   calculateReadingConsumption,
   isInverseMeter,
@@ -317,6 +318,7 @@ export default function LetturePage() {
   useEffect(() => {
 
     let alive = true;
+    setCondominioName("");
 
     async function fetchCondominio() {
 
@@ -329,14 +331,14 @@ export default function LetturePage() {
 
         if (!alive) return;
 
-        setCondominioName(data.nome);
+        setCondominioName(data.nome || data.indirizzo || `ID ${condominioId}`);
         setExistingPeriods(periods);
 
       } catch {
 
         if (!alive) return;
 
-        setCondominioName("");
+        setCondominioName(`ID ${condominioId} (nome non disponibile)`);
 
       }
 
@@ -817,20 +819,10 @@ export default function LetturePage() {
     </div>
 
     <div className="workspace-sticky z-30 space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:sticky">
+      <CondominioIdentity name={condominioName} />
       {/* TOP ROW */}
 
-      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(140px,1fr)_180px_140px_180px_180px_auto]">
-
-        {/* CONDOMINIO */}
-
-        <div className="bg-slate-100 rounded-lg px-3 py-2">
-          <div className="text-xs text-slate-500 uppercase">
-            Condominio
-          </div>
-          <div className="text-sm font-medium">
-            {condominioName || "Caricamento..."}
-          </div>
-        </div>
+      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-[180px_140px_180px_180px_minmax(0,1fr)]">
 
         {/* LOCATOR */}
 

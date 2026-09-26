@@ -10,5 +10,7 @@ router.get(
 
 // GET PDF for session (fattura)
 router.get("/fatture/:fatturaId/prospetto.pdf", controller.downloadPdf);
+router.post("/fatture/:fatturaId/prospetto/generate", controller.generatePdf);
+router.get("/prospetti/documents/:id/print", controller.printGeneratedPdf);
 
 module.exports = router;

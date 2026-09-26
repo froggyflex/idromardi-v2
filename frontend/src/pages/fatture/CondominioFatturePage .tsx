@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
+import { getCondominio } from "../../api/letture";
+import CondominioIdentity from "../components/CondominioIdentity";
 import { buildRipartizionePdfPayload } from "../../utils/ripartizionePdfPayload";
 import {
   AlertTriangle,
@@ -13,6 +15,7 @@ import {
   FileText,
   Loader2,
   Pencil,
+  Printer,
   Search,
   ReceiptText,
   RefreshCw,
@@ -414,6 +417,22 @@ export default function CondominioFatturePage() {
 
     const [pdfPeriods, setPdfPeriods] = useState<Record<string, any[]>>({});
     const [generatedDocuments, setGeneratedDocuments] = useState<any[]>([]);
+    const [documentsScope, setDocumentsScope] = useState("");
+    const [loadingDocuments, setLoadingDocuments] = useState(true);
+    const [documentsError, setDocumentsError] = useState("");
+    const documentsRequestRef = useRef(0);
+    const scope = `${condominioId || ""}:${fatturaId || ""}`;
+    const scopeRef = useRef(scope);
+    scopeRef.current = scope;
+    const [justIssued, setJustIssued] = useState<{ scope: string; doc: any } | null>(null);
+    const periodDocuments = documentsScope === scope ? generatedDocuments : [];
+    const issuedInvoice = periodDocuments.find((doc: any) => doc.document_type === "fattura_emessa")
+      || (justIssued?.scope === scope ? justIssued.doc : null);
+    const documentsReady = documentsScope === scope && !loadingDocuments && !documentsError;
+    const [condominioIdentity, setCondominioIdentity] = useState({ id: "", name: "" });
+    const [generatingProspetto, setGeneratingProspetto] = useState(false);
+    const [prospettoMessage, setProspettoMessage] = useState("");
+    const [printingProspetto, setPrintingProspetto] = useState(false);
     const [openPeriod, setOpenPeriod] = useState<string | null>(null);
     const [pdfSearch, setPdfSearch] = useState("");
     const [activeTariffPreview, setActiveTariffPreview] = useState<any | null>(null);
@@ -518,11 +537,16 @@ export default function CondominioFatturePage() {
     }
 
     async function loadGeneratedDocuments() {
+      const request = ++documentsRequestRef.current;
+      const requestedScope = scope;
       if (!condominioId || !fatturaId) {
         setGeneratedDocuments([]);
+        setLoadingDocuments(false);
         return;
       }
-
+      setLoadingDocuments(true);
+      setDocumentsError("");
+      try {
       const { data } = await api.get("/fatture/generated-documents", {
         params: {
           condominioId,
@@ -531,8 +555,16 @@ export default function CondominioFatturePage() {
           latestPerType: 1,
         },
       });
-
+      if (request !== documentsRequestRef.current || scopeRef.current !== requestedScope) return;
       setGeneratedDocuments(data.documents || []);
+      setDocumentsScope(requestedScope);
+      } catch (err: any) {
+        if (request === documentsRequestRef.current && scopeRef.current === requestedScope) {
+          setDocumentsError(err?.response?.data?.error || "Impossibile verificare i documenti del periodo. Riprova con Aggiorna documenti.");
+        }
+      } finally {
+        if (request === documentsRequestRef.current && scopeRef.current === requestedScope) setLoadingDocuments(false);
+      }
     }
 
     function viewSinglePdf(id: number) {
@@ -637,8 +669,23 @@ export default function CondominioFatturePage() {
     }, [condominioId, fatturaId]);
 
     useEffect(() => {
-      loadGeneratedDocuments().catch(() => setGeneratedDocuments([]));
+      void loadGeneratedDocuments();
+      setRegistrationNotice(null);
+      setIsCreateFatturaModalOpen(false);
+      setProspettoMessage("");
+      return () => { ++documentsRequestRef.current; };
     }, [condominioId, fatturaId]);
+
+    useEffect(() => {
+      let cancelled = false;
+      if (!condominioId) return;
+      getCondominio(condominioId).then((data) => {
+        if (!cancelled) setCondominioIdentity({ id: condominioId, name: data.nome || data.indirizzo || `ID ${condominioId}` });
+      }).catch(() => {
+        if (!cancelled) setCondominioIdentity({ id: condominioId, name: `ID ${condominioId} (nome non disponibile)` });
+      });
+      return () => { cancelled = true; };
+    }, [condominioId]);
 
    const years: any[] = [];
    years.length = 0; // clear array while keeping reference
@@ -3427,7 +3474,7 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
   }
 
   async function handleCreateFattura() {
-
+    if (creatingFattura || !documentsReady || issuedInvoice) return;
     
     try {
       setError(null);
@@ -3463,6 +3510,10 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
       });
 
       setIsCreateFatturaModalOpen(false);
+      setJustIssued({ scope, doc: data.archivedDocument || {
+        document_type: "fattura_emessa", source: "financial_invoice",
+        financial_invoice_id: data?.fattura?.id || data?.fatturaId,
+      } });
       await loadGeneratedDocuments();
       const registeredNumber = data?.fattura?.numero || data?.fatturaId;
       setRegistrationNotice(
@@ -3517,20 +3568,44 @@ function getAccontoValuesFromParsedPayload(payloadJson?: string | null, parsedSu
   }
 
   async function onStampaProspetto(fatturaId: string) {
-    // Open in new tab
-    const params = new URLSearchParams();
-    const token = getAuthToken();
-    if (token) {
-      params.set("authToken", token);
+    if (generatingProspetto) return;
+    const requestedScope = scope;
+    setGeneratingProspetto(true);
+    setProspettoMessage("");
+    try {
+      await api.post(`/fatture/${fatturaId}/prospetto/generate`);
+      if (scopeRef.current !== requestedScope) return;
+      setProspettoMessage("Prospetto salvato. Stampa a colori e in bianco e nero disponibili.");
+      await loadGeneratedDocuments();
+    } catch (err: any) {
+      if (scopeRef.current === requestedScope) setError(err?.response?.data?.error || "Errore generazione prospetto.");
+    } finally {
+      setGeneratingProspetto(false);
     }
-    const suffix = params.toString() ? `?${params.toString()}` : "";
-    const url = `/fatture/${fatturaId}/prospetto.pdf${suffix}`;
-    window.open(api.defaults.baseURL + url, "_blank");
-    window.setTimeout(() => {
-      loadGeneratedDocuments().catch(() => undefined);
-    }, 2500);
   }
 
+  async function printProspetto(doc: any, mode: "color" | "bw") {
+    if (printingProspetto) return;
+    setPrintingProspetto(true);
+    try {
+      const { data } = await api.get(`/prospetti/documents/${doc.id}/print`, {
+        params: { mode, condominioId }, responseType: "blob",
+      });
+      const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+      const preview = window.open(url, "_blank");
+      if (preview) preview.opener = null;
+      else setError("Consenti i popup per aprire la stampa del prospetto.");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err: any) {
+      let message = "Errore stampa prospetto.";
+      if (err?.response?.data instanceof Blob) {
+        try { message = JSON.parse(await err.response.data.text()).error || message; } catch { /* Keep the readable fallback. */ }
+      }
+      setError(message);
+    } finally {
+      setPrintingProspetto(false);
+    }
+  }
 
   function daysBetween(d1?: string, d2?: string) {
   if (!d1 || !d2) return 0;
@@ -5183,6 +5258,7 @@ return (
       {/* SUMMARY */}
       <div className="workspace-sticky sticky z-40 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur 2xl:z-50">
         <div className="max-w-full space-y-1.5 px-2 py-2 2xl:px-4">
+          <CondominioIdentity name={condominioIdentity.id === condominioId ? condominioIdentity.name : ""} />
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
@@ -6591,31 +6667,51 @@ return (
 
                       <button
                         onClick={() => fatturaId && onStampaProspetto(String(fatturaId))}
-                        disabled={!fatturaId}
+                        disabled={!fatturaId || generatingProspetto}
                         className="inline-flex h-10 items-center gap-2 rounded-lg border border-blue-200 bg-white px-4 text-sm font-bold text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                       >
-                        <FileSpreadsheet className="h-4 w-4" />
-                        Genera prospetto
+                        {generatingProspetto ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                        {generatingProspetto ? "Generazione prospetto..." : "Genera prospetto"}
                       </button>
                     </div>
                   </div>
 
                   <div className="border-t border-slate-200 pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
                     <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-                      Chiusura sessione
+                      {issuedInvoice ? "Fattura gia emessa" : "Chiusura sessione"}
                     </div>
+                    {issuedInvoice ? (
+                      <button type="button" onClick={() => viewGeneratedDocument(issuedInvoice)}
+                        className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-800 hover:bg-emerald-100 sm:w-auto">
+                        <ReceiptText className="h-4 w-4" /> Visualizza fattura emessa
+                      </button>
+                    ) : (
                     <button
                       onClick={() => {
                         setFatturaDate(new Date().toISOString().slice(0, 10));
                         setIsCreateFatturaModalOpen(true);
                       }}
-                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 sm:w-auto"
+                      disabled={!documentsReady || creatingFattura}
+                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                     >
                       <ReceiptText className="h-4 w-4" />
-                      Registra fattura
+                      {loadingDocuments ? "Verifica fattura..." : documentsError ? "Verifica non disponibile" : "Registra fattura"}
                     </button>
+                    )}
                   </div>
                   </div>
+
+                  {generatingProspetto && (
+                    <div className="space-y-2" role="status" aria-live="polite">
+                      <p className="text-sm font-medium text-slate-600">Preparazione e salvataggio del prospetto...</p>
+                      <div role="progressbar" aria-label="Generazione prospetto" aria-valuetext="In corso"
+                        className="h-2 overflow-hidden rounded-full bg-blue-100">
+                        <div className="h-full w-full animate-pulse rounded-full bg-blue-600" />
+                      </div>
+                    </div>
+                  )}
+                  {!generatingProspetto && prospettoMessage && <p role="status" className="text-sm text-emerald-700">{prospettoMessage}</p>}
+                  {documentsError && <p role="alert" className="text-sm text-red-700">{documentsError}</p>}
 
                   {registrationNotice && (
                     <div className="mt-3 flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -6691,7 +6787,7 @@ return (
                             Documenti del periodo
                           </h3>
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
-                            {generatedDocuments.length}/3 disponibili
+                            {periodDocuments.length}/3 disponibili
                           </span>
                         </div>
                         <p className="mt-0.5 text-xs text-slate-500">
@@ -6701,11 +6797,12 @@ return (
                       <button
                         type="button"
                         onClick={loadGeneratedDocuments}
+                        disabled={loadingDocuments}
                         className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
                         aria-label="Aggiorna documenti"
                         title="Aggiorna documenti"
                       >
-                        <RefreshCw className="h-4 w-4" />
+                        <RefreshCw className={`h-4 w-4 ${loadingDocuments ? "animate-spin" : ""}`} />
                       </button>
                     </div>
 
@@ -6730,7 +6827,7 @@ return (
                           iconClass: "bg-blue-50 text-blue-700 ring-blue-100",
                         },
                       ] as const).map((slot) => {
-                        const doc = generatedDocuments.find(
+                        const doc = periodDocuments.find(
                           (item: any) => item.document_type === slot.type
                         );
                         const Icon = slot.Icon;
@@ -6761,8 +6858,20 @@ return (
                               </div>
                             </div>
 
-                            <div className="mt-auto flex justify-end">
-                              {doc ? (
+                            <div className="mt-auto flex flex-wrap justify-end gap-2">
+                              {doc && slot.type === "prospetto" ? (
+                                <>
+                                  <button type="button" onClick={() => printProspetto(doc, "color")} disabled={printingProspetto || generatingProspetto}
+                                    className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-50">
+                                    <Printer className="h-3.5 w-3.5 shrink-0" /> Stampa a colori
+                                  </button>
+                                  <button type="button" onClick={() => printProspetto(doc, "bw")} disabled={printingProspetto || generatingProspetto}
+                                    className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                                    <Printer className="h-3.5 w-3.5 shrink-0" /> Stampa bianco e nero
+                                  </button>
+                                  {printingProspetto && <span role="status" className="text-xs text-slate-500">Preparazione stampa...</span>}
+                                </>
+                              ) : doc ? (
                                 <button
                                   type="button"
                                   onClick={() => viewGeneratedDocument(doc)}

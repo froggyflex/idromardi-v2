@@ -479,7 +479,7 @@ function replacementHtml(rows) {
   `;
 }
 
-function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrecedente, rows, logoUrl = getLogoColoratoDataUrl() }) {
+function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrecedente, rows, logoUrl = getLogoColoratoDataUrl(), mode = "bw" }) {
   const orderedRows = enrichRowsWithSeparatedOneri([...rows], session).sort(compareTableRows);
   const totals = buildTotals(orderedRows, session);
   const pages = chunkRows(orderedRows);
@@ -827,13 +827,15 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
             border-bottom: none;
           }
           @media print {
-            * {
+            body.monochrome * {
               color: #111111 !important;
               border-color: #555555 !important;
               box-shadow: none !important;
               background-image: none !important;
               background-color: #ffffff !important;
             }
+            body.monochrome img { filter: grayscale(1); }
+            body.monochrome .detail-table .totals td { background: #ffffff !important; }
             .boxed, .condo-box, .general-box, .replacement-card {
               border-width: 0.75pt;
             }
@@ -842,7 +844,6 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
               border: 0.6pt solid #555555;
             }
             .detail-table .totals td {
-              background: #ffffff !important;
               padding-left: 0.4mm;
               padding-right: 0.4mm;
               font-size: 6.5pt;
@@ -850,7 +851,7 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
           }
         </style>
       </head>
-      <body>
+      <body class="${mode === "bw" ? "monochrome" : "color"}">
         ${pages
           .map(
             (pageRows, index) => `
@@ -868,7 +869,7 @@ function buildHtml({ session, condominio, contatto, periodoAttuale, periodoPrece
   `;
 }
 
-async function buildPdf(fatturaId) {
+async function buildPdf(fatturaId, { mode = "bw", includeMonochrome = false } = {}) {
   const [[session]] = await db.query(
     `SELECT * FROM fatture_sessioni WHERE id = ? LIMIT 1`,
     [fatturaId]
@@ -942,7 +943,7 @@ async function buildPdf(fatturaId) {
 
     const logoUrl = await preparePrintLogo(page, getLogoColoratoDataUrl());
     const html = buildHtml({
-      session, condominio, contatto, periodoAttuale, periodoPrecedente, rows, logoUrl,
+      session, condominio, contatto, periodoAttuale, periodoPrecedente, rows, logoUrl, mode,
     });
 
     await page.setContent(html, {
@@ -950,7 +951,7 @@ async function buildPdf(fatturaId) {
       timeout: 120000,
     });
 
-    const buffer = await page.pdf({
+    const pdfOptions = {
       format: "A4",
       landscape: true,
       preferCSSPageSize: true,
@@ -961,7 +962,14 @@ async function buildPdf(fatturaId) {
         bottom: "6mm",
         left: "7mm",
       },
-    });
+    };
+    const buffer = await page.pdf(pdfOptions);
+    let monochromeBuffer;
+    if (includeMonochrome) {
+      // Reuse the same data, page and assets for both print variants.
+      await page.evaluate(() => { document.body.className = "monochrome"; });
+      monochromeBuffer = Buffer.from(await page.pdf(pdfOptions));
+    }
 
     const safeCondominio = String(condominio?.indirizzo || condominio?.nome || session.id_condominio)
       .replace(/[^\w.-]+/g, "_")
@@ -970,6 +978,7 @@ async function buildPdf(fatturaId) {
 
     return {
       buffer: Buffer.from(buffer),
+      monochromeBuffer,
       filename: `prospetto_Contabilita_${safeCondominio || "condominio"}.pdf`,
       condominioId: session.id_condominio,
       fatturaId,
