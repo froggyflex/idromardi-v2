@@ -3,10 +3,15 @@ import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
 import { getCondominio } from "../../api/letture";
 import CondominioIdentity from "../components/CondominioIdentity";
+import BillingValueGrid from "../components/BillingValueGrid";
+import "./billing-workspace.css";
 import { buildRipartizionePdfPayload } from "../../utils/ripartizionePdfPayload";
 import {
   AlertTriangle,
   ArrowRight,
+  Calculator,
+  SlidersHorizontal,
+  Table2,
   ChevronDown,
   ChevronUp,
   ExternalLink,
@@ -433,6 +438,24 @@ export default function CondominioFatturePage() {
     const [generatingProspetto, setGeneratingProspetto] = useState(false);
     const [prospettoMessage, setProspettoMessage] = useState("");
     const [printingProspetto, setPrintingProspetto] = useState(false);
+    const [preparationOpen, setPreparationOpen] = useState(true);
+    const [readingSearch, setReadingSearch] = useState("");
+    const billingHeaderRef = useRef<HTMLDivElement>(null);
+    const visibleBillingRows = righe.map((r: any, idx: number) => ({ r, idx })).filter(({ r }: { r: any }) => {
+      const query = readingSearch.trim().toLocaleLowerCase("it");
+      const u = r.utenza || {};
+      return !query || query.split(/\s+/).every((part) =>
+        [u.id_user, u.Nome, u.Cognome, u.Isolato, u.Scala, u.Interno].join(" ").toLocaleLowerCase("it").includes(part));
+    });
+
+    function goToBillingSection(id: string) {
+      const target = document.getElementById(id);
+      if (!target) return;
+      const header = billingHeaderRef.current;
+      target.style.scrollMarginTop = `${(header?.getBoundingClientRect().bottom || 0) + 12}px`;
+      target.scrollIntoView({ block: "start", behavior: "instant" });
+      target.focus({ preventScroll: true });
+    }
     const [openPeriod, setOpenPeriod] = useState<string | null>(null);
     const [pdfSearch, setPdfSearch] = useState("");
     const [activeTariffPreview, setActiveTariffPreview] = useState<any | null>(null);
@@ -673,6 +696,8 @@ export default function CondominioFatturePage() {
       setRegistrationNotice(null);
       setIsCreateFatturaModalOpen(false);
       setProspettoMessage("");
+      setPreparationOpen(true);
+      setReadingSearch("");
       return () => { ++documentsRequestRef.current; };
     }, [condominioId, fatturaId]);
 
@@ -5238,7 +5263,7 @@ return (
           </div>
         </div>
       )}
-      <div className="screen-only" inert={isSessionPreparing}>
+      <div className="screen-only billing-workspace" inert={isSessionPreparing}>
       {calculationNotice && (
         <div className="space-y-2 px-2 pt-3 2xl:px-4">
           {calculationNotice && (
@@ -5256,7 +5281,7 @@ return (
         </div>
       )}
       {/* SUMMARY */}
-      <div className="workspace-sticky sticky z-40 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur 2xl:z-50">
+      <div ref={billingHeaderRef} className="workspace-sticky sticky z-40 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur 2xl:z-50">
         <div className="max-w-full space-y-1.5 px-2 py-2 2xl:px-4">
           <CondominioIdentity name={condominioIdentity.id === condominioId ? condominioIdentity.name : ""} />
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
@@ -5368,10 +5393,23 @@ return (
               )}
             </div>
           </div>
+      <nav className="billing-jump-nav" aria-label="Sezioni fatturazione">
+        {[
+          { id: "billing-preparation", label: "Dati e parametri", Icon: SlidersHorizontal },
+          { id: "billing-summary", label: "Riepilogo", Icon: Calculator },
+          { id: "billing-documents", label: "Documenti", Icon: FileText },
+          { id: "billing-readings", label: "Contatori", Icon: Table2 },
+        ].map(({ id, label, Icon }) => (
+          <button key={id} type="button" disabled={!fatturaId || (id !== "billing-preparation" && id !== "billing-summary" && selectedImportedId === null)} onClick={() => goToBillingSection(id)}>
+            <Icon size={14} aria-hidden="true" />
+            <span className="hidden sm:inline">{label}</span>
+            <span className="sm:hidden">{id === "billing-preparation" ? "Dati" : label}</span>
+          </button>
+        ))}
+      </nav>
         </div>
       </div>
-
-      <div className="max-w-full px-2 pt-3 2xl:px-4">
+      <div className="max-w-full px-2 pt-2 2xl:px-4">
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
             <div className={`flex items-center justify-between gap-4 ${sessionPanelOpen ? "mb-3" : ""}`}>
               <div>
@@ -5615,30 +5653,34 @@ return (
         <>
       
           {/* CONTATORE GENERALE */}
-          <div className="w-full space-y-4 px-4 pb-6">
+          <div className="w-full space-y-3 bg-white px-3 pb-4">
           {/* ============================= */}
           {/* CONTROLLO CALCOLO + GENERALE */}
           {/* ============================= */}
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <section id="billing-preparation" tabIndex={-1} className="billing-section">
   {/* HEADER */}
-  <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+  <div className="billing-section-heading">
     <div>
       <h3 className="text-base font-bold text-slate-900">
         Preparazione calcolo
       </h3>
-      <p className="mt-0.5 max-w-2xl text-xs text-slate-500">
-        Documento provider e parametri della sessione.
-      </p>
     </div>
 
-    <div className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-      Configurazione calcolo
-    </div>
+    <button type="button" aria-expanded={preparationOpen} aria-controls="billing-preparation-body" onClick={() => setPreparationOpen((open) => !open)}
+      className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+      {preparationOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}{preparationOpen ? "Riduci" : "Espandi"}
+    </button>
   </div>
+  {!preparationOpen && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+    <span>{activeImportedDocument ? getImportedDocumentName(activeImportedDocument) : "Nessun TXT associato"}</span>
+    <span>Giorni QF: {giorniQf || "-"}</span><span>Consumi: {giorniConsumi || "-"}</span><span>Interni: {giorniCasaInterni || "-"}</span>
+    {editingImportedDoc && <span className="font-semibold text-amber-800">Modifica documento in corso</span>}
+  </div>}
+  <div id="billing-preparation-body" className="billing-preparation-body" hidden={!preparationOpen}>
 
   {/* IMPORT AREA - FULL WIDTH */}
-  <div className="border-b border-slate-200 px-4 py-3">
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_132px] lg:items-end">
+  <div className="billing-upload">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_120px_90px] sm:items-end">
       <label className="block">
         <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">
           File bolletta
@@ -5723,17 +5765,13 @@ return (
   </div>
 
   {/* MAIN SPLIT */}
-  <div className="grid grid-cols-1 items-start gap-3 p-3 lg:grid-cols-2 2xl:gap-4 2xl:p-4">
     {/* LEFT - DOCUMENTI CARICATI */}
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/70 px-4 py-3">
+    <div className="billing-imports min-w-0 overflow-hidden border-t border-slate-200 bg-white">
+      <div className="flex items-center justify-between border-b border-slate-200 px-2 py-2">
         <div>
           <h4 className="text-sm font-bold text-slate-900">
             Documenti caricati
           </h4>
-          <p className="mt-0.5 text-[11px] text-slate-500">
-            Solo documenti TXT associati al periodo selezionato.
-          </p>
         </div>
 
         <span className="shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
@@ -5741,7 +5779,7 @@ return (
         </span>
       </div>
 
-      <div className="border-b border-slate-200 p-3">
+      <div className="border-b border-slate-200 py-2">
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
             value={importedSearch}
@@ -5928,7 +5966,7 @@ return (
     </div>
 
     {/* RIGHT - IMPOSTAZIONI OPERATIVE */}
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="billing-inputs min-w-0">
       <div className="border-b border-slate-200 pb-2">
         <h4 className="text-sm font-semibold text-slate-900">
           Impostazioni operative
@@ -5936,7 +5974,7 @@ return (
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 [&_input]:min-w-0 [&_label]:text-[11px]">
-        <div className="col-span-full flex min-w-0 flex-col rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+        <div className="col-span-full flex min-w-0 flex-col px-1 py-1">
           <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Documento associato al periodo
           </span>
@@ -6014,16 +6052,13 @@ return (
     </div>
 
     {/* FULL WIDTH - MODIFICA MANUALE DATI ESTRATTI */}
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white lg:col-span-2">
-      <div className="flex flex-col gap-3 border-b border-slate-200 bg-amber-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="billing-manual min-w-0 overflow-hidden border-t border-slate-200 bg-white">
+      <div className="flex flex-col gap-2 border-b border-slate-200 px-2 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
             <Pencil className="h-4 w-4 text-amber-700" />
             <h4 className="text-sm font-bold text-slate-900">Inserimento e correzione manuale</h4>
           </div>
-          <p className="mt-1 text-xs text-slate-600">
-            Inserisci i dati anche senza file, oppure correggi quelli estratti. I valori salvati saranno usati nel calcolo.
-          </p>
         </div>
         <button
           type="button"
@@ -6058,7 +6093,7 @@ return (
 
       {!editingImportedDoc || !importedDocEdit ? (
         selectedImportedDoc ? (
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-4 py-4 text-sm sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-2 py-2 text-sm sm:grid-cols-4">
             {[
               ["Bolletta", selectedImportedDoc.numero_bolletta || "-"],
               ["Fornitura", selectedImportedDoc.codice_fornitura || "-"],
@@ -6238,419 +6273,69 @@ return (
 </section>
 
           {/* CALCULATION BREAKDOWN */}
-          <div className="rounded-[28px] border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-6 shadow-sm sm:p-7">
-            <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h3 className="text-xl font-bold tracking-tight text-slate-900">
-                  Dettaglio calcolo
-                </h3>
-                <p className="mt-1 max-w-2xl text-sm text-slate-500">
-                  Riepilogo dei valori utilizzati nel calcolo, con evidenza di acconto, storno e confronto finale con il documento importato.
-                </p>
-              </div>
-
-              <div className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-                Controllo contabilità
+          <section id="billing-summary" tabIndex={-1} className="billing-section">
+            <div className="billing-section-heading">
+              <h3>Dettaglio calcolo</h3>
+              <span className={totalAudit.totalsOk ? "text-xs font-semibold text-emerald-700" : "text-xs font-semibold text-amber-800"}>
+                {totalAudit.totalsOk ? "Totali corretti" : "Totali da verificare"}
+              </span>
+            </div>
+            <BillingValueGrid title="Valori principali" items={[
+              { label: "Consumo", value: `${Number(consumo ?? 0).toFixed(0)} mc` },
+              { label: "Acquedotto", value: `€ ${formatDecimalIt(impConsumo)}` },
+              { label: "Fognatura", value: hasCombinedOnlyDepFogValue ? "N/D" : `€ ${formatDecimalIt(fognaturaMainValue)}`,
+                note: hasCombinedOnlyDepFogValue ? "Disponibile solo il totale Dep./Fog." : undefined },
+              { label: "Depurazione", value: hasCombinedOnlyDepFogValue ? "N/D" : `€ ${formatDecimalIt(depurazioneMainValue)}`,
+                note: hasCombinedOnlyDepFogValue ? `Totale combinato: € ${formatDecimalIt(depFogValue)}` : undefined },
+              { label: "Quota fissa", value: `€ ${formatDecimalIt(quotaFissa)}`, note: quotaFissaSession > 0 ? "Ripartizione quota fissa" : "Quota fissa da TXT" },
+              { label: "Oneri perequazione", value: `€ ${formatDecimalIt(oneriPerequazione)}` },
+              { label: "IVA lettura a giro", value: `€ ${formatDecimalIt(ivaAGiro)}`, note: manualIvaAGiro !== null ? "Valore manuale" : undefined },
+              { label: "Varie", value: <input aria-label="Varie (euro)" type="number" value={varie} onChange={(event) => setVarie(event.target.value)}
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-medium focus:outline-blue-600" />,
+                note: `Valore attuale: € ${formatDecimalIt(varieValue)}` },
+              { label: "Totale lettura a giro", value: `€ ${formatDecimalIt(totaleLetturaAGiro)}`, emphasis: true,
+                note: totaleFornituraAGiro > 0 ? totaleFornituraAGiroDaTxt > 0 ? "Totale fornitura a giro dal TXT" : "Totale documento meno acconto" : "Senza acconto o storno" },
+            ]} />
+            <div className="billing-adjustments">
+              {(Number(mcAcconto || 0) !== 0 || Number(totaleAcconto || 0) !== 0 || quotaFissaAccontoValue !== 0) && (
+                <BillingValueGrid title="Acconto rilevato" tone="advance" items={[
+                  { label: "Consumo acconto", value: `${formatDecimalIt(mcAcconto)} mc` },
+                  { label: "Acquedotto", value: `€ ${formatDecimalIt(eurAcconto)}` },
+                  { label: "Dep./Fog.", value: `€ ${formatDecimalIt(depfogAcconto)}` },
+                  { label: "Quota fissa", value: `€ ${formatDecimalIt(quotaFissaAccontoValue)}` },
+                  { label: "IVA", value: `€ ${formatDecimalIt(ivaAcconto)}` },
+                  { label: "Oneri perequazione", value: `€ ${formatDecimalIt(oneriPerequazioneAcconto)}` },
+                  ...(Math.abs(accontoOtherValue) > 0.004 ? [{ label: "Altri importi", value: `€ ${formatDecimalIt(accontoOtherValue)}`, note: "Differenza inclusa nel totale acconto del documento." }] : []),
+                  { label: "Totale acconto", value: `€ ${formatDecimalIt(totaleAcconto)}`, emphasis: true },
+                ]} />
+              )}
+              {(Number(mcStorno ?? 0) !== 0 || Number(totaleStorno || eurStorno || 0) !== 0) && (
+                <BillingValueGrid title="Storno rilevato" tone="credit" items={[
+                  { label: "Consumo storno", value: `${formatDecimalIt(mcStorno)} mc` },
+                  { label: "Acquedotto", value: `€ ${formatDecimalIt(acquedottoStorno)}` },
+                  { label: "Dep./Fog.", value: `€ ${formatDecimalIt(depfogStorno)}` },
+                  { label: "Quota fissa", value: `€ ${formatDecimalIt(quotaFissaStornoValue)}` },
+                  { label: "IVA", value: `€ ${formatDecimalIt(ivaStorno)}` },
+                  { label: "Oneri perequazione", value: `€ ${formatDecimalIt(oneriPerequazioneStorno)}` },
+                  { label: "Totale storno", value: `€ ${formatDecimalIt(Number(totaleStorno || eurStorno || 0))}`, emphasis: true },
+                ]} />
+              )}
+            </div>
+            <div className="billing-totals" aria-label="Confronto totali">
+              <div><h4>Totale documento {activeBillingProviderCode}</h4><strong>€ {formatDecimalIt(totaleDocumento)}</strong></div>
+              <div><h4>Dovuto incasso</h4><strong>€ {formatDecimalIt(totaleDocumentoConOneri)}</strong><p>Inclusi oneri condominio: € {formatDecimalIt(totaleOneri)}</p></div>
+              <div className="bg-blue-50"><h4>Totale interni</h4><strong>€ {formatDecimalIt(totaleInterni)}</strong></div>
+              <div className={deltaOk ? "bg-emerald-50" : "bg-amber-50"}><h4>Delta</h4><strong>€ {formatDecimalIt(deltaTotali)}</strong>
+                <p>{deltaOk ? `Corrisponde agli oneri condominio (€ ${formatDecimalIt(totaleOneri)}).` : `Atteso: € ${formatDecimalIt(totaleOneri)}. Scostamento: € ${formatDecimalIt(deltaRispettoOneri)}.`}</p>
               </div>
             </div>
-
-            <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-12">
-              {/* LEFT */}
-              <div className="xl:col-span-8 space-y-6">
-                {/* VALORI PRINCIPALI */}
-                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white px-5 py-4 sm:px-6">
-                    <h4 className="text-sm font-semibold text-slate-900">Valori principali</h4>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Componenti essenziali della lettura a giro da confrontare con il documento importato.
-                    </p>
-                  </div>
-
-                  <div className="p-5 sm:p-6">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Consumo mc
-                        </div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">
-                          {Number(consumo ?? 0).toFixed(0)}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          Consumo totale lettura a giro
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Acquedotto
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {formatDecimalIt(impConsumo)}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          Importo lettura a giro
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Fognatura
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          {hasCombinedOnlyDepFogValue
-                            ? "N/D"
-                            : `€ ${formatDecimalIt(fognaturaMainValue)}`}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {hasCombinedOnlyDepFogValue
-                            ? "Disponibile solo il totale Dep./Fog."
-                            : "Importo lettura a giro"}
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Depurazione
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          {hasCombinedOnlyDepFogValue
-                            ? "N/D"
-                            : `€ ${formatDecimalIt(depurazioneMainValue)}`}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {hasCombinedOnlyDepFogValue
-                            ? `Totale combinato: € ${formatDecimalIt(depFogValue)}`
-                            : "Importo lettura a giro"}
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Quota fissa
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {formatDecimalIt(quotaFissa)}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {quotaFissaSession > 0 ? "Ripartizione quota fissa" : "Quota fissa da TXT"}
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Oneri perequazione
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {formatDecimalIt(oneriPerequazione)}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          Oneri attribuiti alla lettura a giro
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          IVA lettura a giro
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {formatDecimalIt(ivaAGiro)}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {manualIvaAGiro !== null
-                            ? "Valore inserito manualmente"
-                            : "Calcolo IVA corrente"}
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Varie
-                        </div>
-                        <div className="mt-3">
-                          <input
-                            type="number"
-                            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
-                            value={varie}
-                            onChange={(e) => setVarie(e.target.value)}
-                            placeholder="Inserisci valore"
-                          />
-                        </div>
-                        <div className="mt-2 text-xs text-slate-400">
-                          Valore attuale: € {formatDecimalIt(varieValue)}
-                        </div>
-                      </article>
-
-                      <article className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4 transition hover:-translate-y-[1px] hover:shadow-sm">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                          Totale lettura a giro
-                        </div>
-                        <div className="mt-2 text-2xl font-bold text-slate-900">
-                          € {formatDecimalIt(totaleLetturaAGiro)}
-                        </div>
-                        <div className="mt-1 text-xs text-emerald-700/80">
-                          {totaleFornituraAGiro > 0
-                            ? totaleFornituraAGiroDaTxt > 0
-                              ? "Totale fornitura a_giro dal TXT"
-                              : "Totale documento meno acconto"
-                            : "Solo letture a_giro, senza acconto o storno"}
-                        </div>
-                      </article>
-                    </div>
-                  </div>
-                </section>
-
-                {/* ACCONTO */}
-                {(Number(mcAcconto || 0) !== 0 || Number(totaleAcconto || 0) !== 0 || quotaFissaAccontoValue !== 0) && (
-                  <section className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
-                    <div className="border-b border-amber-100 bg-gradient-to-r from-amber-50 to-white px-5 py-4 sm:px-6">
-                      <h4 className="text-sm font-semibold text-slate-900">Acconto rilevato</h4>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Dati estratti dal documento per il periodo di acconto individuato.
-                      </p>
-                    </div>
-
-                    <div className="p-5 sm:p-6">
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                        <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
-                            Consumo acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            {formatDecimalIt(mcAcconto)} mc
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Acquedotto acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(eurAcconto)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Dep./Fog. acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(depfogAcconto)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Quota fissa acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(quotaFissaAccontoValue)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            IVA acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(ivaAcconto)}
-                          </div>
-                        </article>
-
-                         <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Oneri perequazione acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(oneriPerequazioneAcconto)}
-                           </div>
-                         </article>
-
-                         {Math.abs(accontoOtherValue) > 0.004 && (
-                           <article className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-                             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
-                               Altri importi acconto
-                             </div>
-                             <div className="mt-2 text-xl font-bold text-slate-900">
-                               EUR {formatDecimalIt(accontoOtherValue)}
-                             </div>
-                             <div className="mt-1 text-xs text-amber-800">
-                               Differenza inclusa nel totale acconto del documento.
-                             </div>
-                           </article>
-                         )}
-
-                        <article className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                            Totale acconto
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(totaleAcconto)}
-                          </div>
-                        </article>
-                      </div>
-                    </div>
-                  </section>
-                )}
-
-                {/* STORNO */}
-                {(Number(mcStorno ?? 0) !== 0 || Number(totaleStorno || eurStorno || 0) !== 0) && (
-                  <section className="overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-sm">
-                    <div className="border-b border-rose-100 bg-gradient-to-r from-rose-50 to-white px-5 py-4 sm:px-6">
-                      <h4 className="text-sm font-semibold text-slate-900">Storno rilevato</h4>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Rettifica collegata ai consumi o agli importi già anticipati.
-                      </p>
-                    </div>
-
-                    <div className="p-5 sm:p-6">
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                        <article className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700">
-                            Consumo storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            {formatDecimalIt(mcStorno)} mc
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Acquedotto storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(acquedottoStorno)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Dep./Fog. storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(depfogStorno)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Quota fissa storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(quotaFissaStornoValue)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            IVA storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(ivaStorno)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Oneri perequazione storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(oneriPerequazioneStorno)}
-                          </div>
-                        </article>
-
-                        <article className="rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 to-white p-4">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700">
-                            Totale storno
-                          </div>
-                          <div className="mt-2 text-xl font-bold text-slate-900">
-                            € {formatDecimalIt(Number(totaleStorno || eurStorno || 0))}
-                          </div>
-                        </article>
-                      </div>
-                    </div>
-                  </section>
-                )}
-              </div>
-
-              {/* RIGHT */}
-              <aside className="xl:col-span-4">
-                <div className="sticky top-24 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-white px-5 py-4">
-                    <h4 className="text-sm font-semibold text-slate-900">Confronto totali</h4>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Verifica tra importo documento e totale ripartito internamente.
-                    </p>
-                  </div>
-
-                  <div className="space-y-4 p-5">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                      <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
-                        Totale documento {activeBillingProviderCode}
-                      </div>
-                      <div className="mt-2 text-2xl font-bold text-slate-900">
-                        € {formatDecimalIt(totaleDocumento)}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                      <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
-                        Dovuto incasso
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {activeBillingProviderCode} € {formatDecimalIt(totaleDocumento)} + oneri condominio € {formatDecimalIt(totaleOneri)}
-                      </div>
-                      <div className="mt-2 text-2xl font-bold text-slate-900">
-                        € {formatDecimalIt(totaleDocumentoConOneri)}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-700 to-blue-600 px-4 py-5 text-white shadow-sm">
-                      <div className="text-[11px] uppercase tracking-[0.16em] opacity-80">
-                        Totale interni
-                      </div>
-                      <div className="mt-2 text-3xl font-bold">
-                        € {formatDecimalIt(totaleInterni)}
-                      </div>
-                    </div>
-
-                    <div
-                      className={`rounded-2xl border px-4 py-5 ${
-                        deltaOk
-                          ? "border-emerald-200 bg-emerald-50"
-                          : "border-amber-200 bg-amber-50"
-                      }`}
-                    >
-                      <div
-                        className={`text-[11px] uppercase tracking-[0.16em] ${
-                          deltaOk ? "text-emerald-700" : "text-amber-700"
-                        }`}
-                      >
-                        Delta
-                      </div>
-                      <div
-                        className={`mt-2 text-3xl font-bold ${
-                          deltaOk ? "text-emerald-700" : "text-amber-700"
-                        }`}
-                      >
-                        € {formatDecimalIt(deltaTotali)}
-                      </div>
-                      <div className="mt-2 text-xs text-slate-500">
-                        {deltaOk
-                          ? `Il delta corrisponde agli oneri condominio (€ ${formatDecimalIt(totaleOneri)}).`
-                          : `Delta atteso: oneri condominio € ${formatDecimalIt(totaleOneri)}. Scostamento residuo € ${formatDecimalIt(deltaRispettoOneri)}.`}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </aside>
-            </div>  
-          </div>
+          </section>
 
           {selectedImportedId !== null && (
             <>
-              <div className="space-y-6">
+              <div id="billing-documents" tabIndex={-1} className="billing-section space-y-3">
                 {/* ACTION BAR */}
-                <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
                       Documenti di ripartizione
@@ -6779,7 +6464,7 @@ return (
                     </div>
                   )}
 
-                  <section className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <section className="billing-documents overflow-hidden border border-slate-200 bg-white">
                     <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -6833,7 +6518,7 @@ return (
                         const Icon = slot.Icon;
 
                         return (
-                          <div key={slot.type} className="flex min-w-0 flex-col gap-3 p-4">
+                          <div key={slot.type} className="billing-document-item flex min-w-0 flex-col">
                             <div className="flex min-w-0 items-start gap-3">
                               <div className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${slot.iconClass}`}>
                                 <Icon className="h-4 w-4" />
@@ -6963,95 +6648,36 @@ return (
                 </div>
               )}
 
-              <div className="bg-white border rounded-2xl p-6">
+              <div className="billing-section">
                 {/* CONTATORE GENERALE RIBBON */}
-<div className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-  <div className="flex flex-col gap-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-4 py-4 text-white lg:flex-row lg:items-center lg:justify-between">
-    <div>
-      <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-300">
-        Contatore generale
-      </div>
-
-      <div className="mt-1 text-sm font-semibold">
-        Valori di riferimento per il calcolo dei contatori interni
-      </div>
-    </div>
-
-    <div className="flex flex-wrap items-center gap-3">
-      <div className="rounded-xl bg-white/10 px-3 py-2 ring-1 ring-white/15">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-300">
-          Lettura attuale
-        </div>
-        <input
-          type="number"
-          value={valAtt}
-          onChange={(e) => setValAtt(e.target.value)}
-          className="mt-1 w-28 rounded-lg border border-white/20 bg-white px-2 py-1 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-white/40"
-        />
-      </div>
-
-      <div className="rounded-xl bg-white/10 px-3 py-2 ring-1 ring-white/15">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-300">
-          Lettura precedente
-        </div>
-        <input
-          type="number"
-          value={valPrec}
-          onChange={(e) => setValPrec(e.target.value)}
-          className="mt-1 w-28 rounded-lg border border-white/20 bg-white px-2 py-1 text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-white/40"
-        />
-      </div>
-
-      <div className="rounded-xl bg-emerald-400/15 px-4 py-2 ring-1 ring-emerald-300/30">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-100">
-          Consumo generale
-        </div>
-        <div className="mt-1 text-lg font-black text-white">
-          {Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))} mc
-        </div>
-      </div>
-
-      <button
-        onClick={() => saveGenerale()}
-        disabled={savingGenerale}
-        className="inline-flex h-11 items-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-900 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <Save size={16} />
-        {savingGenerale ? "Salvando..." : "Salva"}
-      </button>
-    </div>
-  </div>
-
-  <div className="grid grid-cols-2 divide-x divide-slate-200 border-t border-slate-200 bg-slate-50 text-xs sm:grid-cols-4">
-    <div className="px-4 py-2">
-      <span className="font-bold text-slate-500">Interni:</span>{" "}
-      <span className="font-semibold text-slate-900">
-        {righe.length}
-      </span>
-    </div>
-
-    <div className="px-4 py-2">
-      <span className="font-bold text-slate-500">Consumo interni:</span>{" "}
-      <span className="font-semibold text-slate-900">
-        {totals.consumo.toFixed(0)} mc
-      </span>
-    </div>
-
-    <div className="px-4 py-2">
-      <span className="font-bold text-slate-500">Totale interni:</span>{" "}
-      <span className={`font-semibold ${isGreen ? "text-emerald-600" : "text-red-600"}`}>
-        € {formatDecimalIt(totals.totaleInterni)}
-      </span>
-    </div>
-
-    <div className="px-4 py-2">
-      <span className="font-bold text-slate-500">Stato:</span>{" "}
-      <span className={`font-semibold ${isGreen ? "text-emerald-600" : "text-red-600"}`}>
-        {isGreen ? "Allineato" : "Da verificare"}
-      </span>
-    </div>
-  </div>
-</div>
+                <div className="mb-3 border-b border-slate-200 pb-3">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <h3 className="mb-2 mr-auto text-sm font-bold text-slate-900">Contatore generale</h3>
+                    <label className="flex min-w-0 flex-col gap-1 text-xs font-medium text-slate-600">
+                      Lettura precedente
+                      <input aria-label="Contatore generale: lettura precedente" type="number" value={valPrec} onChange={(event) => setValPrec(event.target.value)}
+                        className="h-9 w-32 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 focus:outline-blue-600" />
+                    </label>
+                    <label className="flex min-w-0 flex-col gap-1 text-xs font-medium text-slate-600">
+                      Lettura attuale
+                      <input aria-label="Contatore generale: lettura attuale" type="number" value={valAtt} onChange={(event) => setValAtt(event.target.value)}
+                        className="h-9 w-32 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 focus:outline-blue-600" />
+                    </label>
+                    <div className="min-w-28 text-xs text-slate-600">Consumo generale
+                      <strong className="flex h-9 items-center text-base text-slate-900">{Math.max(0, Number(valAtt || 0) - Number(valPrec || 0))} mc</strong>
+                    </div>
+                    <button onClick={() => saveGenerale()} disabled={savingGenerale}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">
+                      <Save size={15} />{savingGenerale ? "Salvando..." : "Salva"}
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 border-t border-slate-100 pt-2 text-xs text-slate-600">
+                    <span>Interni: <strong>{righe.length}</strong></span>
+                    <span>Consumo interni: <strong>{totals.consumo.toFixed(0)} mc</strong></span>
+                    <span>Totale interni: <strong>€ {formatDecimalIt(totals.totaleInterni)}</strong></span>
+                    <span className={isGreen ? "font-semibold text-emerald-700" : "font-semibold text-red-700"}>{isGreen ? "Allineato" : "Da verificare"}</span>
+                  </div>
+                </div>
 
                     {fatturaId && (
                       <section className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -7187,7 +6813,7 @@ return (
                       </section>
                     )}
 
-                    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div id="billing-readings" tabIndex={-1} className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <h3 className="font-semibold">Situazione Contatori Interni</h3>
 
                       <div
@@ -7217,6 +6843,15 @@ return (
                                 ? "NON CORRETTO (totale visualizzato discordante)"
                                 : `NON CORRETTO (delta EUR ${formatDecimalIt(totalAudit.controlDifference)})`}
                       </div>
+                    </div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-y border-slate-200 py-2">
+                      <label className="flex min-h-9 w-full items-center gap-2 rounded-md border border-slate-300 bg-white px-2 sm:max-w-sm">
+                        <Search size={15} className="shrink-0 text-slate-500" aria-hidden="true" />
+                        <input aria-label="Cerca utenza" placeholder="Nome, cognome, ID, scala o interno" value={readingSearch} onChange={(event) => setReadingSearch(event.target.value)}
+                          className="min-w-0 flex-1 py-1.5 text-sm outline-none" />
+                        {readingSearch && <button type="button" onClick={() => setReadingSearch("")} title="Cancella ricerca" aria-label="Cancella ricerca" className="p-1 text-slate-500 hover:text-slate-900"><X size={14} /></button>}
+                      </label>
+                      <span role="status" className="text-xs text-slate-600">{visibleBillingRows.length} / {righe.length} utenze{readingSearch && " · Totali riferiti all'intero periodo"}</span>
                     </div>
                       <div className="max-h-[68vh] overflow-auto rounded-lg border border-slate-200 bg-white">
                           <table className="billing-readings-table w-full min-w-[1840px] table-fixed text-xs">
@@ -7274,7 +6909,8 @@ return (
                                   )}
 
 
-                                  {righe.map((r: any, idx: number) => {
+                                  {readingSearch && visibleBillingRows.length === 0 && <tr><td colSpan={23} className="p-4 text-left text-sm text-slate-500">Nessuna utenza corrisponde alla ricerca.</td></tr>}
+                                  {visibleBillingRows.map(({ r, idx }: { r: any; idx: number }) => {
                                     
                                     const rowKey = r.id ?? idx;
                                     const isExpanded = !!expandedRows[rowKey];
@@ -7589,7 +7225,7 @@ return (
                                 <tfoot className="bg-slate-200 font-semibold">
                                   <tr>
                                     <td colSpan={8} className="p-2 text-right">
-                                      TOTALE
+                                      TOTALE PERIODO
                                     </td>
                                     <td className="p-2 text-center">{totals.consumo.toFixed(0)}</td>
                                     <td className="p-2 text-center">{formatDecimalIt(totals.acq)}</td>
@@ -7601,30 +7237,10 @@ return (
                                     <td className="p-2 text-center">{formatDecimalIt(totaleOneriPereqVisibile)}</td>
                                     <td className="p-2 text-center">{formatDecimalIt(totals.iva)}</td>
                                     <td colSpan={3} className="p-2 text-center align-middle">
-                                      <div className="mx-auto max-w-[230px] rounded-md border border-slate-300 bg-white/70 px-2 py-1.5 shadow-sm">
-                                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                                          Tot. acconto
-                                        </div>
-                                        <div className="text-sm font-extrabold text-slate-900">
-                                          {formatDecimalIt(totals.acconto)}
-                                        </div>
-                                        <div className="mt-1 grid grid-cols-2 gap-2 border-t border-slate-200 pt-1 text-[11px] leading-tight text-slate-700">
-                                          <div>
-                                            <div className="font-bold text-slate-900">
-                                              {formatDecimalIt(totals.totConsAcc)}mc
-                                            </div>
-                                            <div>Acq {formatDecimalIt(totals.accontoAcq)}</div>
-                                          </div>
-                                          <div>
-                                            <div className="font-bold text-slate-900">
-                                              Dep/Fog
-                                            </div>
-                                            <div>{formatDecimalIt(totals.accontoDepFog)}</div>
-                                          </div>
-                                        </div>
-                                        <div className="mt-1 border-t border-slate-200 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                          QF/IVA/Pereq. + altri {formatDecimalIt(totals.accontoExtra)}
-                                        </div>
+                                      <div className="text-xs leading-5">
+                                        <div className="font-bold text-slate-900">Acconto € {formatDecimalIt(totals.acconto)} · {formatDecimalIt(totals.totConsAcc)} mc</div>
+                                        <div className="text-[11px] text-slate-700">Acq {formatDecimalIt(totals.accontoAcq)} · Dep/Fog {formatDecimalIt(totals.accontoDepFog)}</div>
+                                        <div className="text-[10px] text-slate-600">QF/IVA/Pereq. + altri {formatDecimalIt(totals.accontoExtra)}</div>
                                       </div>
                                     </td>
                                     <td className="p-2 text-center">

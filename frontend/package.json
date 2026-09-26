@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:privacy": "node --test tests/privacy.test.mjs",
+    "test:billing-ui": "node tests/billing-workspace.browser.cjs",
     "preview": "vite preview"
   },
   "dependencies": {
