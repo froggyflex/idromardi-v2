@@ -3,13 +3,13 @@ import { useNavigate, useParams } from "react-router-dom";
 import api from "../../api/client";
 import { getCondominio } from "../../api/letture";
 import CondominioIdentity from "../components/CondominioIdentity";
-import BillingValueGrid from "../components/BillingValueGrid";
 import "./billing-workspace.css";
 import { buildRipartizionePdfPayload } from "../../utils/ripartizionePdfPayload";
 import {
   AlertTriangle,
   ArrowRight,
   Calculator,
+  CheckCircle2,
   SlidersHorizontal,
   Table2,
   ChevronDown,
@@ -441,6 +441,36 @@ export default function CondominioFatturePage() {
     const [preparationOpen, setPreparationOpen] = useState(true);
     const [readingSearch, setReadingSearch] = useState("");
     const billingHeaderRef = useRef<HTMLDivElement>(null);
+    const [activeBillingSection, setActiveBillingSection] = useState("billing-preparation");
+    useEffect(() => {
+      const scroller = billingHeaderRef.current?.closest(".app-main");
+      if (!scroller) return;
+      let frame = 0;
+      const update = () => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 2;
+          const boundary = atBottom
+            ? scroller.getBoundingClientRect().bottom - 32
+            : (billingHeaderRef.current?.getBoundingClientRect().bottom || 0) + 32;
+          const ids = ["billing-preparation", "billing-summary", "billing-documents", "billing-readings"];
+          const visible = ids.filter((id) => {
+            const element = document.getElementById(id);
+            return element && element.getBoundingClientRect().top <= boundary;
+          });
+          setActiveBillingSection(visible.at(-1) || ids[0]);
+        });
+      };
+      scroller.addEventListener("scroll", update, { passive: true });
+      const observer = new ResizeObserver(update);
+      if (billingHeaderRef.current) observer.observe(billingHeaderRef.current);
+      update();
+      return () => {
+        scroller.removeEventListener("scroll", update);
+        observer.disconnect();
+        cancelAnimationFrame(frame);
+      };
+    }, [fatturaId, loadingDetail]);
     const visibleBillingRows = righe.map((r: any, idx: number) => ({ r, idx })).filter(({ r }: { r: any }) => {
       const query = readingSearch.trim().toLocaleLowerCase("it");
       const u = r.utenza || {};
@@ -5281,20 +5311,20 @@ return (
         </div>
       )}
       {/* SUMMARY */}
-      <div ref={billingHeaderRef} className="workspace-sticky sticky z-40 -mt-px border-y border-slate-200 bg-white/95 shadow-sm backdrop-blur 2xl:z-50">
+      <div ref={billingHeaderRef} className="billing-header workspace-sticky sticky z-40 border-b border-slate-200 bg-white shadow-sm">
         <div className="max-w-full space-y-1.5 px-2 py-2 2xl:px-4">
-          <CondominioIdentity name={condominioIdentity.id === condominioId ? condominioIdentity.name : ""} />
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
+              <CondominioIdentity name={condominioIdentity.id === condominioId ? condominioIdentity.name : ""} />
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
                 <h1 className="text-base font-bold text-slate-900">Fatturazione</h1>
                 {activeSessionPeriod && (
-                  <span className="truncate text-xs font-medium text-slate-500">
-                    Periodo fatturato {activeSessionPeriod}
+                  <span className="text-xs font-medium text-slate-600">
+                    Periodo {activeSessionPeriod}
                   </span>
                 )}
                 <span className="text-sm font-bold text-slate-900">
-                  Totale € {formatDecimalIt(selectedDoc)}
+                  Documento € {formatDecimalIt(selectedDoc)}
                 </span>
               </div>
             </div>
@@ -5328,71 +5358,6 @@ return (
             </div>
           </div>
 
-          <div className="flex min-w-0 items-center gap-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="flex min-w-max items-center gap-2">
-              <span className="font-semibold uppercase tracking-[0.14em] text-slate-500">
-                Tariffa applicata
-              </span>
-              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">
-                {normalizeTfCode(tfCode)}
-              </span>
-              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 font-semibold text-cyan-800">
-                {activeTariffProvider?.codice || activeTariffProvider?.nome || "Provider -"}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
-                {displayedTariffPreview?.version?.anno || annoTariffa || "-"}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
-                {activeTariffCategory?.codice || "Categoria -"}
-              </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
-                QF totale € {formatTariffNumber(activeTariffQfTotal, 2)}
-              </span>
-            </div>
-
-            <div className="flex min-w-max items-center gap-1.5">
-              {loadingTariffPreview ? (
-                <span className="text-slate-400">Caricamento tariffa...</span>
-              ) : activeTariffError ? (
-                <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-700">
-                  <AlertTriangle size={13} />
-                  {activeTariffError}
-                </span>
-              ) : (
-                <>
-                {activeTariffWarning && (
-                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
-                    <AlertTriangle size={13} />
-                    {activeTariffWarning}
-                  </span>
-                )}
-                {appliedTariffPeriods.length > 1 && appliedTariffPeriods.map((period: any) => (
-                  <span
-                    key={`${period.start}-${period.version?.id}`}
-                    className={`rounded-full border px-2 py-0.5 font-semibold ${
-                      period.fallback
-                        ? "border-amber-200 bg-amber-50 text-amber-800"
-                        : "border-indigo-200 bg-indigo-50 text-indigo-700"
-                    }`}
-                    title={period.fallback ? "Tariffa piu recente usata come fallback" : "Tariffa valida nel periodo"}
-                  >
-                    {period.start} / {period.end_exclusive}: {period.version?.anno}
-                  </span>
-                ))}
-                {activeTariffScaglioni.slice(0, 5).map((scaglione: any) => (
-                  <span
-                    key={scaglione.id || `${scaglione.ordine}-${scaglione.nome}`}
-                    className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700"
-                    title={scaglione.nome || ""}
-                  >
-                    {scaglione.nome || `S${scaglione.ordine}`}: {formatScaglioneRange(scaglione)} mc
-                    {" · "}€ {formatTariffNumber(scaglione.prezzo_acquedotto, 4)}
-                  </span>
-                ))}
-                </>
-              )}
-            </div>
-          </div>
       <nav className="billing-jump-nav" aria-label="Sezioni fatturazione">
         {[
           { id: "billing-preparation", label: "Dati e parametri", Icon: SlidersHorizontal },
@@ -5400,7 +5365,7 @@ return (
           { id: "billing-documents", label: "Documenti", Icon: FileText },
           { id: "billing-readings", label: "Contatori", Icon: Table2 },
         ].map(({ id, label, Icon }) => (
-          <button key={id} type="button" disabled={!fatturaId || (id !== "billing-preparation" && id !== "billing-summary" && selectedImportedId === null)} onClick={() => goToBillingSection(id)}>
+          <button key={id} type="button" aria-current={activeBillingSection === id ? "location" : undefined} disabled={!fatturaId || (id !== "billing-preparation" && id !== "billing-summary" && selectedImportedId === null)} onClick={() => goToBillingSection(id)}>
             <Icon size={14} aria-hidden="true" />
             <span className="hidden sm:inline">{label}</span>
             <span className="sm:hidden">{id === "billing-preparation" ? "Dati" : label}</span>
@@ -5671,6 +5636,79 @@ return (
       {preparationOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}{preparationOpen ? "Riduci" : "Espandi"}
     </button>
   </div>
+  <details className="billing-tariff">
+    <summary>
+      <span>Tariffa applicata <strong>{normalizeTfCode(tfCode)} · {activeTariffProvider?.codice || activeTariffProvider?.nome || "-"} · {displayedTariffPreview?.version?.anno || annoTariffa || "-"}</strong></span>
+      <span className={activeTariffError || activeTariffWarning ? "text-amber-800" : "text-slate-500"}>
+        {loadingTariffPreview ? "Caricamento..." : activeTariffError || activeTariffWarning || "Scaglioni e quote"}
+      </span>
+    </summary>
+          <div className="billing-tariff-content">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Tariffa applicata
+              </span>
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">
+                {normalizeTfCode(tfCode)}
+              </span>
+              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 font-semibold text-cyan-800">
+                {activeTariffProvider?.codice || activeTariffProvider?.nome || "Provider -"}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
+                {displayedTariffPreview?.version?.anno || annoTariffa || "-"}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium">
+                {activeTariffCategory?.codice || "Categoria -"}
+              </span>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
+                QF totale € {formatTariffNumber(activeTariffQfTotal, 2)}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {loadingTariffPreview ? (
+                <span className="text-slate-400">Caricamento tariffa...</span>
+              ) : activeTariffError ? (
+                <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 font-semibold text-red-700">
+                  <AlertTriangle size={13} />
+                  {activeTariffError}
+                </span>
+              ) : (
+                <>
+                {activeTariffWarning && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
+                    <AlertTriangle size={13} />
+                    {activeTariffWarning}
+                  </span>
+                )}
+                {appliedTariffPeriods.length > 1 && appliedTariffPeriods.map((period: any) => (
+                  <span
+                    key={`${period.start}-${period.version?.id}`}
+                    className={`rounded-full border px-2 py-0.5 font-semibold ${
+                      period.fallback
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                    }`}
+                    title={period.fallback ? "Tariffa piu recente usata come fallback" : "Tariffa valida nel periodo"}
+                  >
+                    {period.start} / {period.end_exclusive}: {period.version?.anno}
+                  </span>
+                ))}
+                {activeTariffScaglioni.slice(0, 5).map((scaglione: any) => (
+                  <span
+                    key={scaglione.id || `${scaglione.ordine}-${scaglione.nome}`}
+                    className="rounded-full border border-slate-200 bg-white px-2 py-0.5 font-medium text-slate-700"
+                    title={scaglione.nome || ""}
+                  >
+                    {scaglione.nome || `S${scaglione.ordine}`}: {formatScaglioneRange(scaglione)} mc
+                    {" · "}€ {formatTariffNumber(scaglione.prezzo_acquedotto, 4)}
+                  </span>
+                ))}
+                </>
+              )}
+            </div>
+          </div>
+  </details>
   {!preparationOpen && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
     <span>{activeImportedDocument ? getImportedDocumentName(activeImportedDocument) : "Nessun TXT associato"}</span>
     <span>Giorni QF: {giorniQf || "-"}</span><span>Consumi: {giorniConsumi || "-"}</span><span>Interni: {giorniCasaInterni || "-"}</span>
@@ -6275,60 +6313,72 @@ return (
           {/* CALCULATION BREAKDOWN */}
           <section id="billing-summary" tabIndex={-1} className="billing-section">
             <div className="billing-section-heading">
-              <h3>Dettaglio calcolo</h3>
-              <span className={totalAudit.totalsOk ? "text-xs font-semibold text-emerald-700" : "text-xs font-semibold text-amber-800"}>
-                {totalAudit.totalsOk ? "Totali corretti" : "Totali da verificare"}
+              <h3>Riepilogo e verifica</h3>
+              <span className={totalAudit.totalsOk && totalAudit.rowsOk ? "billing-audit-status is-balanced" : "billing-audit-status"}>
+                {totalAudit.totalsOk && totalAudit.rowsOk ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                {totalAudit.totalsOk && totalAudit.rowsOk ? "Conti verificati" : "Da verificare"}
               </span>
             </div>
-            <BillingValueGrid title="Valori principali" items={[
-              { label: "Consumo", value: `${Number(consumo ?? 0).toFixed(0)} mc` },
-              { label: "Acquedotto", value: `€ ${formatDecimalIt(impConsumo)}` },
-              { label: "Fognatura", value: hasCombinedOnlyDepFogValue ? "N/D" : `€ ${formatDecimalIt(fognaturaMainValue)}`,
-                note: hasCombinedOnlyDepFogValue ? "Disponibile solo il totale Dep./Fog." : undefined },
-              { label: "Depurazione", value: hasCombinedOnlyDepFogValue ? "N/D" : `€ ${formatDecimalIt(depurazioneMainValue)}`,
-                note: hasCombinedOnlyDepFogValue ? `Totale combinato: € ${formatDecimalIt(depFogValue)}` : undefined },
-              { label: "Quota fissa", value: `€ ${formatDecimalIt(quotaFissa)}`, note: quotaFissaSession > 0 ? "Ripartizione quota fissa" : "Quota fissa da TXT" },
-              { label: "Oneri perequazione", value: `€ ${formatDecimalIt(oneriPerequazione)}` },
-              { label: "IVA lettura a giro", value: `€ ${formatDecimalIt(ivaAGiro)}`, note: manualIvaAGiro !== null ? "Valore manuale" : undefined },
-              { label: "Varie", value: <input aria-label="Varie (euro)" type="number" value={varie} onChange={(event) => setVarie(event.target.value)}
-                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-medium focus:outline-blue-600" />,
-                note: `Valore attuale: € ${formatDecimalIt(varieValue)}` },
-              { label: "Totale lettura a giro", value: `€ ${formatDecimalIt(totaleLetturaAGiro)}`, emphasis: true,
-                note: totaleFornituraAGiro > 0 ? totaleFornituraAGiroDaTxt > 0 ? "Totale fornitura a giro dal TXT" : "Totale documento meno acconto" : "Senza acconto o storno" },
-            ]} />
-            <div className="billing-adjustments">
-              {(Number(mcAcconto || 0) !== 0 || Number(totaleAcconto || 0) !== 0 || quotaFissaAccontoValue !== 0) && (
-                <BillingValueGrid title="Acconto rilevato" tone="advance" items={[
-                  { label: "Consumo acconto", value: `${formatDecimalIt(mcAcconto)} mc` },
-                  { label: "Acquedotto", value: `€ ${formatDecimalIt(eurAcconto)}` },
-                  { label: "Dep./Fog.", value: `€ ${formatDecimalIt(depfogAcconto)}` },
-                  { label: "Quota fissa", value: `€ ${formatDecimalIt(quotaFissaAccontoValue)}` },
-                  { label: "IVA", value: `€ ${formatDecimalIt(ivaAcconto)}` },
-                  { label: "Oneri perequazione", value: `€ ${formatDecimalIt(oneriPerequazioneAcconto)}` },
-                  ...(Math.abs(accontoOtherValue) > 0.004 ? [{ label: "Altri importi", value: `€ ${formatDecimalIt(accontoOtherValue)}`, note: "Differenza inclusa nel totale acconto del documento." }] : []),
-                  { label: "Totale acconto", value: `€ ${formatDecimalIt(totaleAcconto)}`, emphasis: true },
-                ]} />
-              )}
-              {(Number(mcStorno ?? 0) !== 0 || Number(totaleStorno || eurStorno || 0) !== 0) && (
-                <BillingValueGrid title="Storno rilevato" tone="credit" items={[
-                  { label: "Consumo storno", value: `${formatDecimalIt(mcStorno)} mc` },
-                  { label: "Acquedotto", value: `€ ${formatDecimalIt(acquedottoStorno)}` },
-                  { label: "Dep./Fog.", value: `€ ${formatDecimalIt(depfogStorno)}` },
-                  { label: "Quota fissa", value: `€ ${formatDecimalIt(quotaFissaStornoValue)}` },
-                  { label: "IVA", value: `€ ${formatDecimalIt(ivaStorno)}` },
-                  { label: "Oneri perequazione", value: `€ ${formatDecimalIt(oneriPerequazioneStorno)}` },
-                  { label: "Totale storno", value: `€ ${formatDecimalIt(Number(totaleStorno || eurStorno || 0))}`, emphasis: true },
-                ]} />
-              )}
-            </div>
-            <div className="billing-totals" aria-label="Confronto totali">
-              <div><h4>Totale documento {activeBillingProviderCode}</h4><strong>€ {formatDecimalIt(totaleDocumento)}</strong></div>
-              <div><h4>Dovuto incasso</h4><strong>€ {formatDecimalIt(totaleDocumentoConOneri)}</strong><p>Inclusi oneri condominio: € {formatDecimalIt(totaleOneri)}</p></div>
-              <div className="bg-blue-50"><h4>Totale interni</h4><strong>€ {formatDecimalIt(totaleInterni)}</strong></div>
-              <div className={deltaOk ? "bg-emerald-50" : "bg-amber-50"}><h4>Delta</h4><strong>€ {formatDecimalIt(deltaTotali)}</strong>
-                <p>{deltaOk ? `Corrisponde agli oneri condominio (€ ${formatDecimalIt(totaleOneri)}).` : `Atteso: € ${formatDecimalIt(totaleOneri)}. Scostamento: € ${formatDecimalIt(deltaRispettoOneri)}.`}</p>
+            <div className="billing-reconciliation" aria-label="Confronto totali">
+              <div><h4>Documento {activeBillingProviderCode}</h4><strong>€ {formatDecimalIt(totaleDocumento)}</strong></div>
+              <div className="billing-reconciliation-add"><h4>Oneri condominio</h4><strong>€ {formatDecimalIt(totaleOneri)}</strong></div>
+              <div className="billing-reconciliation-expected"><h4>Dovuto incasso</h4><strong>€ {formatDecimalIt(totaleDocumentoConOneri)}</strong><p>Documento + oneri</p></div>
+              <div><h4>Ripartito agli interni</h4><strong>€ {formatDecimalIt(totalAudit.displayedRowsTotal)}</strong></div>
+              <div className={totalAudit.reconciledOk ? "billing-reconciliation-result is-balanced" : "billing-reconciliation-result"}>
+                <h4>Scostamento</h4>
+                <strong>{totalAudit.hasControlTarget ? `€ ${formatDecimalIt(totalAudit.controlDifference)}` : "Non disponibile"}</strong>
+                <p>{!totalAudit.hasControlTarget ? "Importo atteso non disponibile" : totalAudit.reconciledOk ? "Ripartito = dovuto" : "Ripartito meno dovuto"}</p>
               </div>
             </div>
+            {(!totalAudit.rowsOk || !totalAudit.formulasOk || !totalAudit.displayedTotalOk) && (
+              <p className="billing-audit-warning" role="status">
+                {!totalAudit.rowsOk ? `${totalAudit.rowErrors.length} righe con importi da verificare. ` : ""}
+                {!totalAudit.formulasOk || !totalAudit.displayedTotalOk ? "I totali delle righe non sono coerenti con il calcolo." : ""}
+              </p>
+            )}
+            <div className="billing-breakdown-heading">
+              <h4>Composizione importi</h4>
+              <span>Consumi in mc · Importi in €</span>
+            </div>
+            <div className="billing-breakdown-scroll" role="region" aria-label="Dettaglio importi" tabIndex={0}>
+              <table className="billing-breakdown">
+                <thead><tr>
+                  <th scope="col">Voce</th>
+                  <th scope="col">Lettura a giro</th>
+                  <th scope="col" aria-label="Acconto rilevato">Acconto</th>
+                  <th scope="col" aria-label="Storno rilevato">Storno (credito)</th>
+                </tr></thead>
+                <tbody>
+                  <tr><th scope="row">Consumo <span className="billing-unit">mc</span></th>
+                    <td>{formatDecimalIt(consumo ?? 0)}</td><td>{formatDecimalIt(mcAcconto)}</td><td>{formatDecimalIt(mcStorno ?? 0)}</td>
+                  </tr>
+                  <tr><th scope="row">Acquedotto</th><td>{formatDecimalIt(impConsumo)}</td><td>{formatDecimalIt(eurAcconto)}</td><td>{formatDecimalIt(acquedottoStorno)}</td></tr>
+                  <tr><th scope="row">Fognatura</th>
+                    <td rowSpan={hasCombinedOnlyDepFogValue ? 2 : 1}>{hasCombinedOnlyDepFogValue ? <>{formatDecimalIt(depFogValue)}<small>Totale fognatura + depurazione</small></> : formatDecimalIt(fognaturaMainValue)}</td>
+                    <td rowSpan={2}>{formatDecimalIt(depfogAcconto)}<small>Fognatura + depurazione</small></td>
+                    <td rowSpan={2}>{formatDecimalIt(depfogStorno)}<small>Fognatura + depurazione</small></td>
+                  </tr>
+                  <tr><th scope="row">Depurazione</th>
+                    {!hasCombinedOnlyDepFogValue && <td>{formatDecimalIt(depurazioneMainValue)}</td>}
+                  </tr>
+                  <tr><th scope="row">Quota fissa</th>
+                    <td title={quotaFissaSession > 0 ? "Ripartizione quota fissa" : "Quota fissa da TXT"}>{formatDecimalIt(quotaFissa)}</td>
+                    <td>{formatDecimalIt(quotaFissaAccontoValue)}</td><td>{formatDecimalIt(quotaFissaStornoValue)}</td>
+                  </tr>
+                  <tr><th scope="row">Oneri perequazione</th><td>{formatDecimalIt(oneriPerequazione)}</td><td>{formatDecimalIt(oneriPerequazioneAcconto)}</td><td>{formatDecimalIt(oneriPerequazioneStorno)}</td></tr>
+                  <tr><th scope="row">IVA {manualIvaAGiro !== null && <span className="billing-unit">(manuale)</span>}</th><td>{formatDecimalIt(ivaAGiro)}</td><td>{formatDecimalIt(ivaAcconto)}</td><td>{formatDecimalIt(ivaStorno)}</td></tr>
+                  <tr className="billing-editable-row"><th scope="row"><label htmlFor="billing-varie" className="inline-flex items-center gap-2">Varie <Pencil size={12} className="text-slate-500" aria-hidden="true" /></label></th>
+                    <td><input id="billing-varie" aria-label="Varie (euro)" type="number" step="0.01" value={varie} onChange={(event) => setVarie(event.target.value)} /></td>
+                    <td aria-label="Non applicabile">-</td><td aria-label="Non applicabile">-</td>
+                  </tr>
+                  {Math.abs(accontoOtherValue) > 0.004 && <tr><th scope="row">Altri importi acconto</th><td>-</td><td>{formatDecimalIt(accontoOtherValue)}</td><td>-</td></tr>}
+                </tbody>
+                <tfoot><tr><th scope="row">Totale</th><td>{formatDecimalIt(totaleLetturaAGiro)}</td><td>{formatDecimalIt(totaleAcconto)}</td><td>{formatDecimalIt(Number(totaleStorno || eurStorno || 0))}</td></tr></tfoot>
+              </table>
+            </div>
+            <p className="billing-breakdown-note">
+              Lettura a giro: {totaleFornituraAGiro > 0 ? totaleFornituraAGiroDaTxt > 0 ? "totale fornitura dal TXT" : "totale documento meno acconto" : "senza acconto o storno"}.
+            </p>
           </section>
 
           {selectedImportedId !== null && (
