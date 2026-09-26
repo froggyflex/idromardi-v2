@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { PDFDocument } = require("pdf-lib");
 const { generateRipartizioneCompletePdfBuffer, getRipartizionePdfChunkSize } = require("./fatture.pdf-renderer");
+const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 
 function fixture(failAt = -1) {
   const state = { opened: 0, closed: 0, chunks: [], buffers: [] };
@@ -63,4 +64,16 @@ test("empty input is rejected before opening a browser page", async () => {
   const { browser, state } = fixture();
   await assert.rejects(generateRipartizioneCompletePdfBuffer({browser, righe:[]}), /Nessuna riga/);
   assert.equal(state.opened, 0);
+});
+
+test("invoice HTML shows the condominium and the updated B/T legend", () => {
+  const html = buildRipartizionePdfHtml({
+    righe: [{ utenza: { id: "u1", id_user: 1 }, riga: {} }],
+    dettaglioByUtenza: {},
+    condominio: { nome: "Condominio Sole", indirizzo: "Via Roma 10", citta: "Napoli" },
+  });
+  assert.match(html, /Condominio Sole/);
+  assert.match(html, /Via Roma 10 Napoli/);
+  assert.match(html, /T = Telegram/);
+  assert.match(html, /B = contatore bloccato/);
 });

@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const db = require("../../config/db");
 const { getReadingPhoto, saveReadingPhoto } = require("../../utils/readingPhotos");
 const lettureService = require("../letture/letture.service");
+const { resolveReadingValue } = require("../letture/reading-policy");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FINAL_SUBMISSION_STATUSES = new Set(["ACCEPTED", "REJECTED"]);
@@ -826,10 +827,13 @@ async function acceptSubmission({ submissionId, replaceExisting = false, reviewN
     await conn.beginTransaction();
     const [rows] = await conn.query(
       `SELECT ms.*, s.stato AS session_status, u.condominio_id AS current_condominio_id,
+              ai.previous_value AS assignment_previous_value,
               COALESCE(p.matricola_contatore, u.Matricola_Contatore, '0000') AS current_meter_serial
        FROM mobile_reading_submissions ms
        JOIN letture_sessioni s ON s.id = ms.session_id
        JOIN utenze_v2 u ON u.id = ms.utenza_id
+       JOIN mobile_reading_assignment_items ai
+         ON ai.assignment_id = ms.assignment_id AND ai.utenza_id = ms.utenza_id
        LEFT JOIN utenza_profili_v2 p ON p.utenza_id = u.id AND p.valid_to IS NULL
        WHERE ms.id = ? LIMIT 1 FOR UPDATE`,
       [submissionId]
@@ -900,6 +904,11 @@ async function acceptSubmission({ submissionId, replaceExisting = false, reviewN
        WHERE id_sessione = ? AND id_utenza = ? LIMIT 1 FOR UPDATE`,
       [submission.session_id, submission.utenza_id]
     );
+    const acceptedReadingValue = resolveReadingValue({
+      state: submission.reading_state,
+      submittedValue: submission.reading_value,
+      previousValue: submission.assignment_previous_value,
+    });
     let readingId;
     let replacementDetails = null;
     if (existingReadings.length) {
@@ -920,7 +929,7 @@ async function acceptSubmission({ submissionId, replaceExisting = false, reviewN
         `UPDATE letture_righe
          SET valore_lettura = ?, stato_lettura = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [submission.reading_value, submission.reading_state, readingId]
+        [acceptedReadingValue, submission.reading_state, readingId]
       );
     } else {
       readingId = crypto.randomUUID();
@@ -932,7 +941,7 @@ async function acceptSubmission({ submissionId, replaceExisting = false, reviewN
           readingId,
           submission.session_id,
           submission.utenza_id,
-          submission.reading_value,
+          acceptedReadingValue,
           submission.reading_state,
         ]
       );

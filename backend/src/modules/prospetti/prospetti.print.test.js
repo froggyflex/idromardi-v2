@@ -14,6 +14,7 @@ test("prospetto and replacement list show surname first without changing ID orde
     {id_user:2, Cognome:"De Luca", Nome:"Anna", stato_attuale:"Y"},
     {id_user:1, Cognome:"Rossi", Nome:"Mario", stato_attuale:"K"},
     {id_user:3, Cognome:"D'Amato & Figli", Nome:"", stato_attuale:"K"},
+    {id_user:4, Cognome:"Bianchi", Nome:"Lucia", stato_attuale:"B"},
   ]});
   assert(html.includes("Cognome e nome"));
   assert(html.includes("Rossi Mario"));
@@ -21,4 +22,7 @@ test("prospetto and replacement list show surname first without changing ID orde
   assert(html.indexOf("Rossi Mario") < html.indexOf("De Luca Anna"));
   assert(html.includes("D'Amato &amp; Figli"));
   assert(!html.includes("Mario Rossi"));
+  assert(html.includes("T = Telegram"));
+  assert(html.includes("B = contatore bloccato"));
+  assert(html.includes("Contatore bloccato"));
 });

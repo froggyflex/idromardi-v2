@@ -35,3 +35,13 @@ tokens are encrypted by the application; the migration never stores secrets.
 The Meta migration runner also applies the tracked `004` archive/deletion update,
 `005` per-channel credential and connection-health update, and `006` Instagram
 connection-mode update exactly once.
+
+For the reading-state vocabulary (`B = Contatore bloccato`, `T = Telegram`):
+
+```powershell
+cd backend
+npm run migrate:reading-states
+```
+
+`008_reading_states.sql` is idempotent. The backend runs it automatically on
+startup unless `RUN_READING_STATE_MIGRATION_ON_STARTUP=false` is configured.

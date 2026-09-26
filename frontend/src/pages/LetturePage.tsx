@@ -6,6 +6,8 @@ import {
   closeSession,
   getCondominio,
   listReadingSessions,
+  cancelReadingSession,
+  cancelSessionReading,
 } from "../api/letture";
 import type { ReadingSessionSummary } from "../api/letture";
 
@@ -23,7 +25,7 @@ import "react-datepicker/dist/react-datepicker.css";
 
 import { registerLocale } from "react-datepicker";
 import { it } from "date-fns/locale/it";
-import { CalendarClock, FolderOpen } from "lucide-react";
+import { CalendarClock, FolderOpen, RotateCcw, Trash2 } from "lucide-react";
 
 registerLocale("it", it);
 
@@ -461,13 +463,13 @@ export default function LetturePage() {
   }
 
   function isEvidentState(value?: string | null) {
-    return ["Y", "C"].includes(String(value || "").toUpperCase());
+    return ["Y", "B", "C"].includes(String(value || "").toUpperCase());
   }
 
   function stateBadgeClass(value?: string | null) {
     const code = String(value || "").toUpperCase();
 
-    if (code === "Y") {
+    if (["Y", "B"].includes(code)) {
       return "border-red-200 bg-red-50 text-red-700";
     }
 
@@ -520,6 +522,40 @@ export default function LetturePage() {
     setEditedRowIds((currentIds) => new Set(currentIds).add(rowId));
     setDirty(true);
 
+  }
+
+  function updateState(index: number, value: string) {
+    const normalizedState = value.trim().toUpperCase();
+    const previousValue = latestHistory(grid[index])?.valore_lettura;
+
+    if (
+      normalizedState === "B" &&
+      (previousValue === null || previousValue === undefined)
+    ) {
+      alert("Lo stato B richiede una lettura precedente disponibile.");
+      return;
+    }
+
+    const rowId = grid[index].utenza.id;
+    setGrid((currentGrid) =>
+      currentGrid.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              current: {
+                ...row.current,
+                stato: normalizedState,
+                valore:
+                  normalizedState === "B"
+                    ? Number(previousValue)
+                    : row.current.valore,
+              },
+            }
+          : row
+      )
+    );
+    setEditedRowIds((currentIds) => new Set(currentIds).add(rowId));
+    setDirty(true);
   }
 
   function updateConsumption(index: number, value: string) {
@@ -622,6 +658,85 @@ export default function LetturePage() {
 
     alert("Session closed");
 
+  }
+
+  async function handleCancelReading(row: GridRow) {
+    if (!session || !row.current.persisted) return;
+    const userLabel = [row.utenza.Nome, row.utenza.Cognome]
+      .filter(Boolean)
+      .join(" ") || `ID ${row.utenza.id_user ?? "-"}`;
+    if (
+      !window.confirm(
+        `Annullare la lettura di ${userLabel}? La riga tornerà compilabile. L'operazione sarà bloccata se il periodo è già usato in fatturazione.`
+      )
+    ) return;
+
+    try {
+      setLoading(true);
+      await cancelSessionReading(session.id, row.utenza.id);
+      const payload = await getSessionGrid(session.id);
+      const pendingRows = new Map(
+        grid
+          .filter(
+            (candidate) =>
+              candidate.utenza.id !== row.utenza.id &&
+              editedRowIds.has(candidate.utenza.id)
+          )
+          .map((candidate) => [candidate.utenza.id, candidate.current])
+      );
+      const refreshedGrid = (payload.grid as GridRow[]).map((candidate) => {
+        const pending = pendingRows.get(candidate.utenza.id);
+        return pending
+          ? { ...candidate, current: { ...candidate.current, ...pending } }
+          : candidate;
+      });
+      setSession(payload.session);
+      setStates(payload.states);
+      setGrid(refreshedGrid);
+      setEditedRowIds((currentIds) => {
+        const next = new Set(currentIds);
+        next.delete(row.utenza.id);
+        setDirty(next.size > 0);
+        return next;
+      });
+      await refreshExistingPeriods();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.message || err?.message || "Impossibile annullare la lettura");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCancelPeriod() {
+    if (!session || !periodYear || !periodMonth) return;
+    const label = `${monthNames[periodMonth - 1]} ${periodYear}`;
+    if (
+      !window.confirm(
+        `Annullare l'intero periodo ${label}? Tutte le letture del periodo saranno eliminate. L'operazione non è consentita se esistono fatture, acconti o lavori mobile collegati.`
+      )
+    ) return;
+
+    try {
+      setLoading(true);
+      await cancelReadingSession(session.id);
+      setSession(null);
+      setGrid([]);
+      setStates([]);
+      setDataOperatore(null);
+      setDataCasa(null);
+      setPeriodYear(null);
+      setPeriodMonth(null);
+      setTriggerDate(null);
+      setDirty(false);
+      setEditedRowIds(new Set());
+      lastLoadKeyRef.current = "";
+      await refreshExistingPeriods();
+      alert(`Periodo ${label} annullato. Ora puoi inserirlo nuovamente.`);
+    } catch (err: any) {
+      alert(err?.response?.data?.error || err?.response?.data?.message || err?.message || "Impossibile annullare il periodo");
+    } finally {
+      setLoading(false);
+    }
   }
 
   /* ---------------- UI ---------------- */
@@ -802,6 +917,17 @@ export default function LetturePage() {
               Salva
             </button>
 
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleCancelPeriod}
+              className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-40"
+              title="Elimina in sicurezza tutte le letture di questo periodo"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              Annulla periodo
+            </button>
+
             {loading && (
               <div className="text-xs text-slate-500">
                 Caricamento...
@@ -833,7 +959,7 @@ export default function LetturePage() {
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="overflow-auto max-h-[calc(100vh-260px)]">
-          <table className="compact-data-table w-full min-w-[1400px] table-fixed border-separate border-spacing-0 text-sm">
+          <table className="compact-data-table w-full min-w-[1490px] table-fixed border-separate border-spacing-0 text-sm">
             <colgroup>
               <col style={{ width: 48 }} />
               <col style={{ width: 200 }} />
@@ -842,6 +968,7 @@ export default function LetturePage() {
               <col style={{ width: 112 }} />
               <col style={{ width: 160 }} />
               <col style={{ width: 128 }} />
+              <col style={{ width: 92 }} />
               <col span={4} />
             </colgroup>
             <thead className="sticky top-0 z-20 bg-slate-100">
@@ -866,6 +993,9 @@ export default function LetturePage() {
                 </th>
                 <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
                   Media 4
+                </th>
+                <th className="px-3 py-2 text-left font-semibold border-b border-slate-200 bg-slate-100 sticky top-0">
+                  Azioni
                 </th>
                 {[1, 2, 3, 4].map((slot) => (
                   <th
@@ -926,7 +1056,7 @@ export default function LetturePage() {
                       <input
                         type="number"
                         className="h-9 w-full max-w-28 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
-                        disabled={session.stato === "CHIUSA"}
+                        disabled={session.stato === "CHIUSA" || row.current.stato === "B"}
                         value={row.current.valore ?? ""}
                         onChange={(e) => updateRow(i, "valore", e.target.value)}
                         placeholder="Lettura"
@@ -937,7 +1067,7 @@ export default function LetturePage() {
                       <input
                         type="number"
                         className="h-9 w-full max-w-24 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
-                        disabled={session.stato === "CHIUSA" || !previous}
+                        disabled={session.stato === "CHIUSA" || !previous || row.current.stato === "B"}
                         value={getPossibleConsumption(row)}
                         onChange={(e) => updateConsumption(i, e.target.value)}
                         placeholder="mc"
@@ -951,7 +1081,7 @@ export default function LetturePage() {
                         }`}
                         disabled={session.stato === "CHIUSA"}
                         value={row.current.stato}
-                        onChange={(e) => updateRow(i, "stato", e.target.value)}
+                        onChange={(e) => updateState(i, e.target.value)}
                       >
                         {states.map((s) => (
                           <option key={s.codice} value={s.codice}>
@@ -970,6 +1100,23 @@ export default function LetturePage() {
                           {historyAverage === null ? "-" : `${historyAverage.toFixed(1)} mc`}
                         </div>
                       </div>
+                    </td>
+
+                    <td className="px-3 py-2 align-middle border-b border-slate-100">
+                      {row.current.persisted ? (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelReading(row)}
+                          disabled={loading}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 bg-white text-red-600 transition hover:bg-red-50 disabled:opacity-40"
+                          title="Annulla questa lettura"
+                          aria-label={`Annulla lettura utente ${row.utenza.id_user ?? ""}`}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">Non salvata</span>
+                      )}
                     </td>
 
                     {[0, 1, 2, 3].map((slot) => {

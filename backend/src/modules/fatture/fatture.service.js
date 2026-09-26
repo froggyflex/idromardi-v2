@@ -1512,6 +1512,7 @@ async function processRipartizionePdfJob({
   condominioId,
   fatturaId,
   periodKey,
+  condominio,
 }) {
   await db.query(
     `
@@ -1546,6 +1547,7 @@ async function processRipartizionePdfJob({
       trimestreLabel,
       dataLettura,
       logoUrl: getRipartizioneLogoUrl(logoUrl),
+      condominio,
       onChunkComplete: async () => {
         processed += 1;
         try {
@@ -1661,6 +1663,18 @@ function groupRowsByUtenza(righe) {
   }, {});
 }
 
+async function loadInvoiceCondominio(condominioId) {
+  if (!condominioId) return null;
+  const [rows] = await db.query(
+    `SELECT id, nome, indirizzo, cap, citta
+     FROM condomini_v2
+     WHERE id = ?
+     LIMIT 1`,
+    [condominioId]
+  );
+  return rows[0] || null;
+}
+
 function parseCalculationContextJson(value) {
   if (!value) return {};
 
@@ -1764,6 +1778,7 @@ exports.startRipartizionePdfJob = async ({
   }
 
   const enrichedRighe = await enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId);
+  const condominio = await loadInvoiceCondominio(condominioId);
   const rowsByUtenza = groupRowsByUtenza(enrichedRighe);
   const renderRowCount = Object.values(rowsByUtenza).reduce(
     (count, utenzaRighe) => count + utenzaRighe.length,
@@ -1816,6 +1831,7 @@ exports.startRipartizionePdfJob = async ({
     condominioId,
     fatturaId,
     periodKey,
+    condominio,
   }).catch(async (error) => {
     console.error("Errore job ripartizione PDF:", error);
 
@@ -1857,6 +1873,7 @@ exports.exportRipartizioniPerUtenza = async ({
   }
 
   const enrichedRighe = await enrichRipartizioneRowsWithSeparatedOneri(righe, fatturaId);
+  const condominio = await loadInvoiceCondominio(condominioId);
   const rowsByUtenza = enrichedRighe.reduce((acc, row) => {
     const idUtenza =
       row?.utenza?.id ||
@@ -1895,6 +1912,7 @@ exports.exportRipartizioniPerUtenza = async ({
       trimestreLabel,
       dataLettura,
       logoUrl: getRipartizioneLogoUrl(logoUrl),
+      condominio,
     });
 
     if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {
@@ -3069,6 +3087,14 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
     );
     if (sRows.length === 0) throw new Error("Session not found");
     const session = sRows[0];
+    const [condominioRows] = await conn.query(
+      `SELECT id, nome, indirizzo, cap, citta
+       FROM condomini_v2
+       WHERE id = ?
+       LIMIT 1`,
+      [session.id_condominio]
+    );
+    const condominio = condominioRows[0] || null;
 
     const linkedImportedDocument = await getImportedDocumentLinkedToSession(conn, session);
     const resolvedImportedDocumentId = linkedImportedDocument?.id || null;
@@ -3261,6 +3287,7 @@ exports.getSessionDetail = async function ({ sessionId, condominioId }) {
 
     return {
       session,
+      condominio,
       periodoAttuale,
       periodoPrecedente,
       linkedImportedDocument,
@@ -4473,7 +4500,7 @@ async function calculateInterni(
 
       const manualConsumptionValue = manualConsumptions?.[first.id];
       const hasManualConsumption =
-        upper(statoAtt, "") === "Y" &&
+        ["Y", "B"].includes(upper(statoAtt, "")) &&
         manualConsumptionValue !== undefined &&
         manualConsumptionValue !== null &&
         manualConsumptionValue !== "" &&

@@ -260,7 +260,7 @@ function buildTotals(rows, session) {
 }
 
 function statusNeedsReplacement(status) {
-  return ["Y"].includes(String(status || "").trim().toUpperCase());
+  return ["Y", "B"].includes(String(status || "").trim().toUpperCase());
 }
 
 function buildHeader({ session, condominio, contatto, periodoAttuale, periodoPrecedente, totals, logoUrl }) {
@@ -432,8 +432,8 @@ function tableHtml(rows, totals) {
 function legendHtml() {
   return `
     <div class="legend">
-      *Legenda K = lett. verificata; U = utente; T = telefono; F = foto contatore; I = internet; L = cartolina;
-      S = contatore sostituito; X = cons. presunto per utenza chiusa; Y = m. contatore guasto illeggibile o fermo; C = disabitato.
+      *Legenda K = lett. verificata; U = utente; T = Telegram; F = foto contatore; I = internet; L = cartolina;
+      S = contatore sostituito; X = cons. presunto per utenza chiusa; Y = m. contatore guasto illeggibile o fermo; B = contatore bloccato; C = disabitato.
     </div>
   `;
 }
@@ -467,7 +467,7 @@ function replacementHtml(rows) {
               <tr>
                 <td>${esc(row.id_user)}</td>
                 <td>${esc(compactName(row))}</td>
-                <td>Media contatore illeggibile</td>
+                <td>${String(row.stato_attuale || "").trim().toUpperCase() === "B" ? "Contatore bloccato" : "Media contatore illeggibile"}</td>
               </tr>
             `
           )

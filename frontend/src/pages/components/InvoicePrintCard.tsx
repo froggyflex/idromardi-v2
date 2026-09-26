@@ -3,6 +3,7 @@ type InvoicePrintCardProps = {
   logoUrl?: string;
   trimestreLabel?: string;
   dataLettura?: string;
+  condominio?: { nome?: string; indirizzo?: string; cap?: string; citta?: string } | null;
 };
 
 function euro(v: any) {
@@ -22,6 +23,7 @@ export default function InvoicePrintCard({
   logoUrl,
   trimestreLabel,
   dataLettura,
+  condominio,
 }: InvoicePrintCardProps) {
   const nome = [r?.utenza?.Nome, r?.utenza?.Cognome].filter(Boolean).join(" ");
   const lettAtt = r?.riga?.lettura_attuale ?? r?.attuale?.valore_lettura ?? "";
@@ -51,6 +53,14 @@ export default function InvoicePrintCard({
       </div>
 
       <div className="invoice-section identity-grid">
+        <div style={{ gridColumn: "1 / -1" }}>
+          <div className="label">Condominio</div>
+          <div className="value">
+            {[condominio?.nome, condominio?.indirizzo, condominio?.cap, condominio?.citta]
+              .filter(Boolean)
+              .join(" · ") || "-"}
+          </div>
+        </div>
         <div>
           <div className="label">ID</div>
           <div className="value">{r?.utenza?.id_user ?? "-"}</div>
@@ -114,9 +124,9 @@ export default function InvoicePrintCard({
 
       <div className="invoice-footer">
         <div>
-          Legenda: K = lett. verificata · U = lett. utente · T = tel. utente · F = foto cont. ·
+          Legenda: K = lett. verificata · U = lett. utente · T = Telegram · F = foto cont. ·
           I = internet · L = cartolina · S = contatore sostituito · X = cons. presunto ·
-          Y = cont. illeg. o fermo · C = disabitato
+          Y = cont. illeg. o fermo · B = contatore bloccato · C = disabitato
         </div>
         <div className="company-line">
           Idromardi · Via Posillipo, 299 · 80123 Napoli · info@idromardi.it · www.idromardi.it

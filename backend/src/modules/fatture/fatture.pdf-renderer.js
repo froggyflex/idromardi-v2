@@ -10,7 +10,7 @@ function getRipartizionePdfChunkSize() {
 }
 
 async function generateRipartizioneCompletePdfBuffer({
-  browser, righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl,
+  browser, righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl, condominio,
   onChunkComplete,
 }) {
   const rows = Array.isArray(righe) ? righe : [];
@@ -32,6 +32,7 @@ async function generateRipartizioneCompletePdfBuffer({
         trimestreLabel: trimestreLabel || "",
         dataLettura: dataLettura || "",
         logoUrl: printLogo,
+        condominio,
       });
       await page.setContent(html, { waitUntil: "load", timeout: 120000 });
       const buffer = Buffer.from(await page.pdf({

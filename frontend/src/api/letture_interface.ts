@@ -34,6 +34,7 @@ export interface GridRow {
   current: {
     valore: number | null;
     stato: string;
+    persisted?: boolean;
   };
   history: HistoryRow[];
 }

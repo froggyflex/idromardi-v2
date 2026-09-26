@@ -5,6 +5,9 @@ const { runMetaMigrationWithRetry } = require("./scripts/run-meta-migration");
 const {
   runDocumentNumberMigrationWithRetry,
 } = require("./scripts/run-document-number-migration");
+const {
+  runReadingStateMigrationWithRetry,
+} = require("./scripts/run-reading-state-migration");
 const metaService = require("./src/modules/meta/meta.service");
 
 const PORT = process.env.PORT || 4000;
@@ -66,6 +69,20 @@ function startServer() {
   } else {
     app.locals.documentNumberingReady = true;
     console.log("Document number migration on startup disabled by configuration.");
+  }
+
+  if (
+    String(process.env.RUN_READING_STATE_MIGRATION_ON_STARTUP || "true").toLowerCase() !==
+    "false"
+  ) {
+    runReadingStateMigrationWithRetry().catch((error) => {
+      console.error(
+        "READING STATE MIGRATION FAILED AFTER RETRIES; B MAY BE UNAVAILABLE:",
+        error
+      );
+    });
+  } else {
+    console.log("Reading state migration on startup disabled by configuration.");
   }
 
   if (String(process.env.META_OUTBOX_WORKER_ENABLED || "false").toLowerCase() === "true") {

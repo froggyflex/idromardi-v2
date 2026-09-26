@@ -72,6 +72,18 @@ export async function closeSession(sessionId: string) {
   return data;
 }
 
+export async function cancelSessionReading(sessionId: string, idUtenza: string) {
+  const { data } = await api.delete(
+    `/letture/sessioni/${sessionId}/righe/${idUtenza}`
+  );
+  return data;
+}
+
+export async function cancelReadingSession(sessionId: string) {
+  const { data } = await api.delete(`/letture/sessioni/${sessionId}`);
+  return data;
+}
+
 export async function getCondominio(id:string | undefined) {
   const { data } = await api.get(`/condomini/${id}`);
   return data;

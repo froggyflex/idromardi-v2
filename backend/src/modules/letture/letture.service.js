@@ -1,5 +1,9 @@
 const db = require("../../config/db");
 const { v4: uuid } = require("uuid");
+const {
+  followsPreviousExceptionalState,
+  resolveReadingValue,
+} = require("./reading-policy");
 
 /* ------------------ Helpers ------------------ */
 
@@ -32,6 +36,117 @@ function getMonthBounds(year, month) {
   const end = new Date(Date.UTC(year, month, 0));
   const toISO = (d) => d.toISOString().slice(0, 10);
   return { start: toISO(start), end: toISO(end) };
+}
+
+function httpError(statusCode, message, code, details = undefined) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  if (details !== undefined) error.details = details;
+  return error;
+}
+
+async function tableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `SELECT 1
+     FROM INFORMATION_SCHEMA.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+     LIMIT 1`,
+    [tableName]
+  );
+  return rows.length > 0;
+}
+
+async function loadBillingDependencies(conn, sessionId) {
+  const [billingRows] = await conn.query(
+    `SELECT id, stato
+     FROM fatture_sessioni
+     WHERE id_periodo_attuale = ? OR id_periodo_precedente = ?
+     ORDER BY created_at DESC
+     FOR UPDATE`,
+    [sessionId, sessionId]
+  );
+  const [advanceRows] = await conn.query(
+    `SELECT id
+     FROM fatture_acconti
+     WHERE id_periodo_storno = ?
+     FOR UPDATE`,
+    [sessionId]
+  );
+  return {
+    billingSessions: billingRows,
+    advances: advanceRows.length,
+  };
+}
+
+async function loadMobileDependencies(conn, sessionId) {
+  if (!(await tableExists(conn, "mobile_reading_assignments"))) {
+    return { assignments: 0, submissions: 0 };
+  }
+
+  const [[assignmentRow]] = await conn.query(
+    `SELECT COUNT(*) AS total FROM mobile_reading_assignments WHERE session_id = ?`,
+    [sessionId]
+  );
+  let submissions = 0;
+  if (await tableExists(conn, "mobile_reading_submissions")) {
+    const [[submissionRow]] = await conn.query(
+      `SELECT COUNT(*) AS total FROM mobile_reading_submissions WHERE session_id = ?`,
+      [sessionId]
+    );
+    submissions = Number(submissionRow?.total || 0);
+  }
+  return {
+    assignments: Number(assignmentRow?.total || 0),
+    submissions,
+  };
+}
+
+async function loadMobileReadingDependencies(conn, sessionId, idUtenza) {
+  if (!(await tableExists(conn, "mobile_reading_submissions"))) return 0;
+  const [[row]] = await conn.query(
+    `SELECT COUNT(*) AS total
+     FROM mobile_reading_submissions
+     WHERE session_id = ? AND utenza_id = ?`,
+    [sessionId, idUtenza]
+  );
+  return Number(row?.total || 0);
+}
+
+function assertNoBillingDependencies(dependencies, actionLabel) {
+  if (dependencies.billingSessions.length || dependencies.advances) {
+    throw httpError(
+      409,
+      `Impossibile ${actionLabel}: il periodo è già collegato alla fatturazione. Annulla prima le fatture e gli acconti collegati.`,
+      "READING_PERIOD_IN_USE",
+      dependencies
+    );
+  }
+}
+
+async function loadPreviousReading(conn, session, idUtenza) {
+  const [rows] = await conn.query(
+    `SELECT r.valore_lettura
+     FROM letture_righe r
+     JOIN letture_sessioni previous_session ON previous_session.id = r.id_sessione
+     WHERE r.id_utenza = ?
+       AND previous_session.id_condominio = ?
+       AND (
+         previous_session.period_year < ?
+         OR (previous_session.period_year = ? AND previous_session.period_month < ?)
+       )
+       AND r.valore_lettura IS NOT NULL
+     ORDER BY previous_session.period_year DESC, previous_session.period_month DESC
+     LIMIT 1`,
+    [
+      idUtenza,
+      session.id_condominio,
+      session.period_year,
+      session.period_year,
+      session.period_month,
+    ]
+  );
+  return rows[0]?.valore_lettura ?? null;
 }
 
 function calculateReadingConsumption(currentValue, previousValue, state, inverse = false) {
@@ -403,7 +518,9 @@ exports.getSessionGrid = async function ({ sessionId }) {
       const currentRow = righeMap.get(u.id);
       const historyRows = historyMap.get(u.id) || [];
       const latestPreviousState = String(historyRows[0]?.stato_lettura || "").trim().toUpperCase();
-      const defaultState = latestPreviousState === "Y" ? "Y" : "C";
+      const defaultState = followsPreviousExceptionalState(latestPreviousState)
+        ? latestPreviousState
+        : "C";
 
       return {
         utenza: u,
@@ -411,8 +528,16 @@ exports.getSessionGrid = async function ({ sessionId }) {
           ? {
               valore: currentRow.valore_lettura,
               stato: currentRow.stato_lettura,
+              persisted: true,
             }
-          : { valore: null, stato: defaultState },
+          : {
+              valore:
+                defaultState === "B"
+                  ? historyRows[0]?.valore_lettura ?? null
+                  : null,
+              stato: defaultState,
+              persisted: false,
+            },
         history: historyRows,
       };
     });
@@ -439,7 +564,8 @@ exports.upsertSessionRowsBulk = async function ({
     await conn.beginTransaction();
 
     const [sessionRows] = await conn.query(
-      `SELECT stato FROM letture_sessioni WHERE id = ? FOR UPDATE`,
+      `SELECT stato, id_condominio, period_year, period_month
+       FROM letture_sessioni WHERE id = ? FOR UPDATE`,
       [sessionId]
     );
 
@@ -470,10 +596,14 @@ exports.upsertSessionRowsBulk = async function ({
 
       const requiresValue = reqMap.get(stato);
 
-      const valore =
-        r.valore === null || r.valore === ""
-          ? null
-          : Number(r.valore);
+      const previousValue = stato === "B"
+        ? await loadPreviousReading(conn, session, r.idUtenza)
+        : null;
+      const valore = resolveReadingValue({
+        state: stato,
+        submittedValue: r.valore,
+        previousValue,
+      });
 
       if (requiresValue && (valore === null || isNaN(valore))) {
         throw new Error(
@@ -506,6 +636,104 @@ exports.upsertSessionRowsBulk = async function ({
   } catch (err) {
     await conn.rollback();
     throw err;
+  } finally {
+    conn.release();
+  }
+};
+
+/* ------------------ Safe cancellation ------------------ */
+
+exports.cancelReading = async function ({ sessionId, idUtenza }) {
+  assertUUID(sessionId, "sessionId");
+  assertUUID(idUtenza, "idUtenza");
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+    const [sessions] = await conn.query(
+      `SELECT id FROM letture_sessioni WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [sessionId]
+    );
+    if (!sessions.length) {
+      throw httpError(404, "Periodo letture non trovato.", "READING_PERIOD_NOT_FOUND");
+    }
+
+    const dependencies = await loadBillingDependencies(conn, sessionId);
+    assertNoBillingDependencies(dependencies, "annullare la lettura");
+    const mobileSubmissions = await loadMobileReadingDependencies(
+      conn,
+      sessionId,
+      idUtenza
+    );
+    if (mobileSubmissions) {
+      throw httpError(
+        409,
+        "Impossibile annullare la lettura: esiste un invio mobile collegato. Gestisci prima l'invio dalla coda di revisione.",
+        "READING_HAS_MOBILE_SUBMISSION",
+        { mobileSubmissions }
+      );
+    }
+
+    const [result] = await conn.query(
+      `DELETE FROM letture_righe WHERE id_sessione = ? AND id_utenza = ?`,
+      [sessionId, idUtenza]
+    );
+    await conn.query(
+      `UPDATE letture_sessioni SET stato = 'BOZZA' WHERE id = ?`,
+      [sessionId]
+    );
+    await conn.commit();
+    return { ok: true, deletedRows: result.affectedRows, sessionStatus: "BOZZA" };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+};
+
+exports.cancelSession = async function ({ sessionId }) {
+  assertUUID(sessionId, "sessionId");
+  const conn = await db.getConnection();
+
+  try {
+    await conn.beginTransaction();
+    const [sessions] = await conn.query(
+      `SELECT id FROM letture_sessioni WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [sessionId]
+    );
+    if (!sessions.length) {
+      throw httpError(404, "Periodo letture non trovato.", "READING_PERIOD_NOT_FOUND");
+    }
+
+    const billing = await loadBillingDependencies(conn, sessionId);
+    assertNoBillingDependencies(billing, "annullare il periodo");
+    const mobile = await loadMobileDependencies(conn, sessionId);
+    if (mobile.submissions) {
+      throw httpError(
+        409,
+        "Impossibile annullare il periodo: esistono giri mobile o invii collegati. Annulla prima il lavoro mobile associato.",
+        "READING_PERIOD_HAS_MOBILE_WORK",
+        mobile
+      );
+    }
+    if (mobile.assignments) {
+      await conn.query(
+        `DELETE FROM mobile_reading_assignments WHERE session_id = ?`,
+        [sessionId]
+      );
+    }
+
+    const [[readingCount]] = await conn.query(
+      `SELECT COUNT(*) AS total FROM letture_righe WHERE id_sessione = ?`,
+      [sessionId]
+    );
+    await conn.query(`DELETE FROM letture_sessioni WHERE id = ?`, [sessionId]);
+    await conn.commit();
+    return { ok: true, deletedRows: Number(readingCount?.total || 0) };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
   } finally {
     conn.release();
   }

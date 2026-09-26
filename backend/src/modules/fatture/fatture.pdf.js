@@ -116,7 +116,18 @@ function creditInfoRow(amount) {
   `;
 }
 
-function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
+function formatCondominio(condominio) {
+  if (!condominio) return "-";
+  if (typeof condominio === "string") return condominio.trim() || "-";
+  const name = String(condominio.nome || "").trim();
+  const address = [condominio.indirizzo, condominio.cap, condominio.citta]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return [name, address].filter(Boolean).join(" · ") || "-";
+}
+
+function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio) {
 
   const nome = [r?.utenza?.Nome, r?.utenza?.Cognome].filter(Boolean).join(" ") || "-";
 
@@ -194,6 +205,7 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
             <div class="summary-caption">Intestatario / riferimento utenza</div>
             <div class="summary-name">${esc(nome)}</div>
             <div class="summary-meta">
+              <span><strong>Condominio:</strong> ${esc(formatCondominio(condominio))}</span>
               <span><strong>ID utente:</strong> ${codiceUtente}</span>
               <span><strong>Ubicazione:</strong> ${ubicazione}</span>
             </div>
@@ -273,13 +285,14 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
               <div class="note-text">
                 K = lett. verificata<br />
                 U = lett. utente<br />
-                T = tel. utente<br />
+                T = Telegram<br />
                 F = foto cont.<br />
                 I = internet<br />
                 L = cartolina<br />
                 S = contatore sostituito<br />
                 X = cons. presunto<br />
                 Y = cont. illeg. o fermo<br />
+                B = contatore bloccato<br />
                 C = disabitato
               </div>
             </section>
@@ -303,7 +316,7 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl) {
   `;
 }
 
-function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl }) {
+function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl, condominio }) {
   const pages = chunkArray(righe || [], 1);
 
   return `
@@ -797,7 +810,8 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
                 dettaglio,
                 trimestreLabel,
                 dataLettura,
-                logoUrl
+                logoUrl,
+                condominio
               );
             })
             .join("")

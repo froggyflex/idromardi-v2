@@ -131,6 +131,8 @@ app.use((err, req, res, next) => {
 
   return res.status(err.statusCode || err.status || 500).json({
     error: err.message || "Internal server error",
+    ...(err.code ? { code: err.code } : {}),
+    ...(err.details !== undefined ? { details: err.details } : {}),
   });
 });
 

@@ -1670,13 +1670,14 @@ CREATE TABLE `letture_stati` (
 --
 
 INSERT INTO `letture_stati` (`codice`, `descrizione`, `richiede_valore`) VALUES
+('B', 'Contatore bloccato', 0),
 ('C', 'Disabitato', 1),
 ('F', 'Foto contatore', 1),
 ('I', 'Internet', 1),
 ('K', 'Let. verificata', 1),
 ('L', 'Cartolina', 1),
 ('S', 'Contatore sostituito', 1),
-('T', 'Telefono', 1),
+('T', 'Telegram', 1),
 ('U', 'Utente', 1),
 ('X', 'Cons. presunto per utenza chiusa', 1),
 ('Y', 'M. contatore guasto illegibile o fermo', 1);

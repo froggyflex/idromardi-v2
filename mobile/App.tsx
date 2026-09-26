@@ -263,7 +263,8 @@ export default function App() {
     setStateDrafts(
       Object.fromEntries(
         loadedItems.map((item) => {
-          const preferred = item.reading_state || (item.previous_state === "Y" ? "Y" : "K");
+          const previousState = String(item.previous_state || "").toUpperCase();
+          const preferred = item.reading_state || (["Y", "B"].includes(previousState) ? previousState : "K");
           const valid = usableStates.some((state) => state.codice === preferred);
           return [item.utenza_id, valid ? preferred : fallbackStateCode];
         })
@@ -340,7 +341,9 @@ export default function App() {
   }
 
   async function saveReading(item: AssignmentItem) {
-    const value = Number(drafts[item.utenza_id]);
+    const selectedState = stateDrafts[item.utenza_id] || "K";
+    const rawValue = selectedState === "B" ? item.previous_value : drafts[item.utenza_id];
+    const value = Number(rawValue);
     if (!Number.isSafeInteger(value) || value < 0) {
       Alert.alert("Valore non valido", "Inserisci una lettura intera maggiore o uguale a zero.");
       return;
@@ -351,7 +354,7 @@ export default function App() {
         utenzaId: item.utenza_id,
         contextHash: item.context_hash,
         readingValue: value,
-        readingState: stateDrafts[item.utenza_id] || "K",
+        readingState: selectedState,
         deviceId,
         operatorId,
       });
@@ -473,6 +476,8 @@ export default function App() {
         >
           {items.map((item) => {
             const locked = Boolean(item.server_status);
+            const selectedState = stateDrafts[item.utenza_id] || "K";
+            const blockedMeter = selectedState === "B";
             return (
             <View key={item.utenza_id} style={[styles.card, locked && styles.lockedCard]}>
               <View style={styles.rowBetween}>
@@ -493,12 +498,18 @@ export default function App() {
                       accessibilityLabel={`${state.codice}: ${state.descrizione}`}
                       style={[styles.stateChip, selected && styles.stateChipSelected]}
                       disabled={locked}
-                      onPress={() =>
+                      onPress={() => {
                         setStateDrafts((current) => ({
                           ...current,
                           [item.utenza_id]: state.codice,
-                        }))
-                      }
+                        }));
+                        if (state.codice === "B") {
+                          setDrafts((current) => ({
+                            ...current,
+                            [item.utenza_id]: item.previous_value == null ? "" : String(item.previous_value),
+                          }));
+                        }
+                      }}
                     >
                       <Text style={[styles.stateChipText, selected && styles.stateChipTextSelected]}>
                         {state.codice}
@@ -518,7 +529,7 @@ export default function App() {
                   value={drafts[item.utenza_id] || ""}
                   onChangeText={(value) => setDrafts((current) => ({ ...current, [item.utenza_id]: value }))}
                   placeholder="Lettura"
-                  editable={!locked}
+                  editable={!locked && !blockedMeter}
                 />
                 <Button title={locked ? "Inviata" : "Salva"} onPress={() => saveReading(item)} disabled={locked} />
               </View>

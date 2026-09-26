@@ -4587,7 +4587,7 @@ const getLiveStatoAttuale = (row: any) =>
 const getRowUtenzaId = (row: any) => String(row?.riga?.id_utenza || row?.utenza?.id || "");
 
 const isManualConsumptionRow = (row: any) =>
-  String(getLiveStatoAttuale(row) || "").trim().toUpperCase() === "Y";
+  ["Y", "B"].includes(String(getLiveStatoAttuale(row) || "").trim().toUpperCase());
 
 const getManualConsumptionValue = (row: any) => {
   const key = getRowUtenzaId(row);
@@ -7288,7 +7288,7 @@ return (
                                                   onChange={(e) => updateManualConsumption(r, e.target.value)}
                                                   onBlur={persistManualConsumptions}
                                                   className="h-8 w-20 rounded-lg border border-amber-300 bg-amber-50 px-2 text-center text-xs font-bold text-slate-900 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-100"
-                                                  title="Consumo manuale definitivo per stato Y"
+                                                  title="Consumo manuale definitivo per stato Y/B"
                                                 />
                                                 <span className="text-[9px] font-bold uppercase tracking-wide text-amber-700">
                                                   Manuale
@@ -7459,7 +7459,7 @@ return (
                                                           {recuperoNote}
                                                         </div>
                                                         <div className="mt-1">
-                                                          Se lo stato non e S, la lettura attuale viene allineata alla precedente e il consumo base resta 0. Con stato Y resta possibile inserire un consumo manuale.
+                                                          Se lo stato non è S, la lettura attuale viene allineata alla precedente e il consumo base resta 0. Con stato Y o B resta possibile inserire un consumo manuale.
                                                         </div>
                                                       </div>
                                                     )}
@@ -7814,6 +7814,7 @@ return (
                       logoUrl="/images/idromardi-logo.png"
                       trimestreLabel={ripartizionePeriodLabel}
                       dataLettura={ripartizioneDataLettura}
+                      condominio={detail?.condominio}
                     />
                   ))}
                 </div>

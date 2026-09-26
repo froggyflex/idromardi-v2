@@ -53,3 +53,24 @@ exports.closeSession = async (req, res, next) => {
     next(err);
   }
 }
+
+exports.cancelReading = async (req, res, next) => {
+  try {
+    const result = await service.cancelReading({
+      sessionId: req.params.id,
+      idUtenza: req.params.idUtenza,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.cancelSession = async (req, res, next) => {
+  try {
+    const result = await service.cancelSession({ sessionId: req.params.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
