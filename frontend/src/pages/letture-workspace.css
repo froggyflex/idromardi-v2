@@ -1,0 +1,48 @@
+.readings-workspace { letter-spacing: 0; }
+.app-main:has(.readings-workspace) { padding-top: 0; }
+.app-main:has(.readings-workspace) > .sticky { margin-top: 0; background: white; backdrop-filter: none; }
+.readings-header { padding: 14px 16px 10px; border-bottom: 1px solid #dce3eb; background: #fff; box-shadow: 0 2px 3px #17213008; }
+.readings-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.readings-heading h1 { margin-bottom: 4px; font-size: 17px; font-weight: 700; color: #172130; }
+.readings-period-state { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #172130; }
+.readings-status { padding: 3px 8px; border-radius: 4px; background: #fffbeb; color: #92400e; font-size: 12px; font-weight: 600; }
+.readings-status.is-closed { background: #ecfdf5; color: #166534; }
+.readings-actions { position: relative; }
+.readings-actions summary { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; cursor: pointer; border: 1px solid #dce3eb; border-radius: 4px; list-style: none; }
+.readings-actions summary::-webkit-details-marker { display: none; }
+.readings-actions > div { position: absolute; right: 0; top: 38px; z-index: 40; width: 190px; padding: 4px; border: 1px solid #dce3eb; border-radius: 6px; background: #fff; box-shadow: 0 4px 12px #17213018; }
+.readings-actions button { display: flex; align-items: center; gap: 8px; padding: 8px; width: 100%; color: #b91c1c; font-size: 13px; text-align: left; }
+.readings-actions button:hover { background: #fff1f2; }
+.readings-fields { display: grid; grid-template-columns: repeat(3, minmax(150px, 220px)) minmax(170px, 1fr); align-items: end; gap: 16px; }
+.readings-field { min-width: 0; }
+.readings-field > label { display: block; margin-bottom: 5px; color: #475569; font-size: 12px; font-weight: 500; }
+.readings-field .input { min-width: 0; height: 38px; border: 1px solid #cbd5e1; border-radius: 5px; padding: 7px 28px 7px 10px; font-size: 14px; }
+.readings-field .input:disabled { color: #64748b; background: #f1f5f9; }
+.readings-save { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 10px; }
+.readings-save > span { color: #64748b; font-size: 12px; }
+.readings-save > button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 7px 14px; border-radius: 5px; background: #2563eb; color: #fff; font-size: 13px; font-weight: 600; }
+.readings-save > button:disabled { background: #e2e8f0; color: #64748b; cursor: not-allowed; }
+.readings-period-context { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; color: #64748b; font-size: 11px; }
+.readings-legend, .readings-legend > span, .readings-latest { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.readings-legend > span { gap: 4px; }
+.readings-legend i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.readings-legend .is-draft { background: #d97706; }
+.readings-legend .is-closed { background: #059669; }
+.readings-latest strong { font-weight: 600; color: #475569; }
+.readings-latest button { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px; color: #1d4ed8; font-weight: 600; }
+.readings-load-error, .readings-loading { display: flex; align-items: center; gap: 10px; padding: 12px 16px; font-size: 13px; }
+.readings-load-error { background: #fff1f2; color: #9f1239; }
+.readings-load-error > span { flex: 1; }
+.readings-load-error button { text-decoration: underline; font-weight: 600; }
+.readings-loading { color: #475569; }
+@media (max-width: 1100px) {
+  .readings-fields { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px; }
+  .readings-save { flex-direction: column; align-items: flex-end; gap: 5px; }
+}
+@media (max-width: 767px) {
+  .readings-header { padding: 12px; }
+  .readings-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .readings-save { align-items: stretch; }
+  .readings-save > span { font-size: 11px; }
+  .readings-period-context { align-items: flex-start; }
+}

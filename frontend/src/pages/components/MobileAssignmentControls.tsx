@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../../api/client";
+import { Smartphone, Loader2 } from "lucide-react";
 
 type Props = { sessionId: string; disabled?: boolean };
 type Operator = { id: string; username: string; role: "ADMIN" | "REVIEWER" | "METER_READER" };
@@ -35,26 +36,27 @@ export default function MobileAssignmentControls({ sessionId, disabled = false }
   }
 
   return (
-    <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end">
-        <div className="flex-1">
-          <div className="text-sm font-bold text-blue-950">Giro letture mobile</div>
-          <div className="mt-1 text-xs text-blue-700">Prepara una copia contestualizzata utilizzabile anche senza rete.</div>
+    <section aria-label="Giro letture mobile" className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <Smartphone size={17} aria-hidden="true" />
+          Giro letture mobile
         </div>
-        <label className="min-w-56 text-xs font-semibold text-blue-900">
+        <label className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-slate-600">
           Operatore
           <select value={operatorId} onChange={(e) => setOperatorId(e.target.value)} disabled={disabled || loading}
-            className="mt-1 block w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm text-slate-800">
+            className="h-9 w-56 max-w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800">
             {operators.length === 0 && <option value="">Nessun operatore disponibile</option>}
             {operators.map((operator) => <option key={operator.id} value={operator.id}>{operator.username} · {operator.role}</option>)}
           </select>
         </label>
         <button type="button" disabled={disabled || loading || !operatorId} onClick={createAssignment}
-          className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">
+          className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40">
+          {loading && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
           {loading ? "Preparazione..." : "Prepara giro mobile"}
         </button>
       </div>
-      {message && <div className="mt-3 text-xs font-semibold text-blue-900">{message}</div>}
-    </div>
+      {message && <div role="status" className="mt-2 text-xs font-medium text-slate-700">{message}</div>}
+    </section>
   );
 }

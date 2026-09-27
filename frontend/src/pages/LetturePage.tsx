@@ -15,6 +15,7 @@ import { useParams } from "react-router-dom";
 import type { Stato, GridRow, Session } from "../api/letture_interface";
 import MobileAssignmentControls from "./components/MobileAssignmentControls";
 import CondominioIdentity from "./components/CondominioIdentity";
+import "./letture-workspace.css";
 import {
   calculateReadingConsumption,
   isInverseMeter,
@@ -26,7 +27,7 @@ import "react-datepicker/dist/react-datepicker.css";
 
 import { registerLocale } from "react-datepicker";
 import { it } from "date-fns/locale/it";
-import { CalendarClock, FolderOpen, RotateCcw, Trash2 } from "lucide-react";
+import { CalendarClock, FolderOpen, RotateCcw, Trash2, Save, Loader2, AlertTriangle, MoreHorizontal } from "lucide-react";
 
 registerLocale("it", it);
 
@@ -92,8 +93,9 @@ function normalizeDateText(value: string): string {
 }
 
 type ManualDatePickerProps = {
+  id?: string;
   selected: Date | null;
-  onChange: (date: Date | null) => void;
+  onChange: (date: Date | null) => void | boolean;
   disabled?: boolean;
   placeholder?: string;
   periodMarkers?: Array<{
@@ -103,6 +105,7 @@ type ManualDatePickerProps = {
 };
 
 function ManualDatePicker({
+  id,
   selected,
   onChange,
   disabled = false,
@@ -111,6 +114,7 @@ function ManualDatePicker({
 }: ManualDatePickerProps) {
   const [text, setText] = useState(formatManualDate(selected));
   const [hasError, setHasError] = useState(false);
+  const pickerRef = useRef<DatePicker>(null);
 
   useEffect(() => {
     setText(formatManualDate(selected));
@@ -123,7 +127,7 @@ function ManualDatePicker({
     if (!nextText) {
       setText("");
       setHasError(false);
-      onChange(null);
+      if (onChange(null) === false) setText(formatManualDate(selected));
       return;
     }
 
@@ -136,7 +140,7 @@ function ManualDatePicker({
 
     setText(formatManualDate(parsed));
     setHasError(false);
-    onChange(parsed);
+    if (onChange(parsed) === false) setText(formatManualDate(selected));
   }
 
   const periodMarkerByDate = new Map(
@@ -144,26 +148,31 @@ function ManualDatePicker({
   );
 
   return (
-    <div>
+    <div onKeyDownCapture={(event) => {
+      if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        commitManualValue(text);
+        pickerRef.current?.setOpen(false);
+      }
+    }}>
       <DatePicker
+        ref={pickerRef}
+        id={id}
         selected={selected}
         onChange={(date: Date | null) => {
           setText(formatManualDate(date));
           setHasError(false);
-          onChange(date);
+          if (onChange(date) === false) setText(formatManualDate(selected));
         }}
         onChangeRaw={(event) => {
-          const value = (event?.target as HTMLInputElement | null)?.value ?? "";
-          setText(value);
+          if (!(event?.target instanceof HTMLInputElement)) return;
+          // Commit typed dates only on Enter/blur, never while the year is incomplete.
+          event.preventDefault();
+          setText(event.target.value);
           setHasError(false);
         }}
         onBlur={() => commitManualValue(text)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commitManualValue(text);
-          }
-        }}
         onFocus={(event) => {
           const input = event.target as HTMLInputElement;
           window.setTimeout(() => input.select(), 0);
@@ -241,6 +250,10 @@ export default function LetturePage() {
 
   const [condominioName, setCondominioName] = useState("");
   const [existingPeriods, setExistingPeriods] = useState<ReadingSessionSummary[]>([]);
+  const [loadingPeriods, setLoadingPeriods] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [initialLoadAttempt, setInitialLoadAttempt] = useState(0);
+  const locatorScopeRef = useRef<string | null>(null);
 
   const lastLoadKeyRef = useRef("");
 
@@ -275,7 +288,9 @@ export default function LetturePage() {
     return date ? [{ date, status: period.stato }] : [];
   });
 
-  const latestRegisteredPeriod = existingPeriods.find(
+  const latestRegisteredPeriod = [...existingPeriods].sort(
+    (a, b) => Number(b.period_year) - Number(a.period_year) || Number(b.period_month) - Number(a.period_month)
+  ).find(
     (period) => Number(period.registered_rows || 0) > 0
   ) ?? null;
 
@@ -285,10 +300,9 @@ export default function LetturePage() {
     periodMonth === Number(latestRegisteredPeriod.period_month);
 
   function getPeriodLocatorDate(period: ReadingSessionSummary): Date {
+    const date = parseDbDate(period.data_lettura_operatore || period.data_lettura_casa_idrica);
     return (
-      parseDbDate(
-        period.data_lettura_operatore || period.data_lettura_casa_idrica
-      ) ||
+      date && date.getFullYear() === Number(period.period_year) && date.getMonth() + 1 === Number(period.period_month) ? date :
       new Date(
         Number(period.period_year),
         Number(period.period_month) - 1,
@@ -301,11 +315,18 @@ export default function LetturePage() {
   }
 
   function openRegisteredPeriod(period: ReadingSessionSummary) {
-    if (dirty && !window.confirm("Sono presenti modifiche non salvate. Aprire un altro periodo?")) {
-      return;
-    }
+    selectPeriodDate(getPeriodLocatorDate(period));
+  }
 
-    setTriggerDate(getPeriodLocatorDate(period));
+  function selectPeriodDate(date: Date | null) {
+    if (date?.getTime() === triggerDate?.getTime()) return false;
+    const samePeriod = date && triggerDate && date.getFullYear() === triggerDate.getFullYear() && date.getMonth() === triggerDate.getMonth();
+    if (!samePeriod && dirty && !window.confirm("Sono presenti modifiche non salvate. Aprire un altro periodo?")) {
+      return false;
+    }
+    locatorScopeRef.current = condominioId;
+    setTriggerDate(date);
+    return true;
   }
 
   async function refreshExistingPeriods() {
@@ -313,134 +334,111 @@ export default function LetturePage() {
     setExistingPeriods(periods);
   }
 
-  /* ---------------- LOAD CONDOMINIO ---------------- */
-
+  /* Load existing periods once per condominium; opening one must not create a session. */
   useEffect(() => {
-
     let alive = true;
+    locatorScopeRef.current = null;
+    lastLoadKeyRef.current = "";
     setCondominioName("");
-
-    async function fetchCondominio() {
-
-      try {
-
-        const [data, periods] = await Promise.all([
-          getCondominio(condominioId),
-          listReadingSessions(condominioId),
-        ]);
-
-        if (!alive) return;
-
-        setCondominioName(data.nome || data.indirizzo || `ID ${condominioId}`);
-        setExistingPeriods(periods);
-
-      } catch {
-
-        if (!alive) return;
-
-        setCondominioName(`ID ${condominioId} (nome non disponibile)`);
-
-      }
-
-    }
-
-    fetchCondominio();
-
-    return () => {
-      alive = false;
-    };
-
-  }, [condominioId]);
-
-  /* ---------------- RESET WHEN CONDOMINIO CHANGES ---------------- */
-
-  useEffect(() => {
-
+    setExistingPeriods([]);
     setSession(null);
     setGrid([]);
     setStates([]);
-    setExistingPeriods([]);
-
     setDataOperatore(null);
     setDataCasa(null);
-
     setPeriodYear(null);
     setPeriodMonth(null);
-
     setTriggerDate(null);
-
     setDirty(false);
     setEditedRowIds(new Set());
+    setLoading(false);
+    setLoadingPeriods(true);
+    setLoadError("");
 
-    lastLoadKeyRef.current = "";
+    async function initialize() {
+      const [condominioResult, periodsResult] = await Promise.allSettled([
+        getCondominio(condominioId),
+        listReadingSessions(condominioId),
+      ]);
+      if (!alive) return;
+      const data = condominioResult.status === "fulfilled" ? condominioResult.value : null;
+      setCondominioName(data?.nome || data?.indirizzo || `ID ${condominioId}`);
+      if (periodsResult.status === "fulfilled") {
+        const periods = [...periodsResult.value].sort(
+          (a, b) => Number(b.period_year) - Number(a.period_year) || Number(b.period_month) - Number(a.period_month)
+        );
+        setExistingPeriods(periods);
+        locatorScopeRef.current = condominioId;
+        const latest = periods.find((period) => Number(period.registered_rows || 0) > 0);
+        if (latest) setTriggerDate(getPeriodLocatorDate(latest));
+      } else {
+        setLoadError("Impossibile caricare i periodi di lettura. Riprova prima di aprire un periodo.");
+      }
+      setLoadingPeriods(false);
+    }
+    initialize();
+    return () => { alive = false; };
+  }, [condominioId, initialLoadAttempt]);
 
-  }, [condominioId]);
-
-  /* ---------------- LOAD SESSION FROM LOCATOR DATE ---------------- */
-
+  /* Ignore responses from a previously selected period or condominium. */
   useEffect(() => {
-
-    if (!condominioId || !triggerDate) return;
-
+    if (locatorScopeRef.current !== condominioId) return;
+    if (!triggerDate) {
+      setSession(null);
+      setGrid([]);
+      setStates([]);
+      setDataOperatore(null);
+      setDataCasa(null);
+      setPeriodYear(null);
+      setPeriodMonth(null);
+      setDirty(false);
+      setEditedRowIds(new Set());
+      lastLoadKeyRef.current = "";
+      return;
+    }
     const year = triggerDate.getFullYear();
     const month = triggerDate.getMonth() + 1;
-
     const key = `${condominioId}::${year}::${month}`;
-
     if (lastLoadKeyRef.current === key) return;
-
-    lastLoadKeyRef.current = key;
-
+    let alive = true;
+    setLoading(true);
+    setLoadError("");
+    setSession(null);
+    setGrid([]);
+    setStates([]);
     setPeriodYear(year);
     setPeriodMonth(month);
 
-    (async () => {
-
+    async function loadPeriod() {
       try {
-
-        setLoading(true);
-
-        const sessionRes = await createOrLoadSession({
-          idCondominio: condominioId,
-          periodYear: year,
-          periodMonth: month
-        });
-
-        const newSession = sessionRes.session;
-
-        setSession(newSession);
-
-        const savedOp = parseDbDate(newSession.data_lettura_operatore);
-        const savedCasa = parseDbDate(newSession.data_lettura_casa_idrica);
-
-        if (savedOp) {
-          setDataOperatore(savedOp);
-        } else {
-          setDataOperatore(triggerDate);
-        }
-
-        setDataCasa(savedCasa ?? null);
-
-        const gridPayload = await getSessionGrid(newSession.id);
-
-        setStates(gridPayload.states);
-        setGrid(gridPayload.grid);
-
+        const existing = existingPeriods.find(
+          (period) => Number(period.period_year) === year && Number(period.period_month) === month
+        );
+        const sessionId = existing?.id || (await createOrLoadSession({
+          idCondominio: condominioId, periodYear: year, periodMonth: month,
+        })).session.id;
+        if (!alive) return;
+        const payload = await getSessionGrid(sessionId);
+        if (!alive) return;
+        const loaded = payload.session;
+        setSession(loaded);
+        setDataOperatore(parseDbDate(loaded.data_lettura_operatore) || triggerDate);
+        setDataCasa(parseDbDate(loaded.data_lettura_casa_idrica));
+        setStates(payload.states);
+        setGrid(payload.grid);
         setDirty(false);
         setEditedRowIds(new Set());
-
-      } catch (err:any) {
-
-        alert(err?.response?.data?.message || err?.message || "Errore caricamento");
-
+        lastLoadKeyRef.current = key;
+      } catch (err: any) {
+        if (!alive) return;
+        lastLoadKeyRef.current = "";
+        setLoadError(err?.response?.data?.message || err?.message || "Errore caricamento periodo");
       } finally {
-
-        setLoading(false);
-
+        if (alive) setLoading(false);
       }
-
-    })();
-
+    }
+    loadPeriod();
+    return () => { alive = false; };
   }, [triggerDate, condominioId]);
 
   /* ---------------- GRID UPDATE ---------------- */
@@ -606,7 +604,6 @@ export default function LetturePage() {
         dataOperatore: opISO,
         dataCasaIdrica: casaISO
       });
-      await refreshExistingPeriods().catch(() => undefined);
 
       const editedRows = grid.filter((row) => editedRowIds.has(row.utenza.id));
 
@@ -620,6 +617,7 @@ export default function LetturePage() {
           }))
         );
       }
+      await refreshExistingPeriods().catch(() => undefined);
 
       setDirty(false);
       setEditedRowIds(new Set());
@@ -745,202 +743,83 @@ export default function LetturePage() {
 
   return (
 
-    <div className="space-y-4">
-
-    <div className="space-y-3">
-
-      <h1 className="text-lg font-semibold">Inserimento Letture</h1>
-
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
-            <CalendarClock className="h-4 w-4" aria-hidden="true" />
-          </span>
-
-          {latestRegisteredPeriod ? (
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase text-slate-500">
-                Ultimo periodo con letture registrate
-              </div>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                <span className="font-semibold text-slate-900">
-                  {monthNames[Number(latestRegisteredPeriod.period_month) - 1]} {latestRegisteredPeriod.period_year}
-                </span>
-                <span
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
-                    latestRegisteredPeriod.stato === "CHIUSA"
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-amber-200 bg-amber-50 text-amber-700"
-                  }`}
-                >
-                  {latestRegisteredPeriod.stato === "CHIUSA" ? "Chiuso" : "Bozza"}
-                </span>
-              </div>
-              <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
-                <span>
-                  Lettura operatore: {formatManualDate(parseDbDate(latestRegisteredPeriod.data_lettura_operatore)) || "non indicata"}
-                </span>
-                <span>
-                  {Number(latestRegisteredPeriod.registered_values || 0)} letture con valore
-                </span>
-                {Number(latestRegisteredPeriod.registered_rows || 0) !==
-                  Number(latestRegisteredPeriod.registered_values || 0) && (
-                  <span>
-                    {Number(latestRegisteredPeriod.registered_rows || 0)} righe salvate
-                  </span>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div>
-              <div className="text-[11px] font-semibold uppercase text-slate-500">
-                Ultimo periodo con letture registrate
-              </div>
-              <div className="text-sm text-slate-700">
-                Nessuna lettura ancora registrata per questo condominio.
-              </div>
+    <div className="readings-workspace space-y-3">
+      <div className="readings-header workspace-sticky lg:sticky z-30">
+        <div className="readings-heading">
+          <div className="min-w-0">
+            <h1>Gestione letture</h1>
+            <CondominioIdentity name={condominioName} />
+          </div>
+          {session && (
+            <div className="readings-period-state">
+              <strong>{monthNames[Number(session.period_month) - 1]} {session.period_year}</strong>
+              <span className={session.stato === "CHIUSA" ? "readings-status is-closed" : "readings-status"}>
+                {session.stato === "CHIUSA" ? "Chiuso" : "Bozza"}
+              </span>
+              <details className="readings-actions">
+                <summary aria-label="Azioni periodo" title="Azioni periodo"><MoreHorizontal size={20} /></summary>
+                <div>
+                  <button type="button" disabled={loading} onClick={handleCancelPeriod}>
+                    <RotateCcw size={15} aria-hidden="true" /> Annulla periodo
+                  </button>
+                </div>
+              </details>
             </div>
           )}
         </div>
 
-        {latestRegisteredPeriod && (
-          <button
-            type="button"
-            onClick={() => openRegisteredPeriod(latestRegisteredPeriod)}
-            disabled={loading || isLatestPeriodOpen}
-            className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-blue-300 hover:text-blue-700 disabled:cursor-default disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
-          >
-            <FolderOpen className="h-4 w-4" aria-hidden="true" />
-            {isLatestPeriodOpen ? "Periodo aperto" : "Apri periodo"}
-          </button>
-        )}
-      </div>
-
-    </div>
-
-    <div className="workspace-sticky z-30 space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:sticky">
-      <CondominioIdentity name={condominioName} />
-      {/* TOP ROW */}
-
-      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-[180px_140px_180px_180px_minmax(0,1fr)]">
-
-        {/* LOCATOR */}
-
-        <div className="space-y-1">
-          <label className="text-xs text-slate-600">
-            Apri periodo
-          </label>
-
-          <ManualDatePicker
-            selected={triggerDate}
-            onChange={(date: Date | null) => setTriggerDate(date)}
-            disabled={loading}
-            periodMarkers={periodCalendarMarkers}
-          />
-          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-amber-500" /> Bozza
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" /> Chiuso
-            </span>
+        <div className="readings-fields">
+          <div className="readings-field">
+            <label htmlFor="reading-period">Apri periodo</label>
+            <ManualDatePicker id="reading-period" selected={triggerDate} onChange={selectPeriodDate}
+              disabled={loading || loadingPeriods || locatorScopeRef.current !== condominioId} periodMarkers={periodCalendarMarkers} />
+          </div>
+          <div className="readings-field">
+            <label htmlFor="reading-operator-date">Lettura operatore</label>
+            <ManualDatePicker id="reading-operator-date" selected={dataOperatore}
+              onChange={(date) => { setDataOperatore(date); setDirty(true); }}
+              disabled={!session || loading || session.stato === "CHIUSA"} />
+          </div>
+          <div className="readings-field">
+            <label htmlFor="reading-provider-date">Casa idrica</label>
+            <ManualDatePicker id="reading-provider-date" selected={dataCasa}
+              onChange={(date) => { setDataCasa(date); setDirty(true); }}
+              disabled={!session || loading || session.stato === "CHIUSA"} />
+          </div>
+          <div className="readings-save">
+            <span aria-live="polite">{loading || loadingPeriods ? "Caricamento..." : dirty ? "Modifiche non salvate" : session ? "Nessuna modifica da salvare" : ""}</span>
+            <button type="button" onClick={handleSave} disabled={!session || !dirty || loading || session.stato === "CHIUSA"}>
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              Salva letture
+            </button>
           </div>
         </div>
 
-        {/* PERIOD INFO */}
-
-        <div className="space-y-1">
-          <div className="text-xs text-slate-600">Periodo aperto</div>
-          <div className="flex min-h-10 flex-wrap items-center gap-x-1 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium">
-            <span>{periodMonth ? monthNames[periodMonth - 1] : "-"}</span>
-            <span>{periodYear ?? ""}</span>
+        <div className="readings-period-context">
+          <div className="readings-legend" aria-label="Legenda calendario">
+            <CalendarClock size={14} aria-hidden="true" />
+            <span><i className="is-draft" />Bozza</span><span><i className="is-closed" />Chiuso</span>
           </div>
+          {latestRegisteredPeriod ? (
+            <div className="readings-latest">
+              <span>Ultimo registrato: <strong>{monthNames[Number(latestRegisteredPeriod.period_month) - 1]} {latestRegisteredPeriod.period_year}</strong></span>
+              <span>{Number(latestRegisteredPeriod.registered_values || 0)} {Number(latestRegisteredPeriod.registered_values || 0) === 1 ? "lettura con valore" : "letture con valore"}</span>
+              {!isLatestPeriodOpen && <button type="button" disabled={loading || loadingPeriods} onClick={() => openRegisteredPeriod(latestRegisteredPeriod)}>
+                <FolderOpen size={14} aria-hidden="true" /> Apri ultimo
+              </button>}
+            </div>
+          ) : !loadingPeriods && !loadError && <span>Nessuna lettura ancora registrata</span>}
         </div>
-
-      {/* SECOND ROW */}
-
-      {session && (
-
-        <>
-
-          {/* DATA OPERATORE */}
-
-          <div className="space-y-1">
-            <label className="text-xs text-slate-600">
-              Lettura Operatore
-            </label>
-
-            <ManualDatePicker
-              selected={dataOperatore}
-              onChange={(date: Date | null) => {
-                setDataOperatore(date);
-                setDirty(true);
-              }}
-              disabled={loading || session?.stato === "CHIUSA"}
-            />
-          </div>
-
-          {/* CASA IDRICA */}
-
-          <div className="space-y-1">
-            <label className="text-xs text-slate-600">
-              Casa Idrica
-            </label>
-
-            <ManualDatePicker
-              selected={dataCasa}
-              onChange={(date: Date | null) => {
-                setDataCasa(date);
-                setDirty(true);
-              }}
-              disabled={loading || session?.stato === "CHIUSA"}
-            />
-          </div>
-
-          {/* ACTIONS */}
-
-          <div className="flex flex-wrap items-center gap-2 lg:pt-5">
-
-            <button
-              disabled={!dirty || loading || session?.stato === "CHIUSA"}
-              onClick={handleSave}
-              className="px-4 py-2 bg-green-600 text-white rounded-xl disabled:opacity-40"
-            >
-              Salva
-            </button>
-
-            <button
-              type="button"
-              disabled={loading}
-              onClick={handleCancelPeriod}
-              className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-40"
-              title="Elimina in sicurezza tutte le letture di questo periodo"
-            >
-              <RotateCcw className="h-4 w-4" aria-hidden="true" />
-              Annulla periodo
-            </button>
-
-            {loading && (
-              <div className="text-xs text-slate-500">
-                Caricamento...
-              </div>
-            )}
-
-          </div>
-
-        </>
-
-      )}
-
       </div>
 
-    </div>
+      {loadError && <div className="readings-load-error" role="alert">
+        <AlertTriangle size={18} aria-hidden="true" /><span>{loadError}</span>
+        <button type="button" onClick={() => triggerDate ? setTriggerDate(new Date(triggerDate)) : setInitialLoadAttempt((value) => value + 1)}>Riprova</button>
+      </div>}
+      {(loading || loadingPeriods) && <div className="readings-loading" role="status"><Loader2 size={18} className="animate-spin" /> Caricamento letture...</div>}
 
       {session && (
-        <MobileAssignmentControls
-          sessionId={session.id}
-          disabled={loading || session.stato === "CHIUSA"}
-        />
+        <MobileAssignmentControls sessionId={session.id} disabled={loading || session.stato === "CHIUSA"} />
       )}
 
       {/* GRID */}

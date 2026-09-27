@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test:privacy": "node --test tests/privacy.test.mjs",
     "test:billing-ui": "node tests/billing-workspace.browser.cjs",
+    "test:readings-ui": "node tests/readings-workspace.browser.cjs",
     "preview": "vite preview"
   },
   "dependencies": {
