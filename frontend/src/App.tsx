@@ -22,6 +22,7 @@ import PasswordSettings from "./pages/admin/PasswordSettings";
 import MobileReadingsReview from "./pages/admin/MobileReadingsReview";
 import MetaBusinessPage from "./pages/admin/MetaBusinessPage";
 import DocumentNumberSettings from "./pages/admin/DocumentNumberSettings";
+import GlobalSearchPage from "./pages/GlobalSearchPage";
 import { isAuthenticated } from "./auth";
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -49,6 +50,7 @@ function App() {
                   <Route path="/" element={<Dashboard />} />
 
                   <Route path="/condomini" element={<CondominiList />} />
+                  <Route path="/ricerca" element={<GlobalSearchPage />} />
                   <Route path="/condomini/new" element={<CondominioCreate />} />
                   <Route path="/condomini/:id" element={<CondominioOverview />} />
                   <Route path="/condomini/:id/edit" element={<CondominioEdit />} />

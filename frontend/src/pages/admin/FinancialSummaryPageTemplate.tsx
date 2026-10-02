@@ -3,6 +3,7 @@ import { Search as SearchIcon, X as XIcon } from "lucide-react";
 import api from "../../api/client";
 import { th } from "date-fns/locale/th";
 import { Fragment } from "react";
+import { useSearchParams } from "react-router-dom";
 
 type PrintMode = "color" | "bw";
 
@@ -334,6 +335,9 @@ const statusClass: Record<string, string> = {
 };
 
 export default function FinancialSummaryPageTemplate() {
+  const [searchParams] = useSearchParams();
+  const requestedFatturaId = searchParams.get("fattura");
+  const openedSearchFatturaRef = useRef("");
   const [summary, setSummary] = useState({
     totaleInsolutoProforme: 0,
     totaleInsolutoFatture: 0,
@@ -1016,6 +1020,9 @@ async function loadFatturaDetail(id: string) {
 
     const { data } = await api.get(`/financial-summary/fatture/${id}`);
     setSelectedFatturaDetail(data);
+    if (requestedFatturaId === id) {
+      setFatturaSearch(String(data?.numero || data?.numero_progressivo || ""));
+    }
   } catch (err: any) {
     setSelectedFatturaDetail(null);
     setIsFatturaDetailModalOpen(false);
@@ -1234,6 +1241,24 @@ useEffect(() => {
       void loadFattureRows();
     }
   }, [activeDetailSection]);
+
+  useEffect(() => {
+    if (!requestedFatturaId) return;
+    setActiveDetailSection("FATTURA");
+  }, [requestedFatturaId]);
+
+  useEffect(() => {
+    if (
+      !requestedFatturaId ||
+      activeDetailSection !== "FATTURA" ||
+      openedSearchFatturaRef.current === requestedFatturaId
+    ) {
+      return;
+    }
+
+    openedSearchFatturaRef.current = requestedFatturaId;
+    void loadFatturaDetail(requestedFatturaId);
+  }, [activeDetailSection, requestedFatturaId]);
 
     async function loadProformasRows() {
     try {

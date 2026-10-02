@@ -1,7 +1,8 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import type { ReactNode, SVGProps } from "react";
+import type { FormEvent, ReactNode, SVGProps } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowRight,
   BookUser,
   Building2,
   ChevronRight,
@@ -16,6 +17,7 @@ import {
   Menu,
   MessagesSquare,
   ReceiptText,
+  Search,
   Tags,
   UserRound,
   UsersRound,
@@ -297,8 +299,10 @@ export default function MainLayout({ children }: Props) {
   const condominioId = match?.[1];
   const user = getAuthUser();
   const mainRef = useRef<HTMLElement | null>(null);
+  const globalSearchRef = useRef<HTMLInputElement | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
   const [metaUnreadCount, setMetaUnreadCount] = useState(0);
   const normalizedRole = String(user?.role || (user?.username === "admin" ? "ADMIN" : "")).toUpperCase();
   const canUseMeta = normalizedRole === "ADMIN" || normalizedRole === "REVIEWER";
@@ -340,6 +344,28 @@ export default function MainLayout({ children }: Props) {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [mobileNavOpen]);
+
+  useEffect(() => {
+    const openGlobalSearch = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      if (window.matchMedia("(min-width: 1536px)").matches) {
+        globalSearchRef.current?.focus();
+        globalSearchRef.current?.select();
+      } else {
+        navigate("/ricerca");
+      }
+    };
+    window.addEventListener("keydown", openGlobalSearch);
+    return () => window.removeEventListener("keydown", openGlobalSearch);
+  }, [navigate]);
+
+  function handleGlobalSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = globalSearch.trim();
+    navigate(query ? `/ricerca?q=${encodeURIComponent(query)}` : "/ricerca");
+    setMobileNavOpen(false);
+  }
 
   function handleLogout() {
     clearAuthSession();
@@ -387,6 +413,33 @@ export default function MainLayout({ children }: Props) {
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        <form onSubmit={handleGlobalSearch} className="border-b border-slate-200/80 px-4 py-3">
+          <label htmlFor="global-navigation-search" className="sr-only">Ricerca globale</label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+            <input
+              ref={globalSearchRef}
+              id="global-navigation-search"
+              value={globalSearch}
+              onChange={(event) => setGlobalSearch(event.target.value)}
+              placeholder="Cerca nella gestione..."
+              className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-12 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+            />
+            <button
+              type="submit"
+              title="Apri ricerca globale"
+              aria-label="Apri ricerca globale"
+              className="absolute right-1.5 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition hover:bg-white hover:text-blue-700"
+            >
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="mt-1.5 flex items-center justify-between px-1 text-[10px] text-slate-400">
+            <span>Condomini, utenti, fatture</span>
+            <kbd className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-sans">Ctrl K</kbd>
+          </div>
+        </form>
 
         {/* Navigation */}
         <nav
@@ -529,6 +582,14 @@ export default function MainLayout({ children }: Props) {
               {condominioId ? "Gestione condominio" : "Pannello operativo"}
             </div>
           </div>
+          <NavLink
+            to="/ricerca"
+            aria-label="Ricerca globale"
+            title="Ricerca globale"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-100"
+          >
+            <Search className="h-5 w-5" />
+          </NavLink>
           {canUseMeta && (
             <NavLink
               to="/admin/meta-business"

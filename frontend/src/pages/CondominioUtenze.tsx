@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import api from "../api/client";
 
 type BillingGroup = {
@@ -65,6 +65,8 @@ function toNumSafe(v: unknown, fallback = 0) {
 
 export default function CondominioUtenze() {
   const { id: condominioId } = useParams();
+  const [searchParams] = useSearchParams();
+  const focusedUtenzaId = searchParams.get("utenza");
   const [loading, setLoading] = useState(true);
   const [original, setOriginal] = useState<Utenza[]>([]);
   const [draft, setDraft] = useState<Utenza[]>([]);
@@ -103,6 +105,17 @@ export default function CondominioUtenze() {
       }
     })();
   }, [condominioId]);
+
+  useEffect(() => {
+    if (loading || !focusedUtenzaId) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(`utenza-${focusedUtenzaId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [focusedUtenzaId, loading]);
 
   const dirtyIds = useMemo(() => {
     const map = new Map(original.map((r) => [r.id, r]));
@@ -446,9 +459,14 @@ export default function CondominioUtenze() {
                   return (
                     <tr
                       key={r.id}
+                      id={`utenza-${r.id}`}
                       className={[
-                        "border-t",
-                        isDirty ? "bg-amber-50/40" : "bg-white",
+                        "scroll-mt-20 border-t transition-colors",
+                        focusedUtenzaId === r.id
+                          ? "bg-blue-50 outline outline-2 -outline-offset-2 outline-blue-400"
+                          : isDirty
+                            ? "bg-amber-50/40"
+                            : "bg-white",
                       ].join(" ")}
                     >
                       <Td>

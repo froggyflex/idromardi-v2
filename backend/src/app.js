@@ -15,6 +15,7 @@ const adminRoutes = require("./modules/admin/admin.routes");
 const authRoutes = require("./modules/auth/auth.routes");
 const mobileReadingsRoutes = require("./modules/mobileReadings/mobileReadings.routes");
 const metaRoutes = require("./modules/meta/meta.routes");
+const searchRoutes = require("./modules/search/search.routes");
 const { requireAuth } = require("./modules/auth/auth.middleware");
 const { PDF_EXPORT_PATHS, parsePdfExportJson } = require("./utils/pdf-request-body");
 
@@ -93,6 +94,7 @@ app.use("/api/meta", (req,res,next) => {
 app.use("/api/meta", metaRoutes.publicRouter);
 app.use("/api", requireAuth);
 
+app.use("/api/search", searchRoutes);
 app.use("/api/condomini", condominiRoutes);
 app.use("/api", utenzeRoutes);
 app.use("/api/dashboard", dashboardRoutes);
