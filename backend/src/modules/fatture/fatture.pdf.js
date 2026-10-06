@@ -1,3 +1,5 @@
+const { DEFAULT_TEMPLATE, resolveTemplate } = require("../bollettaTemplates/template-model");
+
 function esc(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -103,13 +105,13 @@ function qtyMoneyRow(label, qty, amount, extraClass = "") {
   `;
 }
 
-function creditInfoRow(amount) {
+function creditInfoRow(amount, labels) {
   if (Math.abs(Number(amount || 0)) < 0.005) return "";
   return `
     <tr>
       <td>
-        <div class="line-main">Credito residuo rinviato</div>
-        <div class="line-sub">Non incluso nel totale; disponibile per un periodo successivo</div>
+        <div class="line-main">${esc(labels.remainingCredit)}</div>
+        <div class="line-sub">${esc(labels.creditNote)}</div>
       </td>
       <td class="amount">€ ${euro(amount)}</td>
     </tr>
@@ -127,7 +129,8 @@ function formatCondominio(condominio) {
   return [name, address].filter(Boolean).join(" · ") || "-";
 }
 
-function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio) {
+function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio, template) {
+  const labels = template.labels;
 
   const nome = [r?.utenza?.Nome, r?.utenza?.Cognome].filter(Boolean).join(" ") || "-";
 
@@ -153,8 +156,8 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio
   const stornoTxt = Number(r?.riga?.storno_txt_aggiuntivo || 0);
   const stornoLegacy = Number(r?.riga?.storno_legacy || 0);
   const stornoLegacyLabel = r?.riga?.storno_legacy_periodo
-    ? `Storno acconto precedente (${r.riga.storno_legacy_periodo})`
-    : "Storno acconto piattaforma precedente";
+    ? `${labels.reversalLegacy} (${r.riga.storno_legacy_periodo})`
+    : labels.reversalLegacy;
   const stornoPiattaforma = Number((stornoTotale - stornoTxt - stornoLegacy).toFixed(2));
   const hasStornoBreakdown =
     Math.abs(stornoTxt) > 0.004 ||
@@ -166,11 +169,11 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio
     getTiers(tiers) ||
     `
       <div class="mini-row">
-        <span>Consumo totale</span>
+        <span>${esc(labels.consumption)}</span>
         <strong>${esc(consumoTot)} mc</strong>
       </div>
       <div class="mini-row">
-        <span>Periodo</span>
+        <span>${esc(labels.period)}</span>
         <strong>${esc(trimestreLabel || "-")}</strong>
       </div>
       <div class="mini-row">
@@ -179,16 +182,12 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio
       </div>
     `;
 
-  return `
-    <section class="page">
-      <article class="invoice-sheet">
-        <div class="top-accent"></div>
-
+  const header = `
         <header class="invoice-header">
           <div class="brand-block">
-            <div class="brand-kicker">Ripartizione consumi idrici</div>
-            <h1 class="doc-title">Bolletta di Ripartizione</h1>
-            <div class="doc-subtitle">Documento amministrativo interno</div>
+            <div class="brand-kicker">${esc(labels.kicker)}</div>
+            <h1 class="doc-title">${esc(labels.title)}</h1>
+            <div class="doc-subtitle">${esc(labels.subtitle)}</div>
           </div>
 
           <div class="brand-logo-block">
@@ -198,90 +197,85 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio
                 : `<div class="logo-fallback">IDROMARDI</div>`
             }
           </div>
-        </header>
-
+        </header>`;
+  const summary = `
         <section class="summary-band">
           <div class="summary-left">
-            <div class="summary-caption">Intestatario / riferimento utenza</div>
+            <div class="summary-caption">${esc(labels.customer)}</div>
             <div class="summary-name">${esc(nome)}</div>
             <div class="summary-meta">
-              <span><strong>Condominio:</strong> ${esc(formatCondominio(condominio))}</span>
-              <span><strong>ID utente:</strong> ${codiceUtente}</span>
-              <span><strong>Ubicazione:</strong> ${ubicazione}</span>
+              <span><strong>${esc(labels.condominium)}:</strong> ${esc(formatCondominio(condominio))}</span>
+              <span><strong>${esc(labels.userId)}:</strong> ${codiceUtente}</span>
+              <span><strong>${esc(labels.location)}:</strong> ${ubicazione}</span>
             </div>
           </div>
 
           <div class="summary-right">
-            <div class="summary-total-label">Totale documento</div>
+            <div class="summary-total-label">${esc(labels.total)}</div>
             <div class="summary-total-value">€ ${totale}</div>
           </div>
-        </section>
-
-        <section class="invoice-grid">
-          <div class="main-column">
- 
-
-            <section class="panel">
-              <div class="panel-title">Letture e consumi</div>
+        </section>`;
+  const sections = {
+    readings: `
+            <section class="panel" data-section="readings">
+              <div class="panel-title">${esc(labels.readings)}</div>
               <div class="info-grid three-cols">
-                ${row("Periodo", esc(trimestreLabel || "-"))}
-                ${row("Data lettura", esc(dataLettura || "-"))}
-                ${row("Stato lettura", esc(stato))}
-                ${row("Lettura precedente", esc(lettPrec))}
-                ${row("Lettura attuale", esc(lettAtt))}
-                ${row("Consumo totale", `${esc(consumoTot)} mc`, "highlight-row")}
+                ${row(labels.period, esc(trimestreLabel || "-"))}
+                ${row(labels.readingDate, esc(dataLettura || "-"))}
+                ${row(labels.readingStatus, esc(stato))}
+                ${row(labels.previous, esc(lettPrec))}
+                ${row(labels.current, esc(lettAtt))}
+                ${row(labels.consumption, `${esc(consumoTot)} mc`, "highlight-row")}
               </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-title">Dettaglio economico</div>
+            </section>`,
+    costs: `
+            <section class="panel" data-section="costs">
+              <div class="panel-title">${esc(labels.costs)}</div>
 
               <table class="cost-table">
                 <thead>
                   <tr>
-                    <th>Voce</th>
-                    <th class="amount">Importo</th>
+                    <th>${esc(labels.item)}</th>
+                    <th class="amount">${esc(labels.amount)}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${moneyRow("Acquedotto", r?.riga?.imp_acquedotto)}
-                  ${moneyRow("Fognatura", r?.riga?.imp_fognatura)}
-                  ${moneyRow("Depurazione", r?.riga?.imp_depurazione)}
-                  ${moneyRow("Quota fissa", r?.riga?.imp_qf)}
-                  ${moneyRow("Conguaglio", r?.riga?.conguaglio)}
-                  ${moneyRow("Oneri", r?.riga?.imp_oneri_base_display ?? r?.riga?.imp_oneri)}
-                  ${moneyRow("Oneri perequazione", r?.riga?.imp_oneri_perequazione_display)}
-                  ${moneyRow("IVA", r?.riga?.imp_iva)}
-                  ${qtyMoneyRow("Acconto Acquedotto", r?.riga?.consumo_acconto, r?.riga?.imp_acconto, "acconto-row")}
-                  ${moneyRow("Acconto dep./fog.", r?.riga?.depfog_acconto)}
-                  ${Math.abs(accontoOther) > 0.004 ? moneyRow("Acconto QF/IVA/perequazione/altri", accontoOther) : ""}
+                  ${moneyRow(labels.water, r?.riga?.imp_acquedotto)}
+                  ${moneyRow(labels.sewer, r?.riga?.imp_fognatura)}
+                  ${moneyRow(labels.treatment, r?.riga?.imp_depurazione)}
+                  ${moneyRow(labels.fixed, r?.riga?.imp_qf)}
+                  ${moneyRow(labels.adjustment, r?.riga?.conguaglio)}
+                  ${moneyRow(labels.charges, r?.riga?.imp_oneri_base_display ?? r?.riga?.imp_oneri)}
+                  ${moneyRow(labels.equalization, r?.riga?.imp_oneri_perequazione_display)}
+                  ${moneyRow(labels.vat, r?.riga?.imp_iva)}
+                  ${qtyMoneyRow(labels.advanceWater, r?.riga?.consumo_acconto, r?.riga?.imp_acconto, "acconto-row")}
+                  ${moneyRow(labels.advanceSewer, r?.riga?.depfog_acconto)}
+                  ${Math.abs(accontoOther) > 0.004 ? moneyRow(labels.advanceOther, accontoOther) : ""}
                   ${
                     hasStornoBreakdown
-                      ? `${Math.abs(stornoTxt) > 0.004 ? moneyRow("Storno da documento TXT", stornoTxt) : ""}
+                      ? `${Math.abs(stornoTxt) > 0.004 ? moneyRow(labels.reversalTxt, stornoTxt) : ""}
                          ${Math.abs(stornoLegacy) > 0.004 ? moneyRow(stornoLegacyLabel, stornoLegacy) : ""}
-                         ${Math.abs(stornoPiattaforma) > 0.004 ? moneyRow("Storno credito periodi precedenti", stornoPiattaforma) : ""}`
-                      : moneyRow("Storno acconto", r?.riga?.storno_acconto)
+                         ${Math.abs(stornoPiattaforma) > 0.004 ? moneyRow(labels.reversalCredit, stornoPiattaforma) : ""}`
+                      : moneyRow(labels.reversal, r?.riga?.storno_acconto)
                   }
-                  ${creditInfoRow(r?.riga?.minimum_payable_credit_euro ?? r?.riga?.credito_storno_residuo)}
-                  ${moneyRow("Arrotondamento", r?.riga?.imp_arr)}
+                  ${creditInfoRow(r?.riga?.minimum_payable_credit_euro ?? r?.riga?.credito_storno_residuo, labels)}
+                  ${moneyRow(labels.rounding, r?.riga?.imp_arr)}
                 </tbody>
               </table>
-            </section>
-          </div>
-
-          <aside class="side-column">
-            <section class="panel total-panel">
-              <div class="panel-title">Dettagli Ripartizione</div>
+            </section>`,
+    tiers: `
+            <section class="panel total-panel" data-section="tiers">
+              <div class="panel-title">${esc(labels.tiers)}</div>
 
               <div class="mini-summary">
                  
                  ${dettaglioRipartizione} 
 
               </div>
-            </section>
-
-            <section class="panel note-panel">
-              <div class="panel-title">Note lettura</div>
+            </section>`,
+    notes: `
+            <section class="panel note-panel" data-section="notes">
+              <div class="panel-title">${esc(labels.notes)}</div>
               <div class="note-text">
                 K = lett. verificata<br />
                 U = lett. utente<br />
@@ -295,29 +289,39 @@ function buildInvoice(r, tiers, trimestreLabel, dataLettura, logoUrl, condominio
                 B = contatore bloccato<br />
                 C = disabitato
               </div>
-            </section>
-
-            <section class="panel company-panel">
-              <div class="panel-title">Riferimenti</div>
+            </section>`,
+    references: `
+            <section class="panel company-panel" data-section="references">
+              <div class="panel-title">${esc(labels.references)}</div>
               <div class="company-name">Idromardi</div>
               <div class="company-text">Via Posillipo, 299 · 80123 Napoli</div>
               <div class="company-text">info@idromardi.it</div>
               <div class="company-text">www.idromardi.it</div>
-            </section>
-          </aside>
+            </section>`,
+  };
+  const lane = column => Object.keys(sections)
+    .filter(id => template.sections[id].column === column)
+    .sort((a, b) => template.sections[a].order - template.sections[b].order)
+    .map(id => sections[id]).join("");
+  return `<section class="page"><article class="invoice-sheet">
+        <div class="top-accent"></div>${header}${summary}
+        <section class="invoice-grid">
+          <div class="full-column">${lane("full")}</div>
+          <div class="main-column">${lane("main")}</div>
+          <aside class="side-column">${lane("side")}</aside>
         </section>
-
         <footer class="invoice-footer">
-          <div>Documento generato per finalità di ripartizione interna dei consumi idrici.</div>
-          <div class="footer-right">Bolletta di Ripartizione · ${esc(trimestreLabel || "-")}</div>
+          <div>${esc(labels.footer)}</div>
+          <div class="footer-right">${esc(labels.title)} · ${esc(trimestreLabel || "-")}</div>
         </footer>
       </article>
     </section>
   `;
 }
 
-function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl, condominio }) {
+function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl, condominio, template: customTemplate, preview = false }) {
   const pages = chunkArray(righe || [], 1);
+  const template = resolveTemplate(DEFAULT_TEMPLATE, customTemplate);
 
   return `
   <!doctype html>
@@ -767,7 +771,7 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
           white-space: nowrap;
         }
 
-        @media print {
+        @media ${preview ? "all" : "print"} {
           /* Solid strokes and text remain legible without background printing. */
           * {
             color: #111111 !important;
@@ -787,6 +791,28 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
             border-bottom: 1pt solid #111111;
           }
         }
+        .doc-title { font-size: ${template.page.titleSize}pt; }
+        .summary-name { font-size: ${template.page.customerSize}pt; }
+        .summary-total-value { font-size: ${template.page.totalSize}pt; }
+        .invoice-grid { grid-template-columns: minmax(0, ${template.page.mainWidth}fr) minmax(0, ${100 - template.page.mainWidth}fr); gap: ${template.page.gap}mm; padding-bottom: ${template.page.padding}mm; }
+        .main-column, .side-column, .full-column { gap: ${template.page.gap}mm; min-width: 0; }
+        .full-column { grid-column: 1 / -1; display: flex; flex-direction: column; }
+        .full-column:empty { display: none; }
+        .panel, .invoice-header, .summary-band, .invoice-footer { break-inside: avoid; }
+        .panel, .invoice-header, .summary-band { overflow-wrap: anywhere; }
+        .invoice-footer > div { min-width: 0; overflow-wrap: anywhere; }
+        .footer-right { white-space: normal; }
+        ${Object.entries(template.sections).map(([id, section]) => `
+          [data-section="${id}"] { font-size: ${section.fontSize}pt; }
+          [data-section="${id}"] .panel-title { font-size: .85em; padding: ${section.padding}mm; }
+          [data-section="${id}"] .info-grid, [data-section="${id}"] .mini-summary, [data-section="${id}"] .note-text, [data-section="${id}"] .company-text { padding: ${section.padding}mm; }
+          [data-section="${id}"] .cost-table td { font-size: 1em; padding: ${section.padding}mm 3mm; }
+          [data-section="${id}"] .cost-table th, [data-section="${id}"] .line-sub { font-size: .85em; }
+          [data-section="${id}"] .info-label { font-size: .75em; letter-spacing: 0; }
+          [data-section="${id}"] .info-value { font-size: 1.1em; }
+          [data-section="${id}"] .mini-row, [data-section="${id}"] .note-text, [data-section="${id}"] .company-text { font-size: 1em; }
+          [data-section="${id}"] .company-name { font-size: 1.5em; }
+        `).join("")}
       </style>
     </head>
     <body>
@@ -811,7 +837,8 @@ function buildRipartizionePdfHtml({ righe, dettaglioByUtenza, trimestreLabel, da
                 trimestreLabel,
                 dataLettura,
                 logoUrl,
-                condominio
+                condominio,
+                template
               );
             })
             .join("")

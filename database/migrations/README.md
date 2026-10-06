@@ -45,3 +45,9 @@ npm run migrate:reading-states
 
 `008_reading_states.sql` is idempotent. The backend runs it automatically on
 startup unless `RUN_READING_STATE_MIGRATION_ON_STARTUP=false` is configured.
+
+`009_bolletta_templates.sql` stores the editable bolletta default and sparse
+condominium overrides in MySQL. The template service creates this additive table
+on first use. Apply the migration before deployment when the application database
+user does not have CREATE TABLE permission. Existing PDF archives are unchanged;
+new generations resolve the latest default and the selected condominium overrides.

@@ -22,6 +22,7 @@ import PasswordSettings from "./pages/admin/PasswordSettings";
 import MobileReadingsReview from "./pages/admin/MobileReadingsReview";
 import MetaBusinessPage from "./pages/admin/MetaBusinessPage";
 import DocumentNumberSettings from "./pages/admin/DocumentNumberSettings";
+import BollettaTemplateEditor from "./pages/admin/BollettaTemplateEditor";
 import GlobalSearchPage from "./pages/GlobalSearchPage";
 import { isAuthenticated } from "./auth";
 
@@ -66,6 +67,7 @@ function App() {
                   <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />
                   <Route path="/admin/password" element={<PasswordSettings />} />
                   <Route path="/admin/document-numbers" element={<DocumentNumberSettings />} />
+                  <Route path="/admin/bolletta-templates" element={<BollettaTemplateEditor />} />
                   <Route path="/admin/mobile-readings" element={<MobileReadingsReview />} />
                   <Route path="/admin/meta-business" element={<MetaBusinessPage />} />
                 </Routes>

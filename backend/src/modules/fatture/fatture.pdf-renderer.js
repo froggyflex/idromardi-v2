@@ -11,7 +11,7 @@ function getRipartizionePdfChunkSize() {
 
 async function generateRipartizioneCompletePdfBuffer({
   browser, righe, dettaglioByUtenza, trimestreLabel, dataLettura, logoUrl, condominio,
-  onChunkComplete,
+  onChunkComplete, template,
 }) {
   const rows = Array.isArray(righe) ? righe : [];
   if (!rows.length) throw new Error("Nessuna riga disponibile per generare i PDF");
@@ -33,8 +33,14 @@ async function generateRipartizioneCompletePdfBuffer({
         dataLettura: dataLettura || "",
         logoUrl: printLogo,
         condominio,
+        template,
       });
       await page.setContent(html, { waitUntil: "load", timeout: 120000 });
+      if (template) {
+        const { inspectA4, layoutError } = require("../bollettaTemplates/template-preview");
+        const overflow = await inspectA4(page);
+        if (overflow.length) throw layoutError(overflow.map(item => ({ ...item, index: item.index + index * chunkSize })));
+      }
       const buffer = Buffer.from(await page.pdf({
         format: "A4", landscape: false, preferCSSPageSize: true,
         printBackground: true,

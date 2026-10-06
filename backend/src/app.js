@@ -99,6 +99,7 @@ app.use("/api/condomini", condominiRoutes);
 app.use("/api", utenzeRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/bolletta-templates", require("./modules/bollettaTemplates/template.routes"));
 app.use("/api/letture", lettureRoutes);
 app.use("/api/mobile-readings", mobileReadingsRoutes);
 app.use("/api/tariffe", tariffeRoutes);

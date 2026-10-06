@@ -8,6 +8,7 @@ const e = require("express");
 const fs = require("fs").promises;
 const fs1 = require("fs");
 const { launchBrowser } = require("../../utils/puppeteer");
+const { getTemplate: getBollettaTemplate } = require("../bollettaTemplates/template.service");
 const {
   getRipartizionePdfChunkSize,
   generateRipartizioneCompletePdfBuffer,
@@ -1538,6 +1539,7 @@ async function processRipartizionePdfJob({
   let browser;
 
   try {
+    const bollettaTemplate = await getBollettaTemplate(condominioId || "default");
     browser = await launchBrowser();
     const allRows = entries.flatMap(([, utenzaRighe]) => utenzaRighe);
     const completeBuffer = await generateRipartizioneCompletePdfBuffer({
@@ -1548,6 +1550,7 @@ async function processRipartizionePdfJob({
       dataLettura,
       logoUrl: getRipartizioneLogoUrl(logoUrl),
       condominio,
+      template: bollettaTemplate.effective,
       onChunkComplete: async () => {
         processed += 1;
         try {
@@ -1904,6 +1907,7 @@ exports.exportRipartizioniPerUtenza = async ({
   let browser;
 
   try {
+    const bollettaTemplate = await getBollettaTemplate(condominioId || "default");
     browser = await launchBrowser();
     const pdfBuffer = await generateRipartizioneCompletePdfBuffer({
       browser,
@@ -1913,6 +1917,7 @@ exports.exportRipartizioniPerUtenza = async ({
       dataLettura,
       logoUrl: getRipartizioneLogoUrl(logoUrl),
       condominio,
+      template: bollettaTemplate.effective,
     });
 
     if (pdfBuffer.slice(0, 4).toString() !== "%PDF") {

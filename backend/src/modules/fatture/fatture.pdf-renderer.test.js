@@ -4,7 +4,7 @@ const { PDFDocument } = require("pdf-lib");
 const { generateRipartizioneCompletePdfBuffer, getRipartizionePdfChunkSize } = require("./fatture.pdf-renderer");
 const { buildRipartizionePdfHtml } = require("./fatture.pdf");
 
-function fixture(failAt = -1) {
+function fixture(failAt = -1, overflowAt = -1) {
   const state = { opened: 0, closed: 0, chunks: [], buffers: [] };
   const browser = { async newPage() {
     state.opened++;
@@ -12,6 +12,7 @@ function fixture(failAt = -1) {
     return {
       setDefaultNavigationTimeout() {}, setDefaultTimeout() {}, async emulateMediaType() {},
       async setContent(html) { count = (html.match(/class="invoice-sheet"/g) || []).length; state.chunks.push(count); },
+      async evaluate() { return state.chunks.length === overflowAt ? [{ index: 1, overflow: true }] : []; },
       async pdf() {
         if (state.buffers.length === failAt) throw new Error("render failed");
         const pdf = await PDFDocument.create();
@@ -64,6 +65,15 @@ test("empty input is rejected before opening a browser page", async () => {
   const { browser, state } = fixture();
   await assert.rejects(generateRipartizioneCompletePdfBuffer({browser, righe:[]}), /Nessuna riga/);
   assert.equal(state.opened, 0);
+});
+
+test("template overflow aborts generation and identifies the invoice across chunks", async () => {
+  const { browser, state } = fixture(-1, 2);
+  const size = getRipartizionePdfChunkSize();
+  const { DEFAULT_TEMPLATE } = require("../bollettaTemplates/template-model");
+  await assert.rejects(generateRipartizioneCompletePdfBuffer({ browser, template: DEFAULT_TEMPLATE, righe: Array.from({ length: size + 1 }, () => ({})) }), error => error.code === "TEMPLATE_A4_OVERFLOW" && error.message.includes(`bolletta ${size + 1}`));
+  assert.equal(state.closed, 1);
+  assert.equal(state.buffers.length, 1);
 });
 
 test("invoice HTML shows the condominium and the updated B/T legend", () => {

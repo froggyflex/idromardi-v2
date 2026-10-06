@@ -524,6 +524,7 @@ export default function MainLayout({ children }: Props) {
                 label="Numerazione documenti"
                 icon={ListOrdered}
               />
+              <NavItem to="/admin/bolletta-templates" label="Modelli bollette" icon={ReceiptText} />
             </div>
           </div>
 
