@@ -1,8 +1,6 @@
 const service = require("./fatture.service");
-const fs = require("fs");
-const fsp = require("fs/promises");
-const path = require("path");
 const { PDFDocument } = require("pdf-lib");
+const { readRipartizionePdf } = require("../../utils/ripartizionePdfStorage");
 
 
 exports.viewRipartizionePdfPeriod = async (req, res, next) => {
@@ -45,12 +43,7 @@ exports.viewRipartizionePdfPeriod = async (req, res, next) => {
     const mergedPdf = await PDFDocument.create();
 
     for (const pdf of pdfs) {
-      const absolutePath = path.join(
-        process.cwd(),
-        pdf.filepath.replace(/^\/+/, "")
-      );
-
-      const fileBuffer = await fsp.readFile(absolutePath);
+      const fileBuffer = await readRipartizionePdf(pdf);
       const sourcePdf = await PDFDocument.load(fileBuffer);
       const copiedPages = await mergedPdf.copyPages(
         sourcePdf,
@@ -301,16 +294,7 @@ exports.viewRipartizionePdf = async (req, res, next) => {
       return res.status(404).json({ error: "PDF non trovato." });
     }
 
-    const absolutePath = path.join(
-      process.cwd(),
-      pdf.filepath.replace(/^\/+/, "")
-    );
-
-    if (!fs.existsSync(absolutePath)) {
-      return res.status(404).json({
-        error: "File PDF non trovato nello storage.",
-      });
-    }
+    const buffer = await readRipartizionePdf(pdf);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
@@ -318,7 +302,7 @@ exports.viewRipartizionePdf = async (req, res, next) => {
       `inline; filename="${pdf.filename}"`
     );
 
-    return res.sendFile(absolutePath);
+    return res.send(buffer);
   } catch (error) {
     next(error);
   }

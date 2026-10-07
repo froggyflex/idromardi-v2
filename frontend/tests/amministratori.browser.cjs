@@ -32,7 +32,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || (process.platform === "win32" ? "C:/Program Files/Google/Chrome/Application/chrome.exe" : undefined), headless: true, pipe: true, args: ["--no-sandbox", "--disable-gpu"] });
   try {
     const page = await browser.newPage(); await page.setViewport({ width: 1280, height: 900 });
-    const errors = []; let pdfRequests = 0, passwordChanges = 0, supportStarts = 0, supportEnds = 0, failPdf = false, pdfDelay = 0, emptyArchive = false, lastPdfPath = "", failAssignment = false, assignmentSaves = 0;
+    const errors = []; let pdfRequests = 0, passwordChanges = 0, supportStarts = 0, supportEnds = 0, failPdf = false, missingPdf = false, pdfDelay = 0, emptyArchive = false, lastPdfPath = "", failAssignment = false, assignmentSaves = 0;
     page.on("pageerror", error => errors.push(error.message));
     await page.setRequestInterception(true);
     page.on("request", async request => {
@@ -60,7 +60,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         } else if (route === "/auth/impersonation/end") { supportEnds++; result = { token: "admin-token", user: admin }; }
         else if (route === "/amministratore/condomini") result = { condomini: buildings.filter(building => account.condominioIds.includes(building.id)) };
         else if (route === "/amministratore/condomini/building-a/documents") result = { condominio: buildings[0], documents: emptyArchive ? [] : documents };
-        else if (route.endsWith("/view")) { pdfRequests++; lastPdfPath = route; if (pdfDelay) await delay(pdfDelay); return request.respond(failPdf ? { status: 500, contentType: "application/json", headers, body: '{"error":"Storage unavailable"}' } : { status: 200, contentType: "application/pdf", headers, body: pdfBuffer }); }
+        else if (route.endsWith("/view")) { pdfRequests++; lastPdfPath = route; if (pdfDelay) await delay(pdfDelay); return request.respond(missingPdf ? { status: 410, contentType: "application/json", headers, body: '{"code":"PDF_FILE_MISSING","error":"Archived PDF missing"}' } : failPdf ? { status: 500, contentType: "application/json", headers, body: '{"error":"Storage unavailable"}' } : { status: 200, contentType: "application/pdf", headers, body: pdfBuffer }); }
         else if (route === "/meta/unread") result = { total: 0 };
         else if (route.includes("/amministratore/condomini/")) { result = { error: "Condominio non trovato" }; status = 404; }
         return request.respond({ status, contentType: "application/json", headers, body: JSON.stringify(result) });
@@ -150,6 +150,15 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.waitForFunction(() => document.body.innerText.includes('Impossibile aprire il PDF'));
     await page.waitForFunction(selector => !document.querySelector(selector).disabled, {}, individualPreview);
     failPdf = false;
+    missingPdf = true; await page.click(individualPreview);
+    await page.waitForFunction(() => document.body.innerText.includes('ripristinare il file originale'));
+    assert(!(await text()).includes('contatta Idromardi'));
+    assert.equal(await page.$('[role="dialog"]'), null);
+    await page.waitForFunction(selector => !document.querySelector(selector).disabled, {}, individualPreview);
+    missingPdf = false;
+    await page.click(individualPreview); await page.waitForSelector('[role="dialog"] iframe');
+    assert.equal(await page.$('[role="alert"]'), null);
+    await page.click('button[aria-label="Chiudi anteprima"]');
     await page.evaluate(() => [...document.querySelectorAll('details summary')].find(element => element.innerText.includes("Versioni precedenti")).click());
     assert((await text()).includes("Prospetto versione precedente.pdf"));
     failPdf = true;

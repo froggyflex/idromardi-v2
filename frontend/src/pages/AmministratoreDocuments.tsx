@@ -23,6 +23,21 @@ function unitLabel(doc: SavedDocument) {
 }
 const actionLabel = (doc: SavedDocument) => `${documentTitle(doc)}${doc.document_type === "bolletta" ? ` · ${unitLabel(doc)}` : ""}`;
 
+async function pdfErrorMessage(error: unknown): Promise<string> {
+  const response = (error as { response?: { status?: number; data?: unknown } })?.response;
+  let data = response?.data;
+  if (data instanceof Blob) {
+    try { data = JSON.parse(await data.text()); } catch { data = null; }
+  }
+  const code = (data as { code?: string } | null)?.code;
+  if (code === "PDF_FILE_MISSING" || response?.status === 410) return "Il file PDF di questa bolletta non è disponibile in archivio. L’operatore deve ripristinare il file originale.";
+  if (response?.status === 404) return "Il documento richiesto non è più disponibile. Ricarica l’archivio e riprova.";
+  if (response?.status === 403) return "Non hai accesso a questo documento. Verifica l’assegnazione del condominio con l’operatore.";
+  if (response?.status === 401) return "La sessione è scaduta. Accedi nuovamente per visualizzare il documento.";
+  if (!response) return "Impossibile raggiungere il server. Verifica la connessione e riprova.";
+  return "Impossibile aprire il PDF: l’archivio documenti non è disponibile al momento. Riprova tra poco.";
+}
+
 function documentPeriod(doc: SavedDocument): Omit<Period, "documents"> {
   const keyMatch = String(doc.period_key || "").match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
   const labelMatch = String(doc.period_label || "").trim().match(/^(\d{1,2})(?:\^|\/)(\d{2}|\d{4})$/);
@@ -156,7 +171,10 @@ export default function AmministratoreDocuments() {
         const link = document.createElement("a"); link.href = url; link.download = doc.filename; link.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       }
-    } catch { if (mounted.current && sequence === requestSequence.current) setActionError("Impossibile aprire il PDF. Riprova o contatta Idromardi."); }
+    } catch (error) {
+      const message = await pdfErrorMessage(error);
+      if (mounted.current && sequence === requestSequence.current) setActionError(message);
+    }
     finally { if (mounted.current && sequence === requestSequence.current) setBusy(""); }
   }
   function closePreview() { setPreview(null); if (previewUrl.current) URL.revokeObjectURL(previewUrl.current); previewUrl.current = null; }

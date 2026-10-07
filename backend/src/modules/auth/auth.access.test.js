@@ -2,6 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
 const express = require("express");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { PDFDocument } = require("pdf-lib");
 
 async function fixture(t) {
   const salt = "test-salt";
@@ -14,6 +18,12 @@ async function fixture(t) {
   let assignments = [];
   const audit = new Map();
   const downloads = [];
+  const pdfDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "idromardi-preview-"));
+  const pdfPath = path.join(pdfDirectory, "bill.pdf");
+  const pdf = await PDFDocument.create();
+  pdf.addPage([595, 842]);
+  fs.writeFileSync(pdfPath, Buffer.from(await pdf.save()));
+  t.after(() => { fs.unlinkSync(pdfPath); fs.rmdirSync(pdfDirectory); });
   const documents = [
     { id: "prospetto-a", condominio_id: "building-a", fattura_id: "session-a", document_type: "prospetto", filename: "prospetto.pdf", metadata_json: '{"periodLabel":"6^26","private":"not exposed"}' },
     { id: "bollette-a", condominio_id: "building-a", fattura_id: "session-a", document_type: "bollette_complete", filename: "bollette.pdf" },
@@ -21,6 +31,7 @@ async function fixture(t) {
     { id: "prospetto-b", condominio_id: "building-b", document_type: "prospetto", filename: "other.pdf" },
   ];
   const legacy = [{ id: "legacy-a", condominio_id: "building-a", id_utenza: "resident-a", filename: "legacy.pdf" }, { id: "legacy-b", condominio_id: "building-b", id_utenza: "resident-b", filename: "other.pdf" }];
+  for (const doc of legacy) doc.filepath = pdfPath;
   const residents = [
     { id: "resident-a", condominio_id: "building-a", Nome: " Mario ", Cognome: "Rossi", Interno: "0", Scala: "A" },
     { id: "resident-b", condominio_id: "building-b", Nome: "Private", Cognome: "Resident", Interno: "99", Scala: "B" },
@@ -73,12 +84,21 @@ async function fixture(t) {
     let snapshot;
     return { query, async beginTransaction() { snapshot = { users: structuredClone(users), assignments: structuredClone(assignments) }; }, async commit() {}, async rollback() { users.clear(); for (const [id, user] of snapshot.users) users.set(id, user); assignments = snapshot.assignments; }, release() {} };
   } };
-  const paths = ["../../config/db", "./auth.service", "./auth.middleware", "./auth.controller", "./auth.routes", "../amministratori/portal.routes", "../fatture/fatture.controller"].map(path => require.resolve(path));
+  const paths = ["../../config/db", "./auth.service", "./auth.middleware", "./auth.controller", "./auth.routes", "../amministratori/portal.routes", "../fatture/fatture.controller", "../fatture/fatture.service"].map(path => require.resolve(path));
   const originals = new Map(paths.map(path => [path, require.cache[path]]));
   for (const path of paths) delete require.cache[path];
   require.cache[paths[0]] = { exports: pool };
-  const sendPdf = (req, res) => { downloads.push({ id: req.params.id, query: req.query }); res.type("pdf").send("%PDF-fixture"); };
-  require.cache[paths[6]] = { exports: { viewGeneratedDocument: sendPdf, viewRipartizionePdf: sendPdf } };
+  require.cache[paths[7]] = { exports: {
+    async getRipartizionePdfById(id, condominioId, fatturaId) {
+      downloads.push({ id, query: { condominioId, ...(fatturaId ? { fatturaId } : {}) } });
+      return legacy.find(doc => doc.id === id && doc.condominio_id === condominioId) || null;
+    },
+    async getGeneratedDocumentById(id, { condominioId, utenzaId }) {
+      downloads.push({ id, query: { condominioId, ...(utenzaId ? { utenzaId } : {}) } });
+      return documents.find(doc => doc.id === id && doc.condominio_id === condominioId) || null;
+    },
+    async getGeneratedDocumentBuffer() { return fs.promises.readFile(pdfPath); },
+  } };
   const service = require("./auth.service");
   const { requireAuth, restrictAmministratore, protectUploadedDocuments } = require("./auth.middleware");
   const app = express(); app.use(express.json());
@@ -88,7 +108,7 @@ async function fixture(t) {
   app.use("/api/amministratore", require("../amministratori/portal.routes"));
   app.get("/api/condomini", (req, res) => res.json({ operatorData: true }));
   app.post("/api/fatture/sessioni", (req, res) => res.json({ changed: true }));
-  app.use((error, req, res, next) => res.status(error.statusCode || 500).json({ error: error.message }));
+  app.use((error, req, res, next) => res.status(error.statusCode || 500).json({ error: error.message, ...(error.code ? { code: error.code } : {}) }));
   const server = app.listen(0, "127.0.0.1");
   await new Promise(resolve => server.on("listening", resolve));
   t.after(async () => { await new Promise(resolve => server.close(resolve)); for (const [path, original] of originals) { if (original) require.cache[path] = original; else delete require.cache[path]; } });
@@ -141,7 +161,18 @@ test("portal checks assignments and document ownership, denies other APIs, and i
   for (const [source, id] of [["generated", "prospetto-b"], ["generated", "invoice-a"], ["bolletta", "legacy-b"], ["unknown", "legacy-a"]]) assert.equal((await request(`/amministratore/condomini/building-a/documents/${source}/${id}/view`, { token })).status, 404);
   assert.equal((await request("/amministratore/condomini/building-a/documents/generated/prospetto-a/view?condominioId=building-b&idUtenza=other", { token })).status, 200);
   assert.deepEqual(downloads[0].query, { condominioId: "building-a" });
-  assert.equal((await request("/amministratore/condomini/building-a/documents/bolletta/legacy-a/view", { token })).status, 200);
+  const preview = await request("/amministratore/condomini/building-a/documents/bolletta/legacy-a/view", { token });
+  assert.equal(preview.status, 200); assert(preview.data.startsWith("%PDF"));
+});
+
+test("portal reports an archived bill's missing file separately from missing document access", async t => {
+  const { request, service, legacy } = await fixture(t);
+  const { token } = await service.changePassword({ username: "amministratore", currentPassword: "temporary-pass", newPassword: "personal-password" });
+  legacy[0].filepath = path.join(path.dirname(legacy[0].filepath), "missing.pdf");
+  const response = await request("/amministratore/condomini/building-a/documents/bolletta/legacy-a/view", { token });
+  assert.equal(response.status, 410); assert.equal(response.data.code, "PDF_FILE_MISSING");
+  assert(response.data.error.includes("file originale"));
+  assert.equal((await request("/amministratore/condomini/building-a/documents/bolletta/unknown/view", { token })).status, 404);
 });
 
 test("individual bills remain available with missing resident data and never expose another condominium's resident", async t => {
