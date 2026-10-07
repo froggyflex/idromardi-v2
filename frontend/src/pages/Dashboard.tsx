@@ -127,15 +127,16 @@ function FitBounds({
   const map = useMap();
 
   useEffect(() => {
-    window.setTimeout(() => map.invalidateSize(), 80);
-    if (!data.length) return;
-
-    const bounds = L.latLngBounds(data.map((c) => [c.latitude, c.longitude]));
-    if (data.length === 1) {
-      map.setView([data[0].latitude, data[0].longitude], 15);
-    } else {
-      map.fitBounds(bounds, { padding: [38, 38], maxZoom: 15 });
+    const resizeTimer = window.setTimeout(() => map.invalidateSize(), 80);
+    if (data.length) {
+      const bounds = L.latLngBounds(data.map((c) => [c.latitude, c.longitude]));
+      if (data.length === 1) {
+        map.setView([data[0].latitude, data[0].longitude], 15);
+      } else {
+        map.fitBounds(bounds, { padding: [38, 38], maxZoom: 15 });
+      }
     }
+    return () => window.clearTimeout(resizeTimer);
   }, [data, map]);
 
   return null;

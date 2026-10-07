@@ -31,3 +31,7 @@ export function getAuthUser() {
     return null;
   }
 }
+
+export function getAuthRole(user: { role?: string; username?: string } | null = getAuthUser()) {
+  return String(user?.role || (user?.username === "admin" ? "ADMIN" : "")).toUpperCase();
+}

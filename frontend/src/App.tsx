@@ -26,7 +26,13 @@ import BollettaTemplateEditor from "./pages/admin/BollettaTemplateEditor";
 import GlobalSearchPage from "./pages/GlobalSearchPage";
 import AmministratoriAccounts from "./pages/admin/AmministratoriAccounts";
 import AmministratorePortal from "./pages/AmministratorePortal";
-import { getAuthUser, clearAuthSession, isAuthenticated } from "./auth";
+import { getAuthRole, getAuthUser, clearAuthSession, isAuthenticated } from "./auth";
+
+function RequireAdmin({ children }: { children: ReactNode }) {
+  // Read the current session when the route mounts, rather than capturing the
+  // logged-out role while App constructs the route elements before login.
+  return getAuthRole() === "ADMIN" ? children : <Navigate to="/" replace />;
+}
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const location = useLocation();
@@ -40,7 +46,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
     if (location.pathname !== "/password-change") return <Navigate to="/password-change" replace />;
     return <div className="min-h-screen bg-slate-100 p-6"><div className="mx-auto max-w-xl"><PasswordSettings /><button className="mt-4 text-sm text-slate-600 underline" onClick={() => { clearAuthSession(); window.location.href = "/login"; }}>Esci</button></div></div>;
   }
-  if (user?.role === "AMMINISTRATORE") return <AmministratorePortal />;
+  if (getAuthRole(user) === "AMMINISTRATORE") return <AmministratorePortal />;
 
   return children;
 }
@@ -72,7 +78,7 @@ function App() {
                   <Route path="/condomini/:condominioId/fatture/:id" element={<CondominioFatturePage />} />
 
                   <Route path="/admin" element={<AdminDashboard />} />
-                  <Route path="/admin/amministratori" element={getAuthUser()?.role === "ADMIN" ? <AmministratoriAccounts /> : <Navigate to="/" replace />} />
+                  <Route path="/admin/amministratori" element={<RequireAdmin><AmministratoriAccounts /></RequireAdmin>} />
                   <Route path="/admin/tools" element={<AdminTools />} />
                   <Route path="/admin/tariffe" element={<AdminTariffe />} />
                   <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />

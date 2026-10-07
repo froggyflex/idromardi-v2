@@ -44,7 +44,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         const route = url.pathname.replace(/^\/api/, "");
         const body = request.postData() ? JSON.parse(request.postData()) : {};
         let result = {}, status = 200;
-        if (route === "/auth/change-password") {
+        if (route === "/auth/login") {
+          assert.equal(body.username, 'admin'); assert.equal(body.password, 'admin-password');
+          result = { token: 'admin-token', user: admin };
+        } else if (route === "/auth/change-password") {
           assert.equal(body.currentPassword, "temporary-pass"); assert.equal(body.newPassword, "personal-password");
           passwordChanges++; account.mustChangePassword = false; result = { token: "personal-token", user: account };
         } else if (route === "/auth/users" && request.method() === "GET") result = { users: accounts };
@@ -62,6 +65,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         else if (route === "/amministratore/condomini/building-a/documents") result = { condominio: buildings[0], documents: emptyArchive ? [] : documents };
         else if (route.endsWith("/view")) { pdfRequests++; lastPdfPath = route; if (pdfDelay) await delay(pdfDelay); return request.respond(missingPdf ? { status: 410, contentType: "application/json", headers, body: '{"code":"PDF_FILE_MISSING","error":"Archived PDF missing"}' } : failPdf ? { status: 500, contentType: "application/json", headers, body: '{"error":"Storage unavailable"}' } : { status: 200, contentType: "application/pdf", headers, body: pdfBuffer }); }
         else if (route === "/meta/unread") result = { total: 0 };
+        else if (route === "/dashboard/map") result = [];
         else if (route.includes("/amministratore/condomini/")) { result = { error: "Condominio non trovato" }; status = 404; }
         return request.respond({ status, contentType: "application/json", headers, body: JSON.stringify(result) });
       }
@@ -77,6 +81,36 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       await page.waitForFunction(label => [...document.querySelectorAll("button")].some(button => button.textContent.trim() === label), {}, label);
       await page.evaluate(label => { const button = [...document.querySelectorAll("button")].find(button => button.textContent.trim() === label); button.focus(); button.click(); }, label);
     }
+    // Exercise a real login transition: pre-seeding a session and reloading hides
+    // guards that captured the logged-out role when the app first mounted.
+    await page.goto(`${base}/login`);
+    await page.type('input[autocomplete="current-password"]', 'admin-password');
+    await click('Accedi');
+    await page.waitForSelector('a[href="/admin/amministratori"]');
+    await page.click('button[aria-label="Apri menu"]');
+    await page.evaluate(() => document.querySelector('a[href="/admin/amministratori"]').click());
+    await page.waitForSelector('.amma-workspace', { timeout: 3000 });
+    assert.equal(new URL(page.url()).pathname, '/admin/amministratori');
+    await page.click('button[aria-label="Apri menu"]');
+    await page.evaluate(() => document.querySelector('a[href="/"]').click());
+    await page.click('button[aria-label="Apri menu"]');
+    await page.evaluate(() => document.querySelector('a[href="/admin/amministratori"]').click());
+    await page.waitForSelector('.amma-workspace');
+    assert.equal(new URL(page.url()).pathname, '/admin/amministratori');
+    await page.setViewport({ width: 1280, height: 900 });
+    await click('Esci'); await page.waitForSelector('input[autocomplete="current-password"]');
+    await page.type('input[autocomplete="current-password"]', 'admin-password'); await click('Accedi');
+    await page.waitForSelector('a[href="/admin/amministratori"]');
+    await page.evaluate(() => document.querySelector('a[href="/admin/amministratori"]').click());
+    await page.waitForSelector('.amma-workspace');
+    assert.equal(new URL(page.url()).pathname, '/admin/amministratori');
+    await session('reviewer-token', { id: 'reviewer', username: 'reviewer', role: 'REVIEWER' }, '/admin/amministratori');
+    await page.waitForFunction(() => window.location.pathname === '/');
+    assert.equal(await page.$('.amma-workspace'), null);
+    assert.equal(await page.$('a[href="/admin/amministratori"]'), null);
+    await session('legacy-admin-token', { username: 'admin' }, '/admin/amministratori');
+    await page.waitForSelector('.amma-workspace');
+    assert.equal(new URL(page.url()).pathname, '/admin/amministratori');
     await session("temporary-token", account, "/condomini/building-b/edit");
     await page.waitForFunction(() => document.body.innerText.includes("Scegli la tua password"));
     assert(new URL(page.url()).pathname === "/password-change");
@@ -255,6 +289,6 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await click("Torna all’account operatore");
     await page.waitForFunction(() => document.body.innerText.includes("Account amministratori") && document.body.innerText.includes("studio-bianchi"));
     assert.equal(supportEnds, 1); assert(!(await text()).includes("Assistenza: stai visualizzando")); assert.deepEqual(errors, []);
-    console.log("Amministratore UI passed: compact account table, pagination/status filters, creation, assignment search/bulk selection, draft cancellation, save retry, responsive dialogs, support return, and document browsing. Screenshots:", output);
+    console.log("Amministratore UI passed: first-click navigation after login/relogin, role restrictions, compact account table, pagination/status filters, creation, assignment search/bulk selection, draft cancellation, save retry, responsive dialogs, support return, and document browsing. Screenshots:", output);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

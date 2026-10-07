@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { clearAuthSession, getAuthUser } from "../auth";
+import { clearAuthSession, getAuthRole, getAuthUser } from "../auth";
 import api from "../api/client";
 import { META_UNREAD_REFRESH_EVENT } from "../metaNotifications";
 
@@ -304,7 +304,7 @@ export default function MainLayout({ children }: Props) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [metaUnreadCount, setMetaUnreadCount] = useState(0);
-  const normalizedRole = String(user?.role || (user?.username === "admin" ? "ADMIN" : "")).toUpperCase();
+  const normalizedRole = getAuthRole(user);
   const canUseMeta = normalizedRole === "ADMIN" || normalizedRole === "REVIEWER";
 
   const refreshMetaUnread = useCallback(async () => {
