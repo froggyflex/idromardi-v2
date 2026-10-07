@@ -36,6 +36,7 @@ const {
 } = require("./tariff-allocation");
 const {
   deletePdfFromR2,
+  findArchivedIndividualBolletta,
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
   getPdfFromR2,
@@ -6583,6 +6584,7 @@ exports.getImportedDocumentById = async function (id) {
 
 exports.getLatestGeneratedDocument = getLatestGeneratedDocument;
 exports.getGeneratedDocumentById = getGeneratedDocumentById;
+exports.findArchivedIndividualBolletta = findArchivedIndividualBolletta;
 exports.getGeneratedDocumentBuffer = async (document) => getPdfFromR2(document.r2_key);
 exports.listGeneratedDocuments = listGeneratedDocuments;
 exports.findIssuedInvoiceForBillingSession = async ({ sessionId, condominioId }) => {

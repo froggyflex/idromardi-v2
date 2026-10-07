@@ -9,6 +9,7 @@ test("legacy upload paths resolve from the backend instead of the server's worki
     assert.equal(resolveRipartizionePdfPath(stored), expected);
   }
   assert.equal(resolveRipartizionePdfPath(expected), expected);
+  assert.equal(resolveRipartizionePdfPath('/storage/ripartizioni/2026-05-01/bill.pdf'), path.resolve(__dirname, '../../storage/ripartizioni/2026-05-01/bill.pdf'));
 });
 
 test("empty file references produce the same actionable error as a lost archived PDF", async () => {

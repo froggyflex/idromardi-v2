@@ -18,6 +18,9 @@ async function fixture(t) {
   let assignments = [];
   const audit = new Map();
   const downloads = [];
+  const archiveReads = [];
+  const archiveState = { missingObject: false };
+  const archivedIndividual = [];
   const pdfDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "idromardi-preview-"));
   const pdfPath = path.join(pdfDirectory, "bill.pdf");
   const pdf = await PDFDocument.create();
@@ -38,7 +41,7 @@ async function fixture(t) {
   ];
   async function query(sql, params = []) {
     const q = sql.replace(/\s+/g, " ").trim();
-    if (q.includes("FROM INFORMATION_SCHEMA.COLUMNS")) return [[{ TABLE_NAME: "generated_documents", COLUMN_NAME: "metadata_json" }, { TABLE_NAME: "generated_documents", COLUMN_NAME: "period_label" }, { TABLE_NAME: "ripartizione_pdfs", COLUMN_NAME: "id_fattura" }]];
+    if (q.includes("FROM INFORMATION_SCHEMA.COLUMNS")) return [[{ TABLE_NAME: "generated_documents", COLUMN_NAME: "metadata_json" }, { TABLE_NAME: "generated_documents", COLUMN_NAME: "id_utenza" }, { TABLE_NAME: "generated_documents", COLUMN_NAME: "period_label" }, { TABLE_NAME: "ripartizione_pdfs", COLUMN_NAME: "id_fattura" }]];
     if (q.includes("FROM fatture_sessioni")) return [[{ id: "session-a", period_year: 2026, period_month: 6 }]];
     if (q.startsWith("CREATE TABLE") || q.startsWith("ALTER TABLE")) return [{}];
     if (q.startsWith("SHOW COLUMNS")) return [[{ Field: "role", Type: "enum('ADMIN','REVIEWER','METER_READER','AMMINISTRATORE')" }, { Field: "must_change_password" }, { Field: "token_version" }]];
@@ -67,6 +70,16 @@ async function fixture(t) {
     if (q.startsWith("UPDATE app_auth_impersonations")) { audit.get(params[0]).ended = true; return [{}]; }
     if (q.includes("FROM app_auth_impersonations")) { const row = audit.get(params[0]); return [[row].filter(row => row && !row.ended && row.actor_id === params[1] && row.target_id === params[2])]; }
     if (q.includes("FROM generated_documents") || q.includes("FROM ripartizione_pdfs")) {
+      if (q.includes("document_type = 'bolletta_utente'")) {
+        assert(q.includes("condominio_id = ?") && q.includes("COALESCE(NULLIF(id_utenza, '')"));
+        assert(q.includes("fattura_id = ?") || q.includes("'$.periodKey'"));
+        return [archivedIndividual.filter(doc => {
+          let metadata; try { metadata = JSON.parse(doc.metadata_json || '{}'); } catch { metadata = {}; }
+          return doc.condominio_id === params[0] && doc.document_type === 'bolletta_utente'
+            && (doc.id_utenza || metadata.idUtenza) === params[1]
+            && (q.includes('fattura_id = ?') ? doc.fattura_id === params[2] : metadata.periodKey === params[2]);
+        }).slice(0, 1)];
+      }
       const source = q.includes("FROM generated_documents") ? documents.filter(doc => ["prospetto", "prospetto_bw", "bollette_complete"].includes(doc.document_type)) : legacy;
       const rows = source.filter(doc => q.includes("WHERE id =") ? doc.id === params[0] && doc.condominio_id === params[1] : doc.condominio_id === params[0]);
       if (q.includes("LEFT JOIN utenze_v2")) {
@@ -84,11 +97,12 @@ async function fixture(t) {
     let snapshot;
     return { query, async beginTransaction() { snapshot = { users: structuredClone(users), assignments: structuredClone(assignments) }; }, async commit() {}, async rollback() { users.clear(); for (const [id, user] of snapshot.users) users.set(id, user); assignments = snapshot.assignments; }, release() {} };
   } };
-  const paths = ["../../config/db", "./auth.service", "./auth.middleware", "./auth.controller", "./auth.routes", "../amministratori/portal.routes", "../fatture/fatture.controller", "../fatture/fatture.service"].map(path => require.resolve(path));
+  const paths = ["../../config/db", "./auth.service", "./auth.middleware", "./auth.controller", "./auth.routes", "../amministratori/portal.routes", "../fatture/fatture.controller", "../fatture/fatture.service", "../../utils/generatedDocuments"].map(path => require.resolve(path));
   const originals = new Map(paths.map(path => [path, require.cache[path]]));
   for (const path of paths) delete require.cache[path];
   require.cache[paths[0]] = { exports: pool };
   require.cache[paths[7]] = { exports: {
+    findArchivedIndividualBolletta: require('../../utils/generatedDocuments').findArchivedIndividualBolletta,
     async getRipartizionePdfById(id, condominioId, fatturaId) {
       downloads.push({ id, query: { condominioId, ...(fatturaId ? { fatturaId } : {}) } });
       return legacy.find(doc => doc.id === id && doc.condominio_id === condominioId) || null;
@@ -97,7 +111,10 @@ async function fixture(t) {
       downloads.push({ id, query: { condominioId, ...(utenzaId ? { utenzaId } : {}) } });
       return documents.find(doc => doc.id === id && doc.condominio_id === condominioId) || null;
     },
-    async getGeneratedDocumentBuffer() { return fs.promises.readFile(pdfPath); },
+    async getGeneratedDocumentBuffer(doc) {
+      if (archiveState.missingObject) throw Object.assign(new Error('Missing archived object'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } });
+      archiveReads.push(doc.id); return fs.promises.readFile(pdfPath);
+    },
   } };
   const service = require("./auth.service");
   const { requireAuth, restrictAmministratore, protectUploadedDocuments } = require("./auth.middleware");
@@ -118,7 +135,7 @@ async function fixture(t) {
   }
   const admin = await service.login({ username: "admin", password: "admin-password" });
   const created = await service.createUser({ username: "amministratore", password: "temporary-pass", role: "AMMINISTRATORE", condominioIds: ["building-a"] });
-  return { request, service, admin, created, users, audit, downloads, legacy, residents };
+  return { request, service, admin, created, users, audit, downloads, legacy, residents, archivedIndividual, archiveReads, archiveState };
 }
 
 test("temporary credentials require a different personal password; previous sessions and credentials expire", async t => {
@@ -173,6 +190,49 @@ test("portal reports an archived bill's missing file separately from missing doc
   assert.equal(response.status, 410); assert.equal(response.data.code, "PDF_FILE_MISSING");
   assert(response.data.error.includes("file originale"));
   assert.equal((await request("/amministratore/condomini/building-a/documents/bolletta/unknown/view", { token })).status, 404);
+});
+
+test("a lost local bill opens its exact cloud copy, without substituting another resident or period", async t => {
+  const { request, service, legacy, archivedIndividual, archiveReads, archiveState } = await fixture(t);
+  const { token } = await service.changePassword({ username: 'amministratore', currentPassword: 'temporary-pass', newPassword: 'personal-password' });
+  legacy[0].filepath = path.join(path.dirname(legacy[0].filepath), 'missing.pdf');
+  legacy[0].period_key = '2026-05-01';
+  const archived = { id: 'cloud-copy', condominio_id: 'building-a', id_utenza: 'resident-a', document_type: 'bolletta_utente', metadata_json: '{"periodKey":"2026-05-01"}' };
+  archivedIndividual.push(
+    { ...archived, id: 'other-building', condominio_id: 'building-b' },
+    { ...archived, id: 'other-resident', id_utenza: 'resident-b' },
+    { ...archived, id: 'other-period', metadata_json: '{"periodKey":"2026-06-01"}' },
+    { ...archived, id: 'whole-condominium', document_type: 'bollette_complete' },
+    { ...archived, id: 'invalid-metadata', metadata_json: '{broken' },
+    archived,
+  );
+  const url = '/amministratore/condomini/building-a/documents/bolletta/legacy-a/view?condominioId=building-b&idUtenza=resident-b';
+  const result = await request(url, { token });
+  assert.equal(result.status, 200); assert(result.data.startsWith('%PDF'));
+  assert.deepEqual(archiveReads, ['cloud-copy']);
+  archiveState.missingObject = true;
+  const missingObject = await request(url, { token });
+  assert.equal(missingObject.status, 410); assert.equal(missingObject.data.code, 'PDF_FILE_MISSING');
+  archiveState.missingObject = false;
+  archivedIndividual.pop();
+  assert.equal((await request(url, { token })).status, 410);
+  assert.deepEqual(archiveReads, ['cloud-copy']);
+});
+
+test("cloud recovery respects billing sessions and supports older metadata-only resident IDs", async t => {
+  const { request, service, legacy, archivedIndividual, archiveReads } = await fixture(t);
+  const { token } = await service.changePassword({ username: 'amministratore', currentPassword: 'temporary-pass', newPassword: 'personal-password' });
+  legacy[0].filepath = path.join(path.dirname(legacy[0].filepath), 'missing.pdf');
+  legacy[0].period_key = '2026-05-01'; legacy[0].id_fattura = 'session-a';
+  const archived = { id: 'metadata-copy', condominio_id: 'building-a', id_utenza: null, document_type: 'bolletta_utente', fattura_id: 'session-a', metadata_json: '{"idUtenza":"resident-a","periodKey":"2026-05-01"}' };
+  archivedIndividual.push({ ...archived, id: 'wrong-session', fattura_id: 'session-b' }, archived);
+  const url = '/amministratore/condomini/building-a/documents/bolletta/legacy-a/view';
+  assert.equal((await request(url, { token })).status, 200);
+  assert.deepEqual(archiveReads, ['metadata-copy']);
+  archivedIndividual.pop();
+  assert.equal((await request(url, { token })).status, 410);
+  delete legacy[0].id_fattura; delete legacy[0].period_key;
+  assert.equal((await request(url, { token })).status, 410);
 });
 
 test("individual bills remain available with missing resident data and never expose another condominium's resident", async t => {

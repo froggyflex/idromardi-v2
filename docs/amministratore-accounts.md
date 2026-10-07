@@ -21,6 +21,12 @@ issued invoices, readings, contacts, search, CRM, or operator tools. Every PDF
 request validates both the assignment and the document's actual condominium.
 Client query filters cannot widen its scope. Existing archive/storage availability
 still governs whether a saved PDF can be opened.
+If an old individual bill's local file is missing, the PDF loader looks for its
+saved `bolletta_utente` copy in cloud storage. Recovery requires the same
+condominium, resident and billing session (or exact stored period key for older
+records without a session). It never substitutes another period or the complete
+condominium PDF, and does not recalculate or regenerate the bill. If neither
+copy exists, the portal reports that the original file needs restoring.
 The document area opens on the latest billing period, with separate prospetto
 and bollette cards, year and period filters, in-portal PDF preview, and direct
 downloads. Saved color/monochrome variants, individual bills, and prior versions

@@ -328,6 +328,27 @@ async function getGeneratedDocumentById(id, { condominioId, utenzaId } = {}) {
   return rows[0] || null;
 }
 
+async function findArchivedIndividualBolletta({ condominioId, utenzaId, fatturaId, periodKey } = {}) {
+  // Never substitute an unrelated resident, period or the complete PDF.
+  if (!condominioId || !utenzaId || (!fatturaId && !periodKey)) return null;
+  const columns = await getGeneratedDocumentColumns();
+  const hasMetadata = columns.has("metadata_json");
+  if (!columns.has("id_utenza") && !hasMetadata) return null;
+  if (!fatturaId && !hasMetadata) return null;
+  const metadata = "CASE WHEN JSON_VALID(metadata_json) THEN metadata_json ELSE '{}' END";
+  const metadataUtenza = `JSON_UNQUOTE(JSON_EXTRACT(${metadata}, '$.idUtenza'))`;
+  const utenza = columns.has("id_utenza")
+    ? hasMetadata ? `COALESCE(NULLIF(id_utenza, ''), ${metadataUtenza})` : "id_utenza"
+    : metadataUtenza;
+  const filters = ["condominio_id = ?", "document_type = 'bolletta_utente'", `${utenza} = ?`];
+  const params = [condominioId, utenzaId];
+  if (fatturaId) { filters.push("fattura_id = ?"); params.push(fatturaId); }
+  else { filters.push(`JSON_UNQUOTE(JSON_EXTRACT(${metadata}, '$.periodKey')) = ?`); params.push(periodKey); }
+  const [rows] = await db.query(`SELECT * FROM generated_documents
+    WHERE ${filters.join(" AND ")} ORDER BY created_at DESC LIMIT 1`, params);
+  return rows[0] || null;
+}
+
 function normalizeDocumentTypes(documentTypes) {
   if (!documentTypes) return [];
 
@@ -462,6 +483,7 @@ async function getLatestGeneratedDocument({
 module.exports = {
   DOCUMENT_MIME_TYPE,
   deletePdfFromR2,
+  findArchivedIndividualBolletta,
   getGeneratedDocumentById,
   getLatestGeneratedDocument,
   getPdfFromR2,

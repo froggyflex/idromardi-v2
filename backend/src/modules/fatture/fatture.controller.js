@@ -2,6 +2,25 @@ const service = require("./fatture.service");
 const { PDFDocument } = require("pdf-lib");
 const { readRipartizionePdf } = require("../../utils/ripartizionePdfStorage");
 
+async function readIndividualBolletta(pdf) {
+  try { return await readRipartizionePdf(pdf); }
+  catch (error) {
+    if (error.code !== "PDF_FILE_MISSING") throw error;
+    const archived = await service.findArchivedIndividualBolletta({
+      condominioId: pdf.condominio_id,
+      utenzaId: pdf.id_utenza,
+      fatturaId: pdf.id_fattura,
+      periodKey: pdf.period_key,
+    });
+    if (!archived) throw error;
+    try { return await service.getGeneratedDocumentBuffer(archived); }
+    catch (archiveError) {
+      if (archiveError.name === "NoSuchKey" || archiveError.$metadata?.httpStatusCode === 404) throw error;
+      throw archiveError;
+    }
+  }
+}
+
 
 exports.viewRipartizionePdfPeriod = async (req, res, next) => {
   try {
@@ -43,7 +62,7 @@ exports.viewRipartizionePdfPeriod = async (req, res, next) => {
     const mergedPdf = await PDFDocument.create();
 
     for (const pdf of pdfs) {
-      const fileBuffer = await readRipartizionePdf(pdf);
+      const fileBuffer = await readIndividualBolletta(pdf);
       const sourcePdf = await PDFDocument.load(fileBuffer);
       const copiedPages = await mergedPdf.copyPages(
         sourcePdf,
@@ -294,7 +313,7 @@ exports.viewRipartizionePdf = async (req, res, next) => {
       return res.status(404).json({ error: "PDF non trovato." });
     }
 
-    const buffer = await readRipartizionePdf(pdf);
+    const buffer = await readIndividualBolletta(pdf);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
