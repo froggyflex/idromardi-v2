@@ -29,14 +29,41 @@ async function requireAssignedCondominio(req, res, next) {
 
 router.get("/condomini/:condominioId/documents", requireAssignedCondominio, async (req, res, next) => {
   try {
-    const [generated] = await db.query(`SELECT id, document_type, filename, created_at
+    // Older archives do not all have the same optional metadata columns.
+    const [columns] = await db.query(`SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('generated_documents', 'ripartizione_pdfs')`);
+    const has = (table, column) => columns.some(row => row.TABLE_NAME === table && row.COLUMN_NAME === column);
+    const [generated] = await db.query(`SELECT id, fattura_id, document_type, filename, created_at,
+      ${has("generated_documents", "period_label") ? "period_label" : "NULL AS period_label"},
+      ${has("generated_documents", "metadata_json") ? "metadata_json" : "NULL AS metadata_json"}
       FROM generated_documents WHERE condominio_id = ?
       AND document_type IN ('prospetto', 'prospetto_bw', 'bollette_complete') ORDER BY created_at DESC`, [req.condominio.id]);
-    const [bollette] = await db.query(`SELECT id, filename, trimestre_label AS period_label, created_at
+    const [bollette] = await db.query(`SELECT id, filename, period_key, trimestre_label AS period_label, created_at,
+      ${has("ripartizione_pdfs", "id_fattura") ? "id_fattura AS fattura_id" : "NULL AS fattura_id"}
       FROM ripartizione_pdfs WHERE condominio_id = ? ORDER BY created_at DESC`, [req.condominio.id]);
+    const [periods] = await db.query(`SELECT fs.id, p.period_year, p.period_month
+      FROM fatture_sessioni fs LEFT JOIN letture_sessioni p ON p.id = fs.id_periodo_attuale
+      WHERE fs.id_condominio = ?`, [req.condominio.id]);
+    const withPeriod = doc => {
+      const period = periods.find(row => row.id === doc.fattura_id);
+      let metadata = doc.metadata_json || {};
+      if (typeof metadata === "string") {
+        try { metadata = JSON.parse(metadata) || {}; } catch { metadata = {}; }
+      }
+      const { metadata_json, fattura_id, ...publicDocument } = doc;
+      return {
+        ...publicDocument,
+        period_label: doc.period_label || metadata.periodLabel || metadata.trimestreLabel || null,
+        period_key: period?.period_year && period?.period_month
+          ? `${period.period_year}-${String(period.period_month).padStart(2, "0")}`
+          : doc.period_key || metadata.periodKey || null,
+        period_year: period?.period_year || null,
+        period_month: period?.period_month || null,
+      };
+    };
     res.json({ condominio: req.condominio, documents: [
-      ...generated.map(doc => ({ ...doc, source: "generated" })),
-      ...bollette.map(doc => ({ ...doc, document_type: "bolletta", source: "bolletta" })),
+      ...generated.map(doc => ({ ...withPeriod(doc), source: "generated" })),
+      ...bollette.map(doc => ({ ...withPeriod(doc), document_type: "bolletta", source: "bolletta" })),
     ] });
   } catch (error) { next(error); }
 });

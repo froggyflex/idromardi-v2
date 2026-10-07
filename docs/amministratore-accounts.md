@@ -21,6 +21,14 @@ issued invoices, readings, contacts, search, CRM, or operator tools. Every PDF
 request validates both the assignment and the document's actual condominium.
 Client query filters cannot widen its scope. Existing archive/storage availability
 still governs whether a saved PDF can be opened.
+The document area opens on the latest billing period, with separate prospetto
+and bollette cards, year and period filters, in-portal PDF preview, and direct
+downloads. Saved color/monochrome variants, individual bills, and prior versions
+remain accessible. Period identity comes from the associated billing session or
+saved archive metadata; generation dates are not used as billing periods.
+Documents lacking period metadata are shown in **Altri documenti**. PDF preview
+uses the browser's viewer, with download/new-tab actions available when inline
+viewing is unsupported.
 Legacy non-image `/uploads` files also require operator authentication; public
 building images and logos remain embeddable. An old raw PDF URL cannot bypass
 the portal's assignment checks. Operator requests to raw files must supply their
@@ -71,4 +79,6 @@ npm run test:amministratori-ui
 Access tests exercise the actual Express middleware and handlers with an isolated
 database fixture. Browser tests exercise account creation, assignment editing,
 first-login enforcement, the restricted portal, and entering/exiting assistance.
+Document checks cover period/year filtering, PDF actions, monochrome variants,
+individual bills, prior versions, empty/failure states, and mobile overflow.
 They do not connect to a live database or modify production accounts.

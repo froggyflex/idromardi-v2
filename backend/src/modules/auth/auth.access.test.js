@@ -15,14 +15,16 @@ async function fixture(t) {
   const audit = new Map();
   const downloads = [];
   const documents = [
-    { id: "prospetto-a", condominio_id: "building-a", document_type: "prospetto", filename: "prospetto.pdf" },
-    { id: "bollette-a", condominio_id: "building-a", document_type: "bollette_complete", filename: "bollette.pdf" },
+    { id: "prospetto-a", condominio_id: "building-a", fattura_id: "session-a", document_type: "prospetto", filename: "prospetto.pdf", metadata_json: '{"periodLabel":"6^26","private":"not exposed"}' },
+    { id: "bollette-a", condominio_id: "building-a", fattura_id: "session-a", document_type: "bollette_complete", filename: "bollette.pdf" },
     { id: "invoice-a", condominio_id: "building-a", document_type: "fattura_emessa", filename: "invoice.pdf" },
     { id: "prospetto-b", condominio_id: "building-b", document_type: "prospetto", filename: "other.pdf" },
   ];
   const legacy = [{ id: "legacy-a", condominio_id: "building-a", filename: "legacy.pdf" }, { id: "legacy-b", condominio_id: "building-b", filename: "other.pdf" }];
   async function query(sql, params = []) {
     const q = sql.replace(/\s+/g, " ").trim();
+    if (q.includes("FROM INFORMATION_SCHEMA.COLUMNS")) return [[{ TABLE_NAME: "generated_documents", COLUMN_NAME: "metadata_json" }, { TABLE_NAME: "generated_documents", COLUMN_NAME: "period_label" }, { TABLE_NAME: "ripartizione_pdfs", COLUMN_NAME: "id_fattura" }]];
+    if (q.includes("FROM fatture_sessioni")) return [[{ id: "session-a", period_year: 2026, period_month: 6 }]];
     if (q.startsWith("CREATE TABLE") || q.startsWith("ALTER TABLE")) return [{}];
     if (q.startsWith("SHOW COLUMNS")) return [[{ Field: "role", Type: "enum('ADMIN','REVIEWER','METER_READER','AMMINISTRATORE')" }, { Field: "must_change_password" }, { Field: "token_version" }]];
     if (q.startsWith("SELECT") && q.includes("FROM app_auth_users")) {
@@ -117,6 +119,10 @@ test("portal checks assignments and document ownership, denies other APIs, and i
   assert.equal((await request("/amministratore/condomini/building-b/documents", { token })).status, 404);
   const documents = await request("/amministratore/condomini/building-a/documents", { token });
   assert.deepEqual(documents.data.documents.map(doc => doc.id), ["prospetto-a", "bollette-a", "legacy-a"]);
+  assert.equal(documents.data.documents[0].period_key, "2026-06");
+  assert.equal(documents.data.documents[0].period_label, "6^26");
+  assert.equal(documents.data.documents[1].period_month, 6);
+  assert.equal(documents.data.documents[0].metadata_json, undefined);
   for (const [source, id] of [["generated", "prospetto-b"], ["generated", "invoice-a"], ["bolletta", "legacy-b"], ["unknown", "legacy-a"]]) assert.equal((await request(`/amministratore/condomini/building-a/documents/${source}/${id}/view`, { token })).status, 404);
   assert.equal((await request("/amministratore/condomini/building-a/documents/generated/prospetto-a/view?condominioId=building-b&idUtenza=other", { token })).status, 200);
   assert.deepEqual(downloads[0].query, { condominioId: "building-a" });
