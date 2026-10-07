@@ -20,7 +20,11 @@ async function fixture(t) {
     { id: "invoice-a", condominio_id: "building-a", document_type: "fattura_emessa", filename: "invoice.pdf" },
     { id: "prospetto-b", condominio_id: "building-b", document_type: "prospetto", filename: "other.pdf" },
   ];
-  const legacy = [{ id: "legacy-a", condominio_id: "building-a", filename: "legacy.pdf" }, { id: "legacy-b", condominio_id: "building-b", filename: "other.pdf" }];
+  const legacy = [{ id: "legacy-a", condominio_id: "building-a", id_utenza: "resident-a", filename: "legacy.pdf" }, { id: "legacy-b", condominio_id: "building-b", id_utenza: "resident-b", filename: "other.pdf" }];
+  const residents = [
+    { id: "resident-a", condominio_id: "building-a", Nome: " Mario ", Cognome: "Rossi", Interno: "0", Scala: "A" },
+    { id: "resident-b", condominio_id: "building-b", Nome: "Private", Cognome: "Resident", Interno: "99", Scala: "B" },
+  ];
   async function query(sql, params = []) {
     const q = sql.replace(/\s+/g, " ").trim();
     if (q.includes("FROM INFORMATION_SCHEMA.COLUMNS")) return [[{ TABLE_NAME: "generated_documents", COLUMN_NAME: "metadata_json" }, { TABLE_NAME: "generated_documents", COLUMN_NAME: "period_label" }, { TABLE_NAME: "ripartizione_pdfs", COLUMN_NAME: "id_fattura" }]];
@@ -53,7 +57,15 @@ async function fixture(t) {
     if (q.includes("FROM app_auth_impersonations")) { const row = audit.get(params[0]); return [[row].filter(row => row && !row.ended && row.actor_id === params[1] && row.target_id === params[2])]; }
     if (q.includes("FROM generated_documents") || q.includes("FROM ripartizione_pdfs")) {
       const source = q.includes("FROM generated_documents") ? documents.filter(doc => ["prospetto", "prospetto_bw", "bollette_complete"].includes(doc.document_type)) : legacy;
-      return [source.filter(doc => q.includes("WHERE id =") ? doc.id === params[0] && doc.condominio_id === params[1] : doc.condominio_id === params[0])];
+      const rows = source.filter(doc => q.includes("WHERE id =") ? doc.id === params[0] && doc.condominio_id === params[1] : doc.condominio_id === params[0]);
+      if (q.includes("LEFT JOIN utenze_v2")) {
+        assert(q.includes("u.condominio_id = r.condominio_id"), "Resident lookup must stay within the document's condominium");
+        return [rows.map(doc => {
+          const resident = residents.find(row => row.id === doc.id_utenza && row.condominio_id === doc.condominio_id);
+          return { ...doc, recipient_name: resident ? [resident.Nome, resident.Cognome].map(value => value.trim()).filter(Boolean).join(" ") || null : null, interno: resident?.Interno ?? null, scala: resident?.Scala ?? null };
+        })];
+      }
+      return [rows];
     }
     throw new Error(`Unexpected query: ${q}`);
   }
@@ -86,7 +98,7 @@ async function fixture(t) {
   }
   const admin = await service.login({ username: "admin", password: "admin-password" });
   const created = await service.createUser({ username: "amministratore", password: "temporary-pass", role: "AMMINISTRATORE", condominioIds: ["building-a"] });
-  return { request, service, admin, created, users, audit, downloads };
+  return { request, service, admin, created, users, audit, downloads, legacy, residents };
 }
 
 test("temporary credentials require a different personal password; previous sessions and credentials expire", async t => {
@@ -123,10 +135,32 @@ test("portal checks assignments and document ownership, denies other APIs, and i
   assert.equal(documents.data.documents[0].period_label, "6^26");
   assert.equal(documents.data.documents[1].period_month, 6);
   assert.equal(documents.data.documents[0].metadata_json, undefined);
+  assert.equal(documents.data.documents[2].recipient_name, "Mario Rossi");
+  assert.equal(documents.data.documents[2].interno, "0");
+  assert.equal(documents.data.documents[2].scala, "A");
   for (const [source, id] of [["generated", "prospetto-b"], ["generated", "invoice-a"], ["bolletta", "legacy-b"], ["unknown", "legacy-a"]]) assert.equal((await request(`/amministratore/condomini/building-a/documents/${source}/${id}/view`, { token })).status, 404);
   assert.equal((await request("/amministratore/condomini/building-a/documents/generated/prospetto-a/view?condominioId=building-b&idUtenza=other", { token })).status, 200);
   assert.deepEqual(downloads[0].query, { condominioId: "building-a" });
   assert.equal((await request("/amministratore/condomini/building-a/documents/bolletta/legacy-a/view", { token })).status, 200);
+});
+
+test("individual bills remain available with missing resident data and never expose another condominium's resident", async t => {
+  const { request, service, legacy, residents } = await fixture(t);
+  legacy.push(
+    { id: "missing-resident", condominio_id: "building-a", id_utenza: "deleted-resident", filename: "missing.pdf" },
+    { id: "mismatched-resident", condominio_id: "building-a", id_utenza: "resident-b", filename: "mismatched.pdf" },
+    { id: "surname-only", condominio_id: "building-a", id_utenza: "surname-only", filename: "surname.pdf" },
+  );
+  residents.push({ id: "surname-only", condominio_id: "building-a", Nome: " ", Cognome: " Eredi Rossi ", Interno: "2A", Scala: null });
+  const { token } = await service.changePassword({ username: "amministratore", currentPassword: "temporary-pass", newPassword: "personal-password" });
+  const response = await request("/amministratore/condomini/building-a/documents", { token });
+  assert.equal(response.status, 200);
+  for (const id of ["missing-resident", "mismatched-resident"]) {
+    const doc = response.data.documents.find(row => row.id === id);
+    assert.equal(doc.recipient_name, null); assert.equal(doc.interno, null); assert.equal(doc.scala, null);
+  }
+  assert.equal(response.data.documents.find(row => row.id === "surname-only").recipient_name, "Eredi Rossi");
+  assert(!JSON.stringify(response.data).includes("Private Resident"));
 });
 
 test("only admins can impersonate; first-login support is read-only, audited and revocable, and returns to the operator", async t => {

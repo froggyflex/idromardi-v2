@@ -38,9 +38,12 @@ router.get("/condomini/:condominioId/documents", requireAssignedCondominio, asyn
       ${has("generated_documents", "metadata_json") ? "metadata_json" : "NULL AS metadata_json"}
       FROM generated_documents WHERE condominio_id = ?
       AND document_type IN ('prospetto', 'prospetto_bw', 'bollette_complete') ORDER BY created_at DESC`, [req.condominio.id]);
-    const [bollette] = await db.query(`SELECT id, filename, period_key, trimestre_label AS period_label, created_at,
-      ${has("ripartizione_pdfs", "id_fattura") ? "id_fattura AS fattura_id" : "NULL AS fattura_id"}
-      FROM ripartizione_pdfs WHERE condominio_id = ? ORDER BY created_at DESC`, [req.condominio.id]);
+    const [bollette] = await db.query(`SELECT r.id, r.filename, r.period_key, r.trimestre_label AS period_label, r.created_at,
+      ${has("ripartizione_pdfs", "id_fattura") ? "r.id_fattura AS fattura_id" : "NULL AS fattura_id"},
+      NULLIF(CONCAT_WS(' ', NULLIF(TRIM(u.Nome), ''), NULLIF(TRIM(u.Cognome), '')), '') AS recipient_name,
+      u.Interno AS interno, u.Scala AS scala
+      FROM ripartizione_pdfs r LEFT JOIN utenze_v2 u ON u.id = r.id_utenza AND u.condominio_id = r.condominio_id
+      WHERE r.condominio_id = ? ORDER BY r.created_at DESC`, [req.condominio.id]);
     const [periods] = await db.query(`SELECT fs.id, p.period_year, p.period_month
       FROM fatture_sessioni fs LEFT JOIN letture_sessioni p ON p.id = fs.id_periodo_attuale
       WHERE fs.id_condominio = ?`, [req.condominio.id]);

@@ -1,0 +1,129 @@
+.amma-workspace { color: #24374e; font-size: 13px; max-width: 1400px; margin: 0 auto; }
+.amma-workspace :is(button,input,select) { font-family: inherit; }
+.amma-workspace :is(button,input,select):focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.amma-workspace button { cursor: pointer; }
+.amma-workspace button:disabled { opacity: .5; cursor: default; }
+.amma-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 22px; }
+.amma-eyebrow { margin: 0 0 5px; color: #71849a; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.amma-header h1 { font-size: 23px; line-height: 1.3; font-weight: 750; letter-spacing: -.025em; margin: 0; }
+.amma-header > div > p:last-child { color: #6f8095; font-size: 12px; margin: 6px 0 0; }
+.amma-button { display: inline-flex; justify-content: center; align-items: center; gap: 6px; min-height: 34px; border: 1px solid #d7e0eb; border-radius: 7px; background: white; color: #50657e; padding: 0 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.amma-button:hover:not(:disabled) { border-color: #b9cbe3; background: #f6f9fe; }
+.amma-button--primary { color: white; background: #2563eb; border-color: #2563eb; }
+.amma-button--primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
+.amma-button--icon { width: 34px; padding: 0; flex-shrink: 0; }
+.amma-accounts { background: white; border: 1px solid #dfe6ef; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px #172b4504; }
+.amma-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 13px 16px; border-bottom: 1px solid #e5eaf1; }
+.amma-search { display: flex; align-items: center; gap: 7px; border: 1px solid #d8e1ec; border-radius: 7px; padding: 0 9px; background: white; min-width: 0; color: #8091a8; }
+.amma-toolbar > .amma-search { flex: 0 1 260px; }
+.amma-search svg { flex-shrink: 0; }
+.amma-search input { width: 100%; min-width: 0; height: 34px; font-size: 12px; color: #334b68; background: none; border: none; outline: none; }
+.amma-search:focus-within { border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
+.amma-workspace select { height: 34px; border: 1px solid #d8e1ec; border-radius: 7px; background: white; padding: 0 7px; color: #5c7089; font-size: 12px; min-width: 0; }
+.amma-summary { font-size: 11px; color: #657a93; margin-left: auto; white-space: nowrap; }
+.amma-summary > span { color: #8290a2; }
+.amma-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.amma-table th { height: 37px; background: #f8fafc; text-align: left; color: #8291a4; font-size: 10px; letter-spacing: .035em; font-weight: 650; padding: 0 16px; border-bottom: 1px solid #e8edf3; }
+.amma-table th:nth-child(1) { width: 24%; }
+.amma-table th:nth-child(2) { width: 23%; }
+.amma-table th:nth-child(3) { width: 27%; }
+.amma-table th:nth-child(4) { width: 26%; }
+.amma-table td { padding: 11px 16px; vertical-align: middle; border-bottom: 1px solid #edf1f6; }
+.amma-table tbody tr:last-child td { border-bottom: none; }
+.amma-table tbody tr:hover { background: #fafcff; }
+.amma-account-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.amma-avatar { display: inline-flex; align-items: center; justify-content: center; width: 31px; height: 31px; border-radius: 8px; background: #eff4fc; border: 1px solid #e1e9f5; color: #5276aa; font-size: 10px; font-weight: 750; flex-shrink: 0; }
+.amma-account-name strong { color: #344b66; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+.amma-status { display: inline-flex; align-items: center; gap: 6px; color: #527d6a; font-size: 10px; line-height: 1.5; }
+.amma-status > span { flex-shrink: 0; width: 5px; height: 5px; border-radius: 100%; background: #3a9d76; }
+.amma-status--pending { color: #a07b37; }
+.amma-status--pending > span { background: #dba248; }
+.amma-account-buildings { min-width: 0; }
+.amma-account-buildings strong { display: flex; align-items: center; gap: 6px; color: #4c637e; font-size: 11px; font-weight: 600; }
+.amma-account-buildings > span { display: block; margin-top: 3px; font-size: 10px; color: #78899e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amma-row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.amma-row-actions .amma-button { min-height: 30px; padding: 0 8px; font-size: 11px; }
+.amma-support-button { color: #3b6abe; background: #f6f9ff; border-color: #dce7f8; }
+.amma-row-actions .amma-support-button { width: 30px; padding: 0; }
+.amma-row-actions .amma-support-button span { display: none; }
+.amma-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-top: 1px solid #e5eaf1; color: #7c8da3; font-size: 11px; }
+.amma-pagination > div { display: flex; align-items: center; gap: 10px; }
+.amma-pagination .amma-button { width: 28px; min-height: 28px; }
+.amma-support-note { display: flex; align-items: start; gap: 7px; margin: 14px 0 0; color: #7c8da2; font-size: 11px; line-height: 1.6; }
+.amma-support-note svg { flex-shrink: 0; margin-top: 1px; }
+.amma-notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin-bottom: 14px; border: 1px solid; border-radius: 8px; font-size: 12px; line-height: 1.6; }
+.amma-notice > svg { flex-shrink: 0; }
+.amma-notice > span { flex: 1; }
+.amma-notice--error { color: #b91c1c; background: #fff5f5; border-color: #fecaca; }
+.amma-notice--success { color: #217053; background: #f2fbf6; border-color: #c8ead7; }
+.amma-notice .amma-button { background: none; border: 0; color: inherit; }
+.amma-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 45px 20px; color: #8193aa; text-align: center; }
+.amma-empty h2 { margin: 15px 0 5px; color: #526981; font-size: 15px; font-weight: 650; }
+.amma-empty p { margin: 10px 0; color: #7c8fa6; font-size: 12px; }
+.amma-overlay { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 24px; background: #172b457a; backdrop-filter: blur(3px); }
+.amma-dialog { width: min(720px, 100%); max-height: calc(100dvh - 48px); display: flex; flex-direction: column; background: white; border: 1px solid #dce5ef; border-radius: 14px; box-shadow: 0 22px 75px #10223c33; overflow: hidden; }
+.amma-dialog-header { display: flex; justify-content: space-between; align-items: start; gap: 15px; flex-shrink: 0; padding: 19px 22px 16px; border-bottom: 1px solid #e7ecf2; }
+.amma-dialog-header h2 { margin: 0; font-size: 18px; font-weight: 720; letter-spacing: -.015em; }
+.amma-dialog-header p { margin: 5px 0 0; color: #798ba1; font-size: 12px; }
+.amma-dialog-header .amma-button { min-height: 28px; width: 28px; border-color: transparent; }
+.amma-editor-form { display: flex; flex-direction: column; min-height: 0; }
+.amma-dialog-body { padding: 18px 22px 20px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.amma-credentials { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; max-width: 590px; }
+.amma-credentials label > span { display: block; color: #536981; font-size: 11px; font-weight: 650; margin-bottom: 5px; }
+.amma-credentials input { width: 100%; min-width: 0; height: 35px; border: 1px solid #d6e0ec; border-radius: 7px; color: #334b67; padding: 0 10px; font-size: 13px; }
+.amma-password-field { display: flex; align-items: center; position: relative; }
+.amma-password-field input { padding-right: 35px; }
+.amma-password-field button { position: absolute; right: 4px; display: grid; place-items: center; width: 27px; height: 27px; color: #8b9ab0; border-radius: 4px; background: transparent; }
+.amma-credential-note { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #7c8ea4; margin: 10px 0 22px; }
+.amma-credential-note svg { flex-shrink: 0; }
+.amma-edit-identity { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 0 0 15px; border-bottom: 1px solid #edf1f6; }
+.amma-edit-identity > div { flex: 1; min-width: 0; }
+.amma-edit-identity strong { display: block; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.amma-edit-identity > div > span { display: block; font-size: 10px; color: #8091a6; margin-top: 3px; }
+.amma-section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.amma-section-title h3 { font-size: 12px; font-weight: 700; margin: 0; }
+.amma-section-title > span { color: #6986ae; font-size: 11px; }
+.amma-picker-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); border: 1px solid #dfe6ef; border-radius: 9px; overflow: hidden; }
+.amma-available { min-width: 0; }
+.amma-picker-toolbar { display: flex; align-items: center; gap: 7px; padding: 10px; }
+.amma-picker-toolbar .amma-search { flex: 1; }
+.amma-picker-toolbar input { height: 31px; font-size: 11px; }
+.amma-picker-toolbar select { max-width: 106px; height: 31px; font-size: 11px; padding: 0 5px; }
+.amma-visible { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0 11px 9px; border-bottom: 1px solid #e8edf4; color: #8092a8; font-size: 10px; }
+.amma-visible button { color: #4c79b4; font-size: 10px; background: none; padding: 0; }
+.amma-building-list { height: var(--amma-picker-height, 250px); overflow-y: auto; overscroll-behavior: contain; }
+.amma-building { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 8px 11px; border-bottom: 1px solid #eef2f7; cursor: pointer; }
+.amma-building:last-child { border-bottom: 0; }
+.amma-building:hover { background: #f8fbff; }
+.amma-building--selected { background: #f2f7ff; }
+.amma-building input { width: 14px; height: 14px; flex-shrink: 0; accent-color: #2563eb; }
+.amma-building-code { min-width: 25px; padding: 3px 4px; font-size: 10px; text-align: center; color: #7d91ad; background: #f0f4f9; border-radius: 4px; flex-shrink: 0; }
+.amma-building-name { min-width: 0; }
+.amma-building-name strong { display: block; font-size: 11px; line-height: 1.5; color: #4c6481; font-weight: 600; overflow-wrap: anywhere; }
+.amma-building-name small { display: block; font-size: 10px; color: #7f90a5; margin-top: 2px; overflow-wrap: anywhere; }
+.amma-selection { min-width: 0; border-left: 1px solid #e1e8f1; background: #f8fafd; }
+.amma-selection-title { display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 12px; color: #6e88ab; }
+.amma-selection-title strong { flex: 1; font-size: 11px; color: #587394; font-weight: 650; }
+.amma-selection-title > span { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #eaf1fa; }
+.amma-selected-list { height: calc(var(--amma-picker-height, 250px) + 32px); overflow-y: auto; padding: 3px 10px 10px; overscroll-behavior: contain; }
+.amma-selected-building { display: flex; align-items: start; gap: 6px; margin-bottom: 6px; padding: 9px 8px; border: 1px solid #e0e8f3; border-radius: 6px; background: white; }
+.amma-selected-building > svg { flex-shrink: 0; color: #7791b6; margin-top: 2px; }
+.amma-selected-building > div { flex: 1; min-width: 0; }
+.amma-selected-building strong { display: block; font-size: 10px; line-height: 1.6; font-weight: 600; color: #566f90; overflow-wrap: anywhere; }
+.amma-selected-building small { display: block; font-size: 9px; color: #8295af; margin-top: 2px; }
+.amma-selected-building button { display: grid; place-items: center; flex-shrink: 0; width: 20px; height: 20px; color: #8d9eb5; border-radius: 4px; background: none; }
+.amma-selected-building button:hover { background: #eff4fb; color: #365d91; }
+.amma-selection-empty, .amma-picker-empty { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 130px; padding: 16px; color: #9aabc0; text-align: center; }
+.amma-selection-empty p, .amma-picker-empty span { font-size: 11px; color: #8296af; margin: 10px 0 4px; }
+.amma-selection-empty small { font-size: 10px; color: #9aaac0; }
+.amma-picker-empty button { font-size: 11px; color: #567caf; margin-top: 10px; }
+.amma-dialog-footer { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding: 13px 22px; border-top: 1px solid #e5ebf2; background: #fafbfd; }
+.amma-dialog-footer > p { font-size: 11px; color: #71859f; margin: 0; }
+.amma-dialog-footer > p > span { color: #5176aa; }
+.amma-dialog-footer > div { display: flex; gap: 8px; }
+.amma-spin { animation: amma-spin 1s linear infinite; }
+@keyframes amma-spin { to { transform: rotate(360deg); } }
+@media (max-width: 1100px) { .amma-table th:nth-child(1) { width: 24%; } .amma-table th:nth-child(2) { width: 25%; } .amma-table th:nth-child(3) { width: 29%; } .amma-table th:nth-child(4) { width: 22%; } .amma-table th, .amma-table td { padding-left: 12px; padding-right: 12px; } .amma-row-actions .amma-button:first-child { min-width: 30px; padding: 0 6px; } .amma-row-actions .amma-button:first-child span { display: none; } .amma-avatar { width: 28px; height: 28px; } }
+@media (max-width: 700px) { .amma-header { align-items: start; flex-wrap: wrap; } .amma-header h1 { font-size: 21px; } .amma-toolbar { padding: 12px; gap: 8px; } .amma-toolbar > .amma-search { flex: 1 1 100%; } .amma-toolbar > select { flex: 1; max-width: 210px; } .amma-summary { flex: 1; text-align: right; } .amma-summary > span { display: none; } .amma-table thead { display: none; } .amma-table, .amma-table tbody { display: block; } .amma-table tr { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 0 8px; padding: 13px 14px; border-bottom: 1px solid #e6ecf4; } .amma-table tr:last-child { border-bottom: none; } .amma-table td { padding: 0; border: none; } .amma-table td:nth-child(1) { grid-column: 1; grid-row: 1; padding-bottom: 5px; } .amma-table td:nth-child(2) { grid-column: 1; grid-row: 2; padding-left: 37px; } .amma-table td:nth-child(3) { grid-column: 1 / -1; grid-row: 3; padding: 10px 0 0 37px; } .amma-table td:nth-child(4) { grid-column: 2; grid-row: 1 / 3; align-self: center; } .amma-account-name { gap: 9px; } .amma-account-name strong { font-size: 13px; } .amma-row-actions .amma-button { min-height: 36px; width: 36px; } .amma-row-actions .amma-button:first-child span { display: none; } .amma-account-buildings > span { white-space: normal; line-height: 1.5; margin-top: 4px; } .amma-edit-identity { flex-wrap: wrap; } .amma-edit-identity .amma-status { margin-left: 41px; } }
+@media (max-width: 540px) { .amma-overlay { padding: 12px; align-items: center; } .amma-dialog { max-height: calc(100dvh - 24px); border-radius: 11px; } .amma-dialog-header { padding: 16px; } .amma-dialog-header p { font-size: 11px; line-height: 1.6; } .amma-dialog-body { padding: 16px; } .amma-credentials { grid-template-columns: minmax(0,1fr); gap: 12px; } .amma-credentials input { height: 38px; } .amma-credential-note { align-items: start; line-height: 1.6; } .amma-credential-note svg { margin-top: 1px; } .amma-picker-grid { grid-template-columns: minmax(0,1fr); } .amma-building-list { height: min(var(--amma-picker-height, 250px), 192px); } .amma-selection { border-left: 0; border-top: 1px solid #e1e8f1; } .amma-selection-title { height: 35px; } .amma-selected-list { height: auto; max-height: 112px; padding-bottom: 5px; } .amma-selection-empty { min-height: 0; padding: 0 12px 12px; } .amma-selection-empty > svg, .amma-selection-empty small { display: none; } .amma-selection-empty p { margin: 0; font-size: 10px; } .amma-selected-building { align-items: center; padding: 7px 8px; } .amma-selected-building > div { display: flex; align-items: center; gap: 7px; } .amma-selected-building small { margin: 0; white-space: nowrap; } .amma-selected-building button { width: 26px; height: 26px; } .amma-dialog-footer { padding: 12px 16px; } .amma-dialog-footer > div { margin-left: auto; } .amma-dialog-footer .amma-button { min-height: 38px; } .amma-toolbar input, .amma-picker-toolbar input { font-size: 12px; } }
+@media (prefers-reduced-motion: reduce) { .amma-spin { animation: none; } }

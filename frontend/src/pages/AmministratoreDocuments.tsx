@@ -8,12 +8,20 @@ type Condominio = { id: string; codice: number; nome: string; indirizzo: string;
 type SavedDocument = {
   id: string; source: string; document_type: string; filename: string; created_at: string;
   period_label?: string | null; period_key?: string | null; period_year?: number | null; period_month?: number | null;
+  recipient_name?: string | null; interno?: string | number | null; scala?: string | null;
 };
 type Period = { key: string; label: string; year: string; order: number; documents: SavedDocument[] };
 type Action = "preview" | "download";
 const documentKey = (doc: SavedDocument) => `${doc.source}:${doc.id}`;
 const timestamp = (value: string) => new Date(String(value || "").replace(" ", "T")).getTime() || 0;
 const dateLabel = (value: string) => timestamp(value) ? new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "short", year: "numeric" }).format(new Date(timestamp(value))) : "Data non disponibile";
+const documentTitle = (doc: SavedDocument) => doc.document_type === "bolletta" ? doc.recipient_name?.trim() || "Bolletta individuale" : doc.filename;
+function unitLabel(doc: SavedDocument) {
+  const interno = String(doc.interno ?? "").trim();
+  const scala = doc.scala?.trim();
+  return [interno ? `Interno ${interno}` : "Interno non indicato", scala ? `Scala ${scala}` : ""].filter(Boolean).join(" · ");
+}
+const actionLabel = (doc: SavedDocument) => `${documentTitle(doc)}${doc.document_type === "bolletta" ? ` · ${unitLabel(doc)}` : ""}`;
 
 function documentPeriod(doc: SavedDocument): Omit<Period, "documents"> {
   const keyMatch = String(doc.period_key || "").match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
@@ -58,10 +66,10 @@ function DocumentCard({ kind, documents, onAction, busy }: {
   </article>;
 }
 
-function Preview({ preview, onClose }: { preview: { doc: SavedDocument; url: string }; onClose: () => void }) {
+function Preview({ preview, onClose, returnFocus }: { preview: { doc: SavedDocument; url: string }; onClose: () => void; returnFocus: HTMLElement | null }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const focused = document.activeElement as HTMLElement | null;
+    const focused = returnFocus || document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
@@ -78,10 +86,10 @@ function Preview({ preview, onClose }: { preview: { doc: SavedDocument; url: str
         else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
       }
     }}>
-      <div className="ammd-preview-header"><div className="ammd-preview-heading"><FileText size={22} /><div><h2 id="ammd-preview-title">{preview.doc.document_type.startsWith("prospetto") ? "Prospetto di ripartizione" : "Bollette del condominio"}</h2><p>{preview.doc.filename}</p></div></div>
+      <div className="ammd-preview-header"><div className="ammd-preview-heading"><FileText size={22} /><div><h2 id="ammd-preview-title">{preview.doc.document_type === "bolletta" ? documentTitle(preview.doc) : preview.doc.document_type.startsWith("prospetto") ? "Prospetto di ripartizione" : "Bollette del condominio"}</h2><p>{preview.doc.document_type === "bolletta" ? unitLabel(preview.doc) : preview.doc.filename}</p></div></div>
         <div className="ammd-preview-actions"><button className="ammd-button" onClick={download}><ArrowDownToLine size={16} />Scarica PDF</button><a className="ammd-button" href={preview.url} target="_blank" rel="noopener noreferrer"><ArrowUpRight size={16} />Nuova scheda</a><button aria-label="Chiudi anteprima" className="ammd-button ammd-button--icon" onClick={onClose}><X size={20} /></button></div>
       </div>
-      <iframe src={preview.url} title={`Anteprima: ${preview.doc.filename}`} />
+      <iframe src={preview.url} title={`Anteprima: ${actionLabel(preview.doc)}`} />
       <p className="ammd-preview-help">Se il PDF non viene mostrato, usa “Scarica PDF” o “Nuova scheda”.</p>
     </div>
   </div>;
@@ -101,6 +109,7 @@ export default function AmministratoreDocuments() {
   const [preview, setPreview] = useState<{ doc: SavedDocument; url: string } | null>(null);
   const requestSequence = useRef(0);
   const previewUrl = useRef<string | null>(null);
+  const previewTrigger = useRef<HTMLElement | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -134,6 +143,7 @@ export default function AmministratoreDocuments() {
   async function handleAction(doc: SavedDocument, action: Action) {
     if (busy) return;
     const sequence = requestSequence.current;
+    if (action === "preview") previewTrigger.current = document.activeElement as HTMLElement | null;
     setBusy(`${documentKey(doc)}:${action}`); setActionError("");
     try {
       const { data } = await api.get(`/amministratore/condomini/${id}/documents/${doc.source}/${doc.id}/view`, { responseType: "blob" });
@@ -151,7 +161,19 @@ export default function AmministratoreDocuments() {
   }
   function closePreview() { setPreview(null); if (previewUrl.current) URL.revokeObjectURL(previewUrl.current); previewUrl.current = null; }
   function documentRows(items: SavedDocument[]) {
-    return items.map(doc => <div className="ammd-file-row" key={documentKey(doc)}><FileText size={19} /><div><p>{doc.filename}</p><span>{dateLabel(doc.created_at)}{doc.document_type === "prospetto_bw" ? " · Bianco e nero" : ""}</span></div><button className="ammd-button" disabled={Boolean(busy)} onClick={() => void handleAction(doc, "preview")} aria-label={`Visualizza ${doc.filename}`}><Eye size={16} /><span>Visualizza</span></button><button className="ammd-button ammd-button--icon" disabled={Boolean(busy)} onClick={() => void handleAction(doc, "download")} aria-label={`Scarica ${doc.filename}`}><ArrowDownToLine size={16} /></button></div>);
+    return items.map(doc => {
+      const previewing = busy === `${documentKey(doc)}:preview`;
+      const downloading = busy === `${documentKey(doc)}:download`;
+      return <div className="ammd-file-row" key={documentKey(doc)}><FileText size={19} /><div>
+        <p>{documentTitle(doc)}</p>
+        {doc.document_type === "bolletta" && <span className="ammd-file-unit">{unitLabel(doc)}</span>}
+        <span className="ammd-file-date">{dateLabel(doc.created_at)}{doc.document_type === "prospetto_bw" ? " · Bianco e nero" : ""}</span>
+      </div><button className="ammd-button" disabled={Boolean(busy)} aria-busy={previewing} onClick={() => void handleAction(doc, "preview")} aria-label={`Visualizza ${actionLabel(doc)}`} title={previewing ? "Apertura PDF…" : `Visualizza ${actionLabel(doc)}`}>
+        {previewing ? <LoaderCircle size={16} className="ammd-spin" /> : <Eye size={16} />}<span>{previewing ? "Apertura…" : "Visualizza"}</span>
+      </button><button className="ammd-button ammd-button--icon" disabled={Boolean(busy)} aria-busy={downloading} onClick={() => void handleAction(doc, "download")} aria-label={`Scarica ${actionLabel(doc)}`} title={downloading ? "Scaricamento PDF…" : `Scarica ${actionLabel(doc)}`}>
+        {downloading ? <LoaderCircle size={16} className="ammd-spin" /> : <ArrowDownToLine size={16} />}
+      </button></div>;
+    });
   }
   return <div className="ammd-workspace">
     <Link to="/amministratore" className="ammd-back"><ArrowLeft size={16} />I tuoi condomini</Link>
@@ -177,6 +199,6 @@ export default function AmministratoreDocuments() {
         </>}
       </section>
     </div>}
-    {preview && <Preview preview={preview} onClose={closePreview} />}
+    {preview && <Preview preview={preview} onClose={closePreview} returnFocus={previewTrigger.current} />}
   </div>;
 }
