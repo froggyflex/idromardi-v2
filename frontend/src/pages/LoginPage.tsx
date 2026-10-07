@@ -26,7 +26,7 @@ export default function LoginPage() {
       const { data } = await api.post("/auth/login", { username, password });
       setAuthSession(data.token, data.user);
       const state = location.state as { from?: string } | null;
-      navigate(state?.from || "/", { replace: true });
+      navigate(data.user.mustChangePassword ? "/password-change" : data.user.role === "AMMINISTRATORE" ? "/amministratore" : state?.from || "/", { replace: true });
     } catch (err: unknown) {
       const message = isAxiosError<{ error?: unknown }>(err) ? err.response?.data?.error : undefined;
       setError(typeof message === "string" && message ? message : "Credenziali non valide");
@@ -43,7 +43,7 @@ export default function LoginPage() {
       >
         <div className="mb-6">
           <h1 className="text-xl font-bold text-slate-900">Accesso Idromardi</h1>
-          <p className="mt-1 text-sm text-slate-500">Inserisci le credenziali operatore.</p>
+          <p className="mt-1 text-sm text-slate-500">Inserisci le credenziali del tuo account.</p>
         </div>
 
         {error && (

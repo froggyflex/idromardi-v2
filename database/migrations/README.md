@@ -51,3 +51,10 @@ condominium overrides in MySQL. The template service creates this additive table
 on first use. Apply the migration before deployment when the application database
 user does not have CREATE TABLE permission. Existing PDF archives are unchanged;
 new generations resolve the latest default and the selected condominium overrides.
+
+`010_amministratore_accounts.sql` adds the `AMMINISTRATORE` role, first-login
+password enforcement, session versions, condominium assignments, and support
+session audit records. The auth service ensures this schema on first use;
+`npm run migrate:amministratori` applies it ahead of time. For database users
+without schema privileges, apply the SQL with a migration account after `001`.
+See [the account workflow](../../docs/amministratore-accounts.md).

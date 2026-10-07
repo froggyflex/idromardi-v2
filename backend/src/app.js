@@ -16,7 +16,7 @@ const authRoutes = require("./modules/auth/auth.routes");
 const mobileReadingsRoutes = require("./modules/mobileReadings/mobileReadings.routes");
 const metaRoutes = require("./modules/meta/meta.routes");
 const searchRoutes = require("./modules/search/search.routes");
-const { requireAuth } = require("./modules/auth/auth.middleware");
+const { requireAuth, restrictAmministratore, protectUploadedDocuments } = require("./modules/auth/auth.middleware");
 const { PDF_EXPORT_PATHS, parsePdfExportJson } = require("./utils/pdf-request-body");
 
 const app = express();
@@ -82,7 +82,7 @@ app.get("/health", (req, res) => {
 // Keep any legacy meter-photo paths private even if an older deployment wrote
 // files below the otherwise public uploads directory.
 app.use("/uploads/mobile-readings", (req, res) => res.status(404).end());
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+app.use("/uploads", protectUploadedDocuments, express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/meta", (req,res,next) => {
@@ -93,6 +93,8 @@ app.use("/api/meta", (req,res,next) => {
 // rejects unsigned POST requests before any payload is persisted.
 app.use("/api/meta", metaRoutes.publicRouter);
 app.use("/api", requireAuth);
+app.use("/api", restrictAmministratore);
+app.use("/api/amministratore", require("./modules/amministratori/portal.routes"));
 
 app.use("/api/search", searchRoutes);
 app.use("/api/condomini", condominiRoutes);

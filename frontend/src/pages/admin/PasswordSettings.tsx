@@ -1,8 +1,11 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import api from "../../api/client";
+import { getAuthUser, setAuthSession } from "../../auth";
 
 export default function PasswordSettings() {
+  const user = getAuthUser();
+  const firstLogin = Boolean(user?.mustChangePassword);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -22,10 +25,15 @@ export default function PasswordSettings() {
 
     try {
       setSaving(true);
-      await api.post("/auth/change-password", {
+      const { data } = await api.post("/auth/change-password", {
         currentPassword,
         newPassword,
       });
+      setAuthSession(data.token, data.user);
+      if (firstLogin) {
+        window.location.href = data.user.role === "AMMINISTRATORE" ? "/amministratore" : "/";
+        return;
+      }
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -39,9 +47,9 @@ export default function PasswordSettings() {
 
   return (
     <div className="max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h1 className="text-xl font-bold text-slate-900">Password operatore</h1>
+      <h1 className="text-xl font-bold text-slate-900">{firstLogin ? "Scegli la tua password" : "Password account"}</h1>
       <p className="mt-1 text-sm text-slate-500">
-        Aggiorna la password usata per accedere alla piattaforma.
+        {firstLogin ? "Al primo accesso devi sostituire la password temporanea prima di consultare i tuoi condomini." : "Aggiorna la password usata per accedere alla piattaforma."}
       </p>
 
       {message && (
@@ -65,6 +73,7 @@ export default function PasswordSettings() {
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
             type="password"
+            required
             className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
             autoComplete="current-password"
           />
@@ -78,6 +87,8 @@ export default function PasswordSettings() {
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             type="password"
+            required
+            minLength={8}
             className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
             autoComplete="new-password"
           />
@@ -91,6 +102,8 @@ export default function PasswordSettings() {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             type="password"
+            required
+            minLength={8}
             className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
             autoComplete="new-password"
           />

@@ -35,6 +35,10 @@ docker-compose.yml          Local MySQL, API, and browser UI
 See [the architecture and safety model](docs/mobile-readings-architecture.md)
 and [the mobile API contract](docs/mobile-readings-api.md).
 
+Condominium administrators have a separate read-only portal with assigned
+buildings and saved prospetti/bollette, mandatory initial password replacement,
+and audited operator support access. See [amministratore accounts](docs/amministratore-accounts.md).
+
 ## Local setup
 
 Node.js 22.13 or later is required by Expo SDK 57.

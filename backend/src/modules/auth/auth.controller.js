@@ -15,6 +15,8 @@ exports.me = async (req, res) => {
       username: req.user?.username || "admin",
       id: req.user?.sub || null,
       role: req.user?.role || (req.user?.username === "admin" ? "ADMIN" : null),
+      mustChangePassword: Boolean(req.user?.mustChangePassword),
+      ...(req.user?.impersonation ? { impersonation: req.user.impersonation } : {}),
     },
   });
 };
@@ -37,6 +39,7 @@ exports.createUser = async (req, res) => {
 };
 
 exports.changePassword = async (req, res) => {
+  if (req.user?.impersonation) return res.status(403).json({ error: "Il cambio password non è disponibile durante l'assistenza" });
   try {
     const result = await service.changePassword({
       username: req.user?.username || "admin",
@@ -47,4 +50,17 @@ exports.changePassword = async (req, res) => {
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || "Errore cambio password" });
   }
+};
+
+exports.updateAssignments = async (req, res, next) => {
+  try { res.json(await service.updateAssignments(req.params.id, req.body?.condominioIds)); } catch (error) { next(error); }
+};
+exports.listAssignableCondomini = async (req, res, next) => {
+  try { res.json(await service.listAssignableCondomini()); } catch (error) { next(error); }
+};
+exports.startImpersonation = async (req, res, next) => {
+  try { res.json(await service.startImpersonation(req.user, req.params.id)); } catch (error) { next(error); }
+};
+exports.endImpersonation = async (req, res, next) => {
+  try { res.json(await service.endImpersonation(req.user)); } catch (error) { next(error); }
 };

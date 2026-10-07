@@ -24,7 +24,9 @@ import MetaBusinessPage from "./pages/admin/MetaBusinessPage";
 import DocumentNumberSettings from "./pages/admin/DocumentNumberSettings";
 import BollettaTemplateEditor from "./pages/admin/BollettaTemplateEditor";
 import GlobalSearchPage from "./pages/GlobalSearchPage";
-import { isAuthenticated } from "./auth";
+import AmministratoriAccounts from "./pages/admin/AmministratoriAccounts";
+import AmministratorePortal from "./pages/AmministratorePortal";
+import { getAuthUser, clearAuthSession, isAuthenticated } from "./auth";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const location = useLocation();
@@ -33,6 +35,13 @@ function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
+  const user = getAuthUser();
+  if (user?.mustChangePassword && !user?.impersonation) {
+    if (location.pathname !== "/password-change") return <Navigate to="/password-change" replace />;
+    return <div className="min-h-screen bg-slate-100 p-6"><div className="mx-auto max-w-xl"><PasswordSettings /><button className="mt-4 text-sm text-slate-600 underline" onClick={() => { clearAuthSession(); window.location.href = "/login"; }}>Esci</button></div></div>;
+  }
+  if (user?.role === "AMMINISTRATORE") return <AmministratorePortal />;
+
   return children;
 }
 
@@ -40,6 +49,7 @@ function App() {
   return (
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/password-change" element={<RequireAuth><PasswordSettings /></RequireAuth>} />
 
         {/* Dashboard */}
         <Route
@@ -62,6 +72,7 @@ function App() {
                   <Route path="/condomini/:condominioId/fatture/:id" element={<CondominioFatturePage />} />
 
                   <Route path="/admin" element={<AdminDashboard />} />
+                  <Route path="/admin/amministratori" element={getAuthUser()?.role === "ADMIN" ? <AmministratoriAccounts /> : <Navigate to="/" replace />} />
                   <Route path="/admin/tools" element={<AdminTools />} />
                   <Route path="/admin/tariffe" element={<AdminTariffe />} />
                   <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />

@@ -519,6 +519,7 @@ export default function MainLayout({ children }: Props) {
                 icon={MapPinned}
               />
               <NavItem to="/admin/password" label="Password" icon={KeyRound} />
+              {normalizedRole === "ADMIN" && <NavItem to="/admin/amministratori" label="Account amministratori" icon={UsersRound} />}
               <NavItem
                 to="/admin/document-numbers"
                 label="Numerazione documenti"
