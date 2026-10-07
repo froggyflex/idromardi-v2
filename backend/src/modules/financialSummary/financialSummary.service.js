@@ -3328,7 +3328,7 @@ async function listPayments() {
       p.descrizione,
       p.created_at,
       p.updated_at
-    ORDER BY p.created_at DESC
+    ORDER BY p.data_pagamento DESC, p.numero_progressivo DESC, p.created_at DESC, p.id ASC
     `
   );
 

@@ -38,6 +38,18 @@ type PaymentSortKey =
 
 type SortDirection = "asc" | "desc";
 
+function getPaymentDisplayNumber(payment: { numero_progressivo?: number | string | null; numero?: string | null }) {
+  const sequence = Number(payment.numero_progressivo);
+  if (Number.isSafeInteger(sequence) && sequence > 0) return String(sequence).padStart(6, "0");
+  const legacySequence = String(payment.numero || "").trim().match(/^(?:PG[-\s]*)?(\d+)(?:[-\s]|$)/i)?.[1];
+  return legacySequence ? legacySequence.padStart(6, "0") : payment.numero || "-";
+}
+
+function getPaymentSortTime(value: string) {
+  const time = new Date(String(value || "").replace(" ", "T")).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
 type PaymentDetail = {
   id: string;
   numero_progressivo: number;
@@ -440,6 +452,8 @@ export default function FinancialSummaryPageTemplate() {
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("TUTTI");
   const [paymentSortKey, setPaymentSortKey] = useState<PaymentSortKey>("data_pagamento");
   const [paymentSortDirection, setPaymentSortDirection] = useState<SortDirection>("desc");
+  const [paymentPage, setPaymentPage] = useState(1);
+  const [paymentPageSize, setPaymentPageSize] = useState(25);
 
   const [importedDocsPage, setImportedDocsPage] = useState(1);
   const [importedDocsPageSize] = useState(25);
@@ -2020,6 +2034,7 @@ async function uploadProformaFiles() {
   }, [selectedPaymentDetail]);
 
   function handlePaymentSort(key: PaymentSortKey) {
+    setPaymentPage(1);
     if (key === paymentSortKey) {
       setPaymentSortDirection((current) => (current === "asc" ? "desc" : "asc"));
       return;
@@ -2036,6 +2051,7 @@ async function uploadProformaFiles() {
         !q ||
         [
           row.numero,
+          getPaymentDisplayNumber(row),
           row.payment_method || "",
           row.descrizione || "",
           String(row.importo || ""),
@@ -2054,12 +2070,12 @@ async function uploadProformaFiles() {
     return filtered.sort((left, right) => {
       let comparison = 0;
 
-      if (paymentSortKey === "importo" || paymentSortKey === "totale_allocato") {
+      if (paymentSortKey === "numero") {
+        comparison = Number(getPaymentDisplayNumber(left)) - Number(getPaymentDisplayNumber(right));
+      } else if (paymentSortKey === "importo" || paymentSortKey === "totale_allocato") {
         comparison = Number(left[paymentSortKey] || 0) - Number(right[paymentSortKey] || 0);
       } else if (paymentSortKey === "data_pagamento") {
-        const leftTime = new Date(left.data_pagamento).getTime();
-        const rightTime = new Date(right.data_pagamento).getTime();
-        comparison = (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
+        comparison = getPaymentSortTime(left.data_pagamento) - getPaymentSortTime(right.data_pagamento);
       } else {
         comparison = String(left[paymentSortKey] || "").localeCompare(
           String(right[paymentSortKey] || ""),
@@ -2068,7 +2084,10 @@ async function uploadProformaFiles() {
         );
       }
 
-      return paymentSortDirection === "asc" ? comparison : -comparison;
+      if (comparison && Number.isFinite(comparison)) return paymentSortDirection === "asc" ? comparison : -comparison;
+      return getPaymentSortTime(right.data_pagamento) - getPaymentSortTime(left.data_pagamento)
+        || Number(getPaymentDisplayNumber(right)) - Number(getPaymentDisplayNumber(left))
+        || left.id.localeCompare(right.id);
     });
   }, [
     paymentsRows,
@@ -2077,6 +2096,11 @@ async function uploadProformaFiles() {
     paymentSortKey,
     paymentSortDirection,
   ]);
+
+  const paymentTotalPages = Math.max(1, Math.ceil(filteredPaymentsRows.length / paymentPageSize));
+  const currentPaymentPage = Math.min(paymentPage, paymentTotalPages);
+  const paymentPageStart = (currentPaymentPage - 1) * paymentPageSize;
+  const pagedPaymentsRows = filteredPaymentsRows.slice(paymentPageStart, paymentPageStart + paymentPageSize);
 
 
   function handleCreateManualCard(cardKey: string) {
@@ -3619,7 +3643,7 @@ const renderImportedTableSection = (
               </section>
             ) : null}
             {activeDetailSection === "PAGAMENTO" ? (
-              <section className="space-y-6">
+              <section className="space-y-6" aria-label="Pagamenti registrati">
                 <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
                   <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                     <div>
@@ -3632,14 +3656,16 @@ const renderImportedTableSection = (
                     <div className="flex flex-col gap-3 sm:flex-row">
                       <input
                         value={paymentSearch}
-                        onChange={(e) => setPaymentSearch(e.target.value)}
+                        onChange={(e) => { setPaymentSearch(e.target.value); setPaymentPage(1); }}
+                        aria-label="Cerca pagamenti"
                         placeholder="Cerca numero, metodo, descrizione..."
                         className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
                       />
 
                       <select
                         value={paymentStatusFilter}
-                        onChange={(e) => setPaymentStatusFilter(e.target.value)}
+                        onChange={(e) => { setPaymentStatusFilter(e.target.value); setPaymentPage(1); }}
+                        aria-label="Filtra stato pagamenti"
                         className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
                       >
                         <option value="TUTTI">Tutti gli stati</option>
@@ -3659,7 +3685,7 @@ const renderImportedTableSection = (
                   </div>
 
                   <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
+                    <table className="min-w-full text-sm" aria-label="Pagamenti registrati">
                       <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                         <tr>
                           <SortablePaymentHeader label="Numero" sortKey="numero" activeKey={paymentSortKey} direction={paymentSortDirection} onSort={handlePaymentSort} />
@@ -3686,9 +3712,9 @@ const renderImportedTableSection = (
                             </td>
                           </tr>
                         ) : (
-                          filteredPaymentsRows.map((row) => (
+                          pagedPaymentsRows.map((row) => (
                             <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-6 py-4 font-semibold text-slate-800">{row.numero}</td>
+                              <td className="px-6 py-4 font-semibold tabular-nums text-slate-800">{getPaymentDisplayNumber(row)}</td>
                               <td className="px-6 py-4 text-slate-700">{row.payment_method || "-"}</td>
                               <td className="px-6 py-4 text-slate-500">{formatDate(row.data_pagamento)}</td>
                               <td className="px-6 py-4 text-right font-semibold text-slate-900">
@@ -3721,6 +3747,15 @@ const renderImportedTableSection = (
                       </tbody>
                     </table>
                   </div>
+                  <nav aria-label="Paginazione pagamenti" className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-4 text-sm sm:px-6">
+                    <p className="text-slate-500" aria-live="polite">{loadingPayments ? "Caricamento…" : filteredPaymentsRows.length ? `${paymentPageStart + 1}–${paymentPageStart + pagedPaymentsRows.length} di ${filteredPaymentsRows.length} pagamenti` : "0 pagamenti"}</p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="flex items-center gap-2 text-slate-600">Per pagina<select aria-label="Pagamenti per pagina" value={paymentPageSize} disabled={loadingPayments} onChange={event => { setPaymentPageSize(Number(event.target.value)); setPaymentPage(1); }} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5">{[25, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}</select></label>
+                      <span className="text-slate-600">Pagina {currentPaymentPage} di {paymentTotalPages}</span>
+                      <button type="button" aria-label="Pagina precedente pagamenti" disabled={loadingPayments || currentPaymentPage <= 1} onClick={() => setPaymentPage(currentPaymentPage - 1)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Precedente</button>
+                      <button type="button" aria-label="Pagina successiva pagamenti" disabled={loadingPayments || currentPaymentPage >= paymentTotalPages} onClick={() => setPaymentPage(currentPaymentPage + 1)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Successiva</button>
+                    </div>
+                  </nav>
                 </section>
 
                 {selectedPaymentDetail ? (
@@ -3737,7 +3772,7 @@ const renderImportedTableSection = (
                   >
                     <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                       <div>
-                        <h3 id="payment-detail-title" className="text-xl font-bold">Dettaglio pagamento {selectedPaymentDetail.numero}</h3>
+                        <h3 id="payment-detail-title" className="text-xl font-bold">Dettaglio pagamento {getPaymentDisplayNumber(selectedPaymentDetail)}</h3>
                         <p className="mt-1 text-sm text-slate-500">
                           Allocazioni del pagamento sulle fatture collegate.
                         </p>

@@ -12,7 +12,8 @@
     "test:readings-ui": "node tests/readings-workspace.browser.cjs",
     "test:template-ui": "node tests/bolletta-template.browser.cjs",
     "preview": "vite preview",
-    "test:amministratori-ui": "node tests/amministratori.browser.cjs"
+    "test:amministratori-ui": "node tests/amministratori.browser.cjs",
+    "test:payments-ui": "node tests/payments.browser.cjs"
   },
   "dependencies": {
     "axios": "^1.13.4",
