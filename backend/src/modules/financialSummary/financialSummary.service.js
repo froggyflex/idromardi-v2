@@ -3332,6 +3332,20 @@ async function listPayments() {
     `
   );
 
+  const [invoiceLinks] = rows.length ? await db.query(
+    `SELECT DISTINCT pa.payment_id, f.id, f.numero, f.numero_progressivo
+     FROM payment_allocations pa
+     INNER JOIN fatture f ON f.id = pa.fattura_id
+     ORDER BY f.numero_progressivo ASC, f.numero ASC, f.id ASC`
+  ) : [[]];
+  const invoicesByPayment = new Map();
+  for (const link of invoiceLinks) {
+    if (!invoicesByPayment.has(link.payment_id)) invoicesByPayment.set(link.payment_id, []);
+    invoicesByPayment.get(link.payment_id).push({
+      id: link.id, numero: link.numero, numero_progressivo: link.numero_progressivo,
+    });
+  }
+
   return rows.map((row) => ({
     id: row.id,
     numero_progressivo: row.numero_progressivo,
@@ -3345,11 +3359,12 @@ async function listPayments() {
     updated_at: row.updated_at,
     numero_allocazioni: Number(row.numero_allocazioni || 0),
     totale_allocato: Number(row.totale_allocato || 0),
+    fatture_collegate: invoicesByPayment.get(row.id) || [],
   }));
 }
 
-async function getPaymentDetail(id) {
-  const [[payment]] = await db.query(
+async function getPaymentDetail(id, connection = db) {
+  const [[payment]] = await connection.query(
     `
     SELECT
       id,
@@ -3371,7 +3386,7 @@ async function getPaymentDetail(id) {
 
   if (!payment) return null;
 
-  const [allocations] = await db.query(
+  const [allocations] = await connection.query(
     `
     SELECT
       pa.id,
@@ -3443,6 +3458,45 @@ async function updatePaymentDescription(id, value) {
 
   if (!result.affectedRows) return null;
   return getPaymentDetail(paymentId);
+}
+
+async function updatePaymentDate(id, value) {
+  const paymentId = String(id || "").trim();
+  const date = typeof value === "string" ? value.trim() : "";
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T00:00:00.000Z`) : new Date(NaN);
+  if (!paymentId || Number.isNaN(parsed.getTime()) || parsed.getUTCFullYear() < 1000
+      || parsed.toISOString().slice(0, 10) !== date) {
+    const error = new Error(!paymentId ? "ID pagamento mancante." : "Inserisci una data di pagamento valida.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[payment]] = await conn.query("SELECT id FROM payments WHERE id = ? FOR UPDATE", [paymentId]);
+    if (!payment) {
+      await conn.rollback();
+      return null;
+    }
+    // Allocation dates represent the same receipt, so corrections must be atomic.
+    await conn.query("UPDATE payments SET data_pagamento = ?, updated_at = NOW() WHERE id = ?", [date, paymentId]);
+    await conn.query("UPDATE payment_allocations SET data_allocazione = ? WHERE payment_id = ?", [date, paymentId]);
+    const detail = await getPaymentDetail(paymentId, conn);
+    await conn.commit();
+    return detail;
+  } catch (error) {
+    await conn.rollback();
+    if (error.code === "ER_DUP_ENTRY") {
+      const conflict = new Error("La data scelta sposta il pagamento in un anno in cui il suo numero e' gia' utilizzato. Nessuna modifica salvata.");
+      conflict.statusCode = 409;
+      throw conflict;
+    }
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 async function createManualProforma(payload) {
@@ -5022,6 +5076,7 @@ async function resetToEmessa(id) {
   listPayments,
   getPaymentDetail,
   updatePaymentDescription,
+  updatePaymentDate,
   createManualProforma,
   createManualFattura,
   generateProformaPdf,

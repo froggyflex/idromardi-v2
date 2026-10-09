@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search as SearchIcon, X as XIcon } from "lucide-react";
+import { Search as SearchIcon, X as XIcon, Save } from "lucide-react";
 import api from "../../api/client";
 import { th } from "date-fns/locale/th";
 import { Fragment } from "react";
@@ -25,7 +25,12 @@ type PaymentRow = {
   descrizione: string | null;
   numero_allocazioni: number;
   totale_allocato: number;
+  fatture_collegate?: Array<{ id: string; numero: string; numero_progressivo: number | null }>;
 };
+
+function getPaymentInvoiceNumbers(payment: PaymentRow) {
+  return (payment.fatture_collegate || []).map(getInvoiceDisplayNumber).join(", ") || "-";
+}
 
 type PaymentSortKey =
   | "numero"
@@ -291,7 +296,7 @@ function formatDate(value?: string | null) {
   return new Intl.DateTimeFormat("it-IT").format(d);
 }
 
-function getInvoiceDisplayNumber(row: FatturaRow) {
+function getInvoiceDisplayNumber(row: { numero_progressivo?: number | null; import_numero?: string | null; numero?: string | null }) {
   const progressiveNumber = Number(row.numero_progressivo);
   if (Number.isFinite(progressiveNumber) && progressiveNumber > 0) {
     return String(progressiveNumber).padStart(6, "0");
@@ -447,6 +452,10 @@ export default function FinancialSummaryPageTemplate() {
   const [paymentDescriptionDraft, setPaymentDescriptionDraft] = useState("");
   const [savingPaymentDescription, setSavingPaymentDescription] = useState(false);
   const [paymentDescriptionError, setPaymentDescriptionError] = useState("");
+  const [paymentDateDraft, setPaymentDateDraft] = useState("");
+  const [savingPaymentDate, setSavingPaymentDate] = useState(false);
+  const [paymentDateError, setPaymentDateError] = useState("");
+  const [paymentDateSaved, setPaymentDateSaved] = useState(false);
 
   const [paymentSearch, setPaymentSearch] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("TUTTI");
@@ -774,9 +783,12 @@ async function loadPaymentDetail(id: string) {
   try {
     setLoadingPaymentDetail(true);
     setPaymentDescriptionError("");
+    setPaymentDateError("");
+    setPaymentDateSaved(false);
     const { data } = await api.get(`/financial-summary/payments/${id}`);
     setSelectedPaymentDetail(data);
     setPaymentDescriptionDraft(data.descrizione || "");
+    setPaymentDateDraft(String(data.data_pagamento || "").slice(0, 10));
   } catch (err: any) {
     setError(err?.response?.data?.error || "Errore nel caricamento del dettaglio pagamento.");
   } finally {
@@ -785,7 +797,7 @@ async function loadPaymentDetail(id: string) {
 }
 
 async function savePaymentDescription() {
-  if (!selectedPaymentDetail || savingPaymentDescription) return;
+  if (!selectedPaymentDetail || savingPaymentDescription || savingPaymentDate) return;
   const descrizione = paymentDescriptionDraft.trim();
   if (descrizione.length > 255) {
     setPaymentDescriptionError("La descrizione non può superare 255 caratteri.");
@@ -799,7 +811,7 @@ async function savePaymentDescription() {
       `/financial-summary/payments/${selectedPaymentDetail.id}/description`,
       { descrizione }
     );
-    setSelectedPaymentDetail(data);
+    setSelectedPaymentDetail((current) => current?.id === data.id ? data : current);
     setPaymentDescriptionDraft(data.descrizione || "");
     setPaymentsRows((current) =>
       current.map((row) =>
@@ -812,6 +824,32 @@ async function savePaymentDescription() {
     );
   } finally {
     setSavingPaymentDescription(false);
+  }
+}
+
+async function savePaymentDate() {
+  if (!selectedPaymentDetail || savingPaymentDate || savingPaymentDescription) return;
+  if (!paymentDateDraft) {
+    setPaymentDateError("Inserisci una data di pagamento valida.");
+    return;
+  }
+  try {
+    setSavingPaymentDate(true);
+    setPaymentDateError("");
+    setPaymentDateSaved(false);
+    const { data } = await api.patch(`/financial-summary/payments/${selectedPaymentDetail.id}/date`, {
+      dataPagamento: paymentDateDraft,
+    });
+    setSelectedPaymentDetail((current) => current?.id === data.id ? data : current);
+    setPaymentDateDraft(String(data.data_pagamento || "").slice(0, 10));
+    setPaymentsRows((current) => current.map((row) => row.id === data.id
+      ? { ...row, data_pagamento: data.data_pagamento } : row));
+    setPaymentDateSaved(true);
+    void loadRecentRows();
+  } catch (err: any) {
+    setPaymentDateError(err?.response?.data?.error || "Errore durante il salvataggio della data.");
+  } finally {
+    setSavingPaymentDate(false);
   }
 }
 
@@ -2019,7 +2057,7 @@ async function uploadProformaFiles() {
     const previousBodyOverflow = document.body.style.overflow;
     const previousHtmlOverflow = document.documentElement.style.overflow;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedPaymentDetail(null);
+      if (event.key === "Escape" && !savingPaymentDate && !savingPaymentDescription) setSelectedPaymentDetail(null);
     };
 
     document.body.style.overflow = "hidden";
@@ -2031,7 +2069,7 @@ async function uploadProformaFiles() {
       document.documentElement.style.overflow = previousHtmlOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [selectedPaymentDetail]);
+  }, [selectedPaymentDetail, savingPaymentDate, savingPaymentDescription]);
 
   function handlePaymentSort(key: PaymentSortKey) {
     setPaymentPage(1);
@@ -2052,6 +2090,8 @@ async function uploadProformaFiles() {
         [
           row.numero,
           getPaymentDisplayNumber(row),
+          getPaymentInvoiceNumbers(row),
+          ...(row.fatture_collegate || []).map((invoice) => invoice.numero),
           row.payment_method || "",
           row.descrizione || "",
           String(row.importo || ""),
@@ -2071,7 +2111,7 @@ async function uploadProformaFiles() {
       let comparison = 0;
 
       if (paymentSortKey === "numero") {
-        comparison = Number(getPaymentDisplayNumber(left)) - Number(getPaymentDisplayNumber(right));
+        comparison = getPaymentInvoiceNumbers(left).localeCompare(getPaymentInvoiceNumbers(right), "it", { numeric: true });
       } else if (paymentSortKey === "importo" || paymentSortKey === "totale_allocato") {
         comparison = Number(left[paymentSortKey] || 0) - Number(right[paymentSortKey] || 0);
       } else if (paymentSortKey === "data_pagamento") {
@@ -3658,7 +3698,7 @@ const renderImportedTableSection = (
                         value={paymentSearch}
                         onChange={(e) => { setPaymentSearch(e.target.value); setPaymentPage(1); }}
                         aria-label="Cerca pagamenti"
-                        placeholder="Cerca numero, metodo, descrizione..."
+                        placeholder="Cerca fattura, pagamento, metodo, descrizione..."
                         className="h-11 rounded-2xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-slate-400"
                       />
 
@@ -3714,7 +3754,7 @@ const renderImportedTableSection = (
                         ) : (
                           pagedPaymentsRows.map((row) => (
                             <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-6 py-4 font-semibold tabular-nums text-slate-800">{getPaymentDisplayNumber(row)}</td>
+                              <td className="px-6 py-4 font-semibold tabular-nums text-slate-800" title={`Fatture collegate: ${getPaymentInvoiceNumbers(row)} · Pagamento ${getPaymentDisplayNumber(row)}`}>{getPaymentInvoiceNumbers(row)}</td>
                               <td className="px-6 py-4 text-slate-700">{row.payment_method || "-"}</td>
                               <td className="px-6 py-4 text-slate-500">{formatDate(row.data_pagamento)}</td>
                               <td className="px-6 py-4 text-right font-semibold text-slate-900">
@@ -3761,7 +3801,7 @@ const renderImportedTableSection = (
                 {selectedPaymentDetail ? (
                   <div
                     className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 px-2 py-3 backdrop-blur-[2px] sm:px-5 sm:py-5"
-                    onMouseDown={() => setSelectedPaymentDetail(null)}
+                    onMouseDown={() => { if (!savingPaymentDate && !savingPaymentDescription) setSelectedPaymentDetail(null); }}
                   >
                   <section
                     role="dialog"
@@ -3780,6 +3820,7 @@ const renderImportedTableSection = (
 
                       <button
                         onClick={() => setSelectedPaymentDetail(null)}
+                        disabled={savingPaymentDate || savingPaymentDescription}
                         className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
                       >
                         Chiudi dettaglio
@@ -3806,12 +3847,25 @@ const renderImportedTableSection = (
                       </div>
 
                       <div className="rounded-2xl bg-sky-50 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
+                        <label htmlFor="payment-date" className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">
                           Data pagamento
+                        </label>
+                        <div className="mt-2 flex items-center gap-2">
+                          <input id="payment-date" type="date" min="1000-01-01" max="9999-12-31"
+                            value={paymentDateDraft} disabled={savingPaymentDate || savingPaymentDescription}
+                            onChange={(event) => { setPaymentDateDraft(event.target.value); setPaymentDateError(""); setPaymentDateSaved(false); }}
+                            className="min-w-0 flex-1 rounded-lg border border-sky-200 bg-white px-2 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                          />
+                          <button type="button" onClick={() => void savePaymentDate()}
+                            aria-label="Salva data pagamento" title="Salva data pagamento"
+                            disabled={savingPaymentDate || savingPaymentDescription || !paymentDateDraft || paymentDateDraft === String(selectedPaymentDetail.data_pagamento).slice(0, 10)}
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-700 text-white hover:bg-sky-800 disabled:opacity-40">
+                            <Save size={18} />
+                          </button>
                         </div>
-                        <div className="mt-2 text-xl font-bold text-sky-800">
-                          {formatDate(selectedPaymentDetail.data_pagamento)}
-                        </div>
+                        {paymentDateError && <p role="alert" className="mt-2 text-sm text-red-700">{paymentDateError}</p>}
+                        {savingPaymentDate && <p role="status" className="mt-2 text-xs text-sky-800">Salvataggio...</p>}
+                        {paymentDateSaved && <p role="status" className="mt-2 text-xs text-emerald-700">Data aggiornata</p>}
                       </div>
 
                       <div className="rounded-2xl bg-slate-50 p-4">
@@ -3851,7 +3905,7 @@ const renderImportedTableSection = (
                           type="button"
                           onClick={() => void savePaymentDescription()}
                           disabled={
-                            savingPaymentDescription ||
+                            savingPaymentDescription || savingPaymentDate ||
                             paymentDescriptionDraft.trim() === (selectedPaymentDetail.descrizione || "")
                           }
                           className="h-11 rounded-2xl bg-slate-900 px-6 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-45"

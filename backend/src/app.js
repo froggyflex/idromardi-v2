@@ -16,6 +16,7 @@ const authRoutes = require("./modules/auth/auth.routes");
 const mobileReadingsRoutes = require("./modules/mobileReadings/mobileReadings.routes");
 const metaRoutes = require("./modules/meta/meta.routes");
 const searchRoutes = require("./modules/search/search.routes");
+const pcloudTestRoutes = require("./modules/pcloudTest/pcloudTest.routes").createPcloudTestRouters();
 const { requireAuth, restrictAmministratore, protectUploadedDocuments } = require("./modules/auth/auth.middleware");
 const { PDF_EXPORT_PATHS, parsePdfExportJson } = require("./utils/pdf-request-body");
 
@@ -85,6 +86,7 @@ app.use("/uploads/mobile-readings", (req, res) => res.status(404).end());
 app.use("/uploads", protectUploadedDocuments, express.static(path.join(__dirname, "../uploads")));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/pcloud-test", pcloudTestRoutes.publicRouter);
 app.use("/api/meta", (req,res,next) => {
   if (app.locals.metaReady === false) return res.status(503).set("Retry-After","30").json({error:"Area Meta in avvio. Riprova tra poco.",code:"META_STARTING"});
   next();
@@ -95,6 +97,7 @@ app.use("/api/meta", metaRoutes.publicRouter);
 app.use("/api", requireAuth);
 app.use("/api", restrictAmministratore);
 app.use("/api/amministratore", require("./modules/amministratori/portal.routes"));
+app.use("/api/pcloud-test", pcloudTestRoutes.protectedRouter);
 
 app.use("/api/search", searchRoutes);
 app.use("/api/condomini", condominiRoutes);

@@ -91,6 +91,7 @@ router.post(
 router.get("/payments", controller.listPayments);
 router.get("/payments/:id", controller.getPaymentDetail);
 router.patch("/payments/:id/description", controller.updatePaymentDescription);
+router.patch("/payments/:id/date", controller.updatePaymentDate);
 router.get("/proforme/:id/print",controller.printProformaPdf);
 router.get("/fatture/:id/print",controller.printFatturaPdf);
 

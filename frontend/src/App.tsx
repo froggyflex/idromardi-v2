@@ -25,6 +25,7 @@ import DocumentNumberSettings from "./pages/admin/DocumentNumberSettings";
 import BollettaTemplateEditor from "./pages/admin/BollettaTemplateEditor";
 import GlobalSearchPage from "./pages/GlobalSearchPage";
 import AmministratoriAccounts from "./pages/admin/AmministratoriAccounts";
+import PcloudStorageTest from "./pages/admin/PcloudStorageTest";
 import AmministratorePortal from "./pages/AmministratorePortal";
 import { getAuthRole, getAuthUser, clearAuthSession, isAuthenticated } from "./auth";
 
@@ -79,6 +80,7 @@ function App() {
 
                   <Route path="/admin" element={<AdminDashboard />} />
                   <Route path="/admin/amministratori" element={<RequireAdmin><AmministratoriAccounts /></RequireAdmin>} />
+                  <Route path="/admin/pcloud-test" element={<RequireAdmin><PcloudStorageTest /></RequireAdmin>} />
                   <Route path="/admin/tools" element={<AdminTools />} />
                   <Route path="/admin/tariffe" element={<AdminTariffe />} />
                   <Route path="/admin/contabilita" element={<FinancialSummaryPageTemplate />} />

@@ -481,6 +481,19 @@ async function updatePaymentDescription(req, res) {
   }
 }
 
+async function updatePaymentDate(req, res) {
+  try {
+    const row = await service.updatePaymentDate(req.params.id, req.body?.dataPagamento);
+    if (!row) return res.status(404).json({ error: "Pagamento non trovato." });
+    return res.json(row);
+  } catch (err) {
+    if (!err.statusCode) console.error("updatePaymentDate error:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : "Errore durante l'aggiornamento della data del pagamento.",
+    });
+  }
+}
+
 async function getImportedDocuments(req, res) {
   try {
     const result = await service.listImportedDocuments({
@@ -645,6 +658,7 @@ module.exports = {
   listPayments,
   getPaymentDetail,
   updatePaymentDescription,
+  updatePaymentDate,
   getImportedDocuments,
   createManualProforma,
   createManualFattura,

@@ -2,6 +2,8 @@
   "name": "backend",
   "version": "1.0.0",
   "scripts": {
+    "test:pcloud": "node --check scripts/test-pcloud-storage.js && node --check src/utils/pcloudStorage.js && node --check src/modules/pcloudTest/pcloudTest.routes.js && node --test scripts/test-pcloud-storage.test.js src/modules/pcloudTest/pcloudTest.routes.test.js",
+    "test:pcloud-live": "node scripts/test-pcloud-storage.js",
     "dev": "nodemon server.js",
     "start": "node server.js",
     "test:pdf": "node --test src/utils/puppeteer.test.js src/modules/fatture/fatture.pdf-renderer.test.js src/modules/fatture/issued-invoice-lookup.test.js src/modules/prospetti/prospetti.print.test.js src/modules/financialSummary/financialInvoiceArchive.test.js",

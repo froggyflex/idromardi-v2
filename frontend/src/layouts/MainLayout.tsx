@@ -7,6 +7,7 @@ import {
   Building2,
   ChevronRight,
   ClipboardCheck,
+  Cloud,
   Droplets,
   Gauge,
   KeyRound,
@@ -520,6 +521,7 @@ export default function MainLayout({ children }: Props) {
               />
               <NavItem to="/admin/password" label="Password" icon={KeyRound} />
               {normalizedRole === "ADMIN" && <NavItem to="/admin/amministratori" label="Account amministratori" icon={UsersRound} />}
+              {normalizedRole === "ADMIN" && <NavItem to="/admin/pcloud-test" label="Test archivio pCloud" icon={Cloud} />}
               <NavItem
                 to="/admin/document-numbers"
                 label="Numerazione documenti"
