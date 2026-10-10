@@ -6,7 +6,7 @@ const service = require("./financialSummary.service");
 function mockPaymentConnection(t, { missing = false, failure = null } = {}) {
   const calls = [];
   const payment = { id: "p1", numero: "PG-7", numero_progressivo: 7, importo: 100, data_pagamento: "2026-10-01" };
-  const allocations = [1, 2].map((n) => ({ id: `a${n}`, payment_id: "p1", fattura_id: `f${n}`, importo_allocato: 50, data_allocazione: payment.data_pagamento }));
+  const allocations = [1, 2].map((n) => ({ id: `a${n}`, payment_id: "p1", fattura_id: `f${n}`, fattura_numero_progressivo: 1350 + n, importo_allocato: 50, data_allocazione: payment.data_pagamento }));
   const conn = {
     async beginTransaction() { calls.push("begin"); },
     async commit() { calls.push("commit"); },
@@ -41,6 +41,7 @@ test("payment date corrections update all allocation dates atomically without re
   assert.equal(detail.data_pagamento, "2026-10-09");
   assert.equal(detail.numero_progressivo, 7);
   assert.equal(detail.importo, 100);
+  assert.deepEqual(detail.allocations.map((row) => row.fattura_numero_progressivo), [1351, 1352]);
   assert(detail.allocations.every((row) => row.data_allocazione === "2026-10-09" && row.importo_allocato === 50));
   assert.equal(calls[0], "begin");
   assert.deepEqual(calls.slice(-2), ["commit", "release"]);

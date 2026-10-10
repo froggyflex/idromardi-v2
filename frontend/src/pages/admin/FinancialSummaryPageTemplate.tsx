@@ -69,6 +69,7 @@ type PaymentDetail = {
     payment_id: string;
     fattura_id: string;
     fattura_numero: string;
+    fattura_numero_progressivo?: number | null;
     fattura_importo: number;
     condominio: string;
     importo_allocato: number;
@@ -76,6 +77,18 @@ type PaymentDetail = {
     descrizione: string | null;
   }>;
 };
+
+function getPaymentDetailHeading(payment: PaymentDetail) {
+  const invoices = new Map(payment.allocations
+    .filter((allocation) => allocation.fattura_numero)
+    .map((allocation) => [allocation.fattura_id, getInvoiceDisplayNumber({
+      numero: allocation.fattura_numero,
+      numero_progressivo: allocation.fattura_numero_progressivo,
+    })]));
+  if (!invoices.size) return "Nessuna fattura associata";
+  const numbers = [...invoices.values()].sort((a, b) => a.localeCompare(b, "it", { numeric: true }));
+  return `${invoices.size === 1 ? "Fattura" : "Fatture"} n. ${numbers.join(", ")}`;
+}
 
 function SortablePaymentHeader({
   label,
@@ -3811,10 +3824,10 @@ const renderImportedTableSection = (
                     className="max-h-[95vh] w-full max-w-[1500px] overflow-y-auto rounded-3xl border border-slate-200 bg-white shadow-[0_25px_80px_rgba(15,23,42,0.28)]"
                   >
                     <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <h3 id="payment-detail-title" className="text-xl font-bold">Dettaglio pagamento {getPaymentDisplayNumber(selectedPaymentDetail)}</h3>
-                        <p className="mt-1 text-sm text-slate-500">
-                          Allocazioni del pagamento sulle fatture collegate.
+                      <div className="min-w-0 flex-1">
+                        <h3 id="payment-detail-title" className="break-words text-xl font-bold">{getPaymentDetailHeading(selectedPaymentDetail)}</h3>
+                        <p id="payment-detail-reference" className="mt-1 text-xs text-slate-500">
+                          Pagamento n. {getPaymentDisplayNumber(selectedPaymentDetail)}
                         </p>
                       </div>
 

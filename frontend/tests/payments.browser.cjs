@@ -18,7 +18,8 @@ const payments = Array.from({ length: 53 }, (_, index) => ({
 
 const paymentDetail = payment => ({ ...payment, allocations: payment.fatture_collegate.map(invoice => ({
   id: `allocation-${invoice.id}`, payment_id: payment.id, fattura_id: invoice.id,
-  fattura_numero: invoice.numero, condominio: 'Via Roma', fattura_importo: payment.importo,
+  fattura_numero: invoice.numero, fattura_numero_progressivo: invoice.numero_progressivo,
+  condominio: 'Via Roma', fattura_importo: payment.importo,
   importo_allocato: payment.importo, data_allocazione: payment.data_pagamento,
 })) });
 
@@ -88,7 +89,8 @@ const paymentDetail = payment => ({ ...payment, allocations: payment.fatture_col
     const selected = (await rows())[0][0];
     await page.click(`${table} tbody tr button`); await page.waitForSelector('[role="dialog"]');
     const selectedPayment = payments.find(payment => String(payment.fatture_collegate[0].numero_progressivo).padStart(6, '0') === selected);
-    assert.equal(await page.$eval('#payment-detail-title', element => element.textContent), `Dettaglio pagamento ${selectedPayment.id.replace('payment-', '').padStart(6, '0')}`);
+    assert.equal(await page.$eval('#payment-detail-title', element => element.textContent), `Fattura n. ${selected}`);
+    assert.equal(await page.$eval('#payment-detail-reference', element => element.textContent), `Pagamento n. ${selectedPayment.id.replace('payment-', '').padStart(6, '0')}`);
     await page.keyboard.press('Escape'); await page.waitForSelector('[role="dialog"]', { hidden: true });
     assert((await page.$eval('[aria-label="Paginazione pagamenti"]', element => element.innerText)).includes('Pagina 3 di 3'));
     await page.click(`${table} button[title="Ordina per Numero"]`);
@@ -123,6 +125,7 @@ const paymentDetail = payment => ({ ...payment, allocations: payment.fatture_col
     await page.keyboard.press('Escape');
     assert.equal((await rows())[0][2], '05/10/2026');
     await page.click(`${table} tbody tr button`); await page.waitForSelector('#payment-date');
+    assert.equal(await page.$eval('#payment-detail-title', element => element.textContent), 'Fattura n. 001359');
     assert.equal(await page.$eval('#payment-date', input => input.value), '2026-10-05');
     await page.keyboard.press('Escape');
     await clearSearch(); await page.type('[aria-label="Cerca pagamenti"]', 'inesistente');
@@ -143,10 +146,14 @@ const paymentDetail = payment => ({ ...payment, allocations: payment.fatture_col
     await page.type('[aria-label="Cerca pagamenti"]', '900001');
     assert.equal((await rows())[0][0], '001359, 900001');
     await page.click(`${table} tbody tr button`); await page.waitForSelector('#payment-date');
+    assert.equal(await page.$eval('#payment-detail-title', element => element.textContent), 'Fatture n. 001359, 900001');
     assert.equal(await page.$eval('#payment-date', input => input.value), '2026-10-05');
     await page.keyboard.press('Escape');
     await clearSearch(); await page.type('[aria-label="Cerca pagamenti"]', 'PG-8-CONDOMINIO');
     assert.equal((await rows())[0][0], '-');
+    await page.click(`${table} tbody tr button`); await page.waitForSelector('#payment-date');
+    assert.equal(await page.$eval('#payment-detail-title', element => element.textContent), 'Nessuna fattura associata');
+    assert.equal(await page.$eval('#payment-detail-reference', element => element.textContent), 'Pagamento n. 000008');
     assert.deepEqual(errors, []);
     console.log('Payments UI passed: linked invoice numbers/search/sort, multiple invoices and unlinked payments, date editing/persistence/error feedback, pagination, filtering, and mobile overflow. Screenshots:', output);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

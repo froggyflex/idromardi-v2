@@ -3396,6 +3396,7 @@ async function getPaymentDetail(id, connection = db) {
       pa.data_allocazione,
       pa.descrizione,
       f.numero AS fattura_numero,
+      f.numero_progressivo AS fattura_numero_progressivo,
       f.importo AS fattura_importo,
       c.indirizzo AS condominio
     FROM payment_allocations pa
@@ -3425,6 +3426,7 @@ async function getPaymentDetail(id, connection = db) {
       payment_id: a.payment_id,
       fattura_id: a.fattura_id,
       fattura_numero: a.fattura_numero,
+      fattura_numero_progressivo: a.fattura_numero_progressivo,
       fattura_importo: Number(a.fattura_importo || 0),
       condominio: a.condominio || "-",
       importo_allocato: Number(a.importo_allocato || 0),
